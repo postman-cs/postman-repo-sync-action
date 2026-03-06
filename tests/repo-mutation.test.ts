@@ -13,6 +13,7 @@ type CommandResult = {
 };
 
 type CommandKey =
+  | 'git add -A -- postman .postman .github/workflows'
   | 'git add -A -- postman .postman .github/workflows/ci.yml .github/workflows/provision.yml'
   | 'git commit -m chore: sync Postman artifacts and metadata'
   | 'git config --unset-all http.https://github.com/.extraheader'
@@ -35,6 +36,11 @@ function createCommandMap(
       stderr: ''
     },
     'git config user.email fde@postman.com': {
+      exitCode: 0,
+      stdout: '',
+      stderr: ''
+    },
+    'git add -A -- postman .postman .github/workflows': {
       exitCode: 0,
       stdout: '',
       stderr: ''
@@ -240,5 +246,42 @@ describe('repo mutation helpers', () => {
         ]
       })
     ).rejects.not.toThrow('primary-token');
+  });
+
+  it('returns without commit when there are no staged changes', async () => {
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git diff --cached --quiet': {
+          exitCode: 0,
+          stdout: '',
+          stderr: ''
+        }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    const result = await repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'feature/sync-artifacts',
+      githubToken: 'primary-token',
+      fallbackToken: 'fallback-token',
+      committerName: 'Postman FDE',
+      committerEmail: 'fde@postman.com',
+      stagePaths: ['postman', '.postman', '.github/workflows']
+    });
+
+    expect(result).toEqual({
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: 'feature/sync-artifacts'
+    });
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'commit',
+      '-m',
+      'chore: sync Postman artifacts and metadata'
+    ]);
   });
 });

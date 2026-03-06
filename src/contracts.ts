@@ -162,6 +162,10 @@ export const postmanRepoSyncActionContract: {
       description: 'GitHub auth mode for repository variable APIs.',
       required: false,
       default: 'github_token_first'
+    },
+    'ci-workflow-base64': {
+      description: 'Optional base64-encoded ci.yml content. Defaults to the built-in template.',
+      required: false
     }
   },
   outputs: {
@@ -172,10 +176,10 @@ export const postmanRepoSyncActionContract: {
       description: 'Resolved push target based on current-ref semantics.'
     },
     'workspace-link-status': {
-      description: 'Whether workspace linking is planned or skipped.'
+      description: 'Whether workspace linking succeeded, was skipped, or failed.'
     },
     'environment-sync-status': {
-      description: 'Whether environment sync is planned or skipped.'
+      description: 'Whether environment sync succeeded, was skipped, or failed.'
     },
     'environment-uids-json': {
       description: 'JSON map of environment slug to Postman environment uid.'

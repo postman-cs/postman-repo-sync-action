@@ -1,10 +1,8 @@
 # postman-repo-sync-action
 
-Public beta scaffold for the JavaScript GitHub Action that owns Postman-to-repo sync concerns split out of `api-catalog-demo-infra/.github/actions/finalize`.
+Public beta GitHub Action that owns Postman-to-repo sync concerns split out of `api-catalog-demo-infra/.github/actions/finalize`.
 
-## Beta scope
-
-This Phase 1 scaffold defines the contract only. The runtime entrypoint is intentionally minimal and exposes the planned beta surface without performing the remote Postman, GitHub, or git side effects yet.
+## Scope
 
 Retained from finalize:
 
@@ -21,9 +19,40 @@ Removed from finalize:
 - Store AWS deployment orchestration concerns in the public action interface.
 - Push directly to `main`.
 
+## Usage
+
+```yaml
+jobs:
+  repo-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: postman-cs/postman-repo-sync-action@v0
+        with:
+          project-name: core-payments
+          workspace-id: ws-123
+          baseline-collection-id: col-baseline
+          smoke-collection-id: col-smoke
+          contract-collection-id: col-contract
+          environments-json: '["prod","stage"]'
+          system-env-map-json: '{"prod":"uuid-prod","stage":"uuid-stage"}'
+          env-runtime-urls-json: '{"prod":"https://api.example.com","stage":"https://stage-api.example.com"}'
+          environment-uids-json: '{}'
+          repo-write-mode: commit-and-push
+          postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
+          postman-access-token: ${{ secrets.POSTMAN_ACCESS_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-fallback-token: ${{ secrets.GH_FALLBACK_TOKEN }}
+```
+
 ## Current-ref push semantics
 
-When `repo-write-mode=commit-and-push`, the action pushes back to the current checked out ref instead of hardcoding `main`. Resolution order is `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. If no ref can be resolved, the beta implementation reports an empty `resolved-current-ref` output and leaves the caller to decide whether to fail the workflow.
+When `repo-write-mode=commit-and-push`, the action pushes back to the current checked out ref instead of hardcoding `main`. Resolution order is `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to `GITHUB_HEAD_REF`. Pushes use `HEAD:refs/heads/<resolved-branch>`.
+
+If the action writes `.github/workflows/ci.yml`, provide a credential source that can update workflow files. The beta prefers `gh-fallback-token` first for workflow-file pushes, then falls back to `github-token`.
 
 ## Inputs
 
@@ -38,7 +67,7 @@ When `repo-write-mode=commit-and-push`, the action pushes back to the current ch
 | `environment-uids-json` | `{}` | JSON map of environment slug to Postman environment uid. |
 | `env-runtime-urls-json` | `{}` | JSON map of environment slug to runtime base URL. |
 | `artifact-dir` | `postman` | Root directory for exported Postman artifacts. |
-| `repo-write-mode` | `commit-and-push` | Plans generated file writes and a push using current-ref semantics. |
+| `repo-write-mode` | `commit-and-push` | Generates files and pushes with current-ref semantics. |
 | `current-ref` | | Optional explicit ref override for detached checkouts. |
 | `committer-name` | `Postman FDE` | Commit author name for sync commits. |
 | `committer-email` | `fde@postman.com` | Commit author email for sync commits. |
@@ -54,10 +83,21 @@ When `repo-write-mode=commit-and-push`, the action pushes back to the current ch
 | --- | --- |
 | `integration-backend` | Resolved integration backend for the run. |
 | `resolved-current-ref` | Resolved push target based on current-ref semantics. |
-| `workspace-link-status` | `planned` or `skipped`. |
-| `environment-sync-status` | `planned` or `skipped`. |
+| `workspace-link-status` | `success`, `skipped`, or `failed`. |
+| `environment-sync-status` | `success`, `skipped`, or `failed`. |
 | `environment-uids-json` | JSON map of environment slug to Postman environment uid. |
-| `mock-url` | Mock server URL placeholder for the beta contract. |
-| `monitor-id` | Smoke monitor ID placeholder for the beta contract. |
-| `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync planning. |
-| `commit-sha` | Commit SHA placeholder for repo-write-mode. |
+| `mock-url` | Created mock server URL. |
+| `monitor-id` | Created smoke monitor UID. |
+| `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
+| `commit-sha` | Commit SHA produced by repo-write-mode when a sync commit is created. |
+
+## Local development
+
+```bash
+npm install
+npm test
+npm run typecheck
+npm run build
+```
+
+`npm run build` produces the committed `dist/index.js` action bundle used by `action.yml`.
