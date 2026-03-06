@@ -6,7 +6,6 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import { CI_WORKFLOW_TEMPLATE } from './lib/ci-workflow-template.js';
 import { GitHubApiClient } from './lib/github/github-api-client.js';
@@ -651,7 +650,7 @@ export async function runAction(
 }
 
 const entrypoint = process.argv[1];
-const currentModulePath = fileURLToPath(import.meta.url);
+const currentModulePath = typeof __filename === 'string' ? __filename : '';
 
 if (entrypoint && currentModulePath === entrypoint) {
   runAction().catch((error: unknown) => {

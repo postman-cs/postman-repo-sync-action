@@ -106,4 +106,4 @@ outputs:
     description: Commit SHA produced by repo-write-mode, if any.
 runs:
   using: node20
-  main: dist/index.js
+  main: dist/index.cjs
