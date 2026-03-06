@@ -1,0 +1,30 @@
+{
+  "name": "postman-repo-sync-action",
+  "version": "0.1.0-beta.0",
+  "description": "Public beta scaffold for the Postman repo sync GitHub Action.",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "action.yml",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "github-action",
+    "postman"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.6.3",
+    "vitest": "^3.0.5",
+    "yaml": "^2.7.0"
+  }
+}

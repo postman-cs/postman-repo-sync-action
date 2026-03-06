@@ -1,0 +1,106 @@
+name: postman-repo-sync-action
+description: Sync exported Postman artifacts into a repository and expose beta workspace-link and environment-sync contract outputs.
+inputs:
+  project-name:
+    description: Service project name used for environment, mock, and monitor naming.
+    required: true
+  workspace-id:
+    description: Postman workspace ID used for workspace-link and export metadata.
+    required: false
+  baseline-collection-id:
+    description: Baseline collection ID used for exported artifacts and mock server creation.
+    required: false
+  smoke-collection-id:
+    description: Smoke collection ID used for monitor creation.
+    required: false
+  contract-collection-id:
+    description: Contract collection ID used for exported artifacts.
+    required: false
+  environments-json:
+    description: JSON array of environment slugs to create or update.
+    required: false
+    default: '["prod"]'
+  repo-url:
+    description: Explicit repository URL. Defaults to the GitHub repository URL from the workflow context.
+    required: false
+  integration-backend:
+    description: Integration backend for workspace linking and environment sync.
+    required: false
+    default: bifrost
+  workspace-link-enabled:
+    description: Enable workspace linking.
+    required: false
+    default: 'true'
+  environment-sync-enabled:
+    description: Enable association of Postman environments to system environments.
+    required: false
+    default: 'true'
+  system-env-map-json:
+    description: JSON map of environment slug to system environment id.
+    required: false
+    default: '{}'
+  environment-uids-json:
+    description: JSON map of environment slug to Postman environment uid.
+    required: false
+    default: '{}'
+  env-runtime-urls-json:
+    description: JSON map of environment slug to runtime base URL.
+    required: false
+    default: '{}'
+  artifact-dir:
+    description: Root directory for exported Postman artifacts.
+    required: false
+    default: postman
+  repo-write-mode:
+    description: Repo mutation mode for generated artifacts and workflow files.
+    required: false
+    default: commit-and-push
+  current-ref:
+    description: Explicit ref override for push-changes when the checkout is detached.
+    required: false
+  committer-name:
+    description: Git committer name for sync commits.
+    required: false
+    default: Postman FDE
+  committer-email:
+    description: Git committer email for sync commits.
+    required: false
+    default: fde@postman.com
+  postman-api-key:
+    description: Postman API key used for environment, mock, and monitor operations.
+    required: true
+  postman-access-token:
+    description: Postman access token used for Bifrost and system environment association.
+    required: false
+  github-token:
+    description: GitHub token used for repo variable persistence and commits.
+    required: false
+  gh-fallback-token:
+    description: Fallback token for repository variable APIs and workflow-file pushes.
+    required: false
+  github-auth-mode:
+    description: GitHub auth mode for repository variable APIs.
+    required: false
+    default: github_token_first
+outputs:
+  integration-backend:
+    description: Resolved integration backend for the beta run.
+  resolved-current-ref:
+    description: Resolved push target based on current-ref semantics.
+  workspace-link-status:
+    description: Whether workspace linking is planned or skipped.
+  environment-sync-status:
+    description: Whether environment sync is planned or skipped.
+  environment-uids-json:
+    description: JSON map of environment slug to Postman environment uid.
+  mock-url:
+    description: Created or reused mock server URL.
+  monitor-id:
+    description: Created or reused smoke monitor ID.
+  repo-sync-summary-json:
+    description: JSON summary of repo materialization and workspace sync outputs.
+  commit-sha:
+    description: Commit SHA produced by repo-write-mode, if any.
+runs:
+  using: node20
+  main: dist/index.js
