@@ -1,6 +1,15 @@
 name: postman-repo-sync-action
 description: Sync exported Postman artifacts into a repository and expose beta workspace-link and environment-sync contract outputs.
 inputs:
+
+  generate-ci-workflow:
+    description: Whether to generate the CI workflow file
+    required: false
+    default: "true"
+  ci-workflow-path:
+    description: Path to write the generated CI workflow file
+    required: false
+    default: .github/workflows/ci.yml
   project-name:
     description: Service project name used for environment, mock, and monitor naming.
     required: true

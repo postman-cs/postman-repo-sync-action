@@ -59,6 +59,17 @@ export const postmanRepoSyncActionContract: {
     committerEmail: 'fde@postman.com'
   },
   inputs: {
+
+    'generate-ci-workflow': {
+      description: 'Whether to generate the CI workflow file',
+      required: false,
+      default: 'true'
+    },
+    'ci-workflow-path': {
+      description: 'Path to write the generated CI workflow file',
+      required: false,
+      default: '.github/workflows/ci.yml'
+    },
     'project-name': {
       description: 'Service project name used for environment, mock, and monitor naming.',
       required: true

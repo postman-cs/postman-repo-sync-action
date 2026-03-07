@@ -50,6 +50,8 @@ export interface ResolvedInputs {
   ghFallbackToken: string;
   githubAuthMode: 'github_token_first' | 'fallback_pat_first' | 'app_token';
   ciWorkflowBase64: string;
+  generateCiWorkflow: boolean;
+  ciWorkflowPath: string;
 }
 
 interface RepoSyncOutputs {
@@ -246,7 +248,9 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     githubAuthMode: normalizeGithubAuthMode(
       readInput(actionCore, 'github-auth-mode') || 'github_token_first'
     ),
-    ciWorkflowBase64: readInput(actionCore, 'ci-workflow-base64')
+    ciWorkflowBase64: readInput(actionCore, 'ci-workflow-base64'),
+    generateCiWorkflow: parseBooleanInput(readInput(actionCore, 'generate-ci-workflow'), true),
+    ciWorkflowPath: readInput(actionCore, 'ci-workflow-path') || '.github/workflows/ci.yml'
   };
 }
 
@@ -435,9 +439,20 @@ async function commitAndPushGeneratedFiles(
     return { commitSha: '', resolvedCurrentRef: '', pushed: false };
   }
 
-  const ciWorkflow = renderCiWorkflow(inputs);
-  ensureDir('.github/workflows');
-  writeFileSync('.github/workflows/ci.yml', ciWorkflow);
+  
+  if (inputs.generateCiWorkflow) {
+    const ciWorkflow = renderCiWorkflow(inputs);
+    
+    // Extract dir from ciWorkflowPath
+    const parts = inputs.ciWorkflowPath.split('/');
+    if (parts.length > 1) {
+      const dir = parts.slice(0, -1).join('/');
+      ensureDir(dir);
+    }
+    
+    writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
+  }
+
   if (existsSync('.github/workflows/provision.yml')) {
     rmSync('.github/workflows/provision.yml');
   }
@@ -445,8 +460,14 @@ async function commitAndPushGeneratedFiles(
   const stagePaths = [
     inputs.artifactDir,
     '.postman',
-    '.github/workflows'
-  ].filter((entry) => existsSync(entry));
+    inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null
+  ].filter((entry) => typeof entry === 'string' && existsSync(entry)) as string[];
+  
+  // also add .github/workflows directory for provision.yml removal
+  if (!stagePaths.includes('.github/workflows') && existsSync('.github/workflows')) {
+    stagePaths.push('.github/workflows');
+  }
+
   const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ['.'];
 
   const result = await dependencies.repoMutation.commitAndPush({

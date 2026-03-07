@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -39,6 +39,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     ghFallbackToken: 'fallback-token',
     githubAuthMode: 'github_token_first',
     ciWorkflowBase64: '',
+    generateCiWorkflow: true,
+    ciWorkflowPath: '.github/workflows/ci.yml',
     ...overrides
   };
 }
@@ -222,5 +224,94 @@ describe('repo sync action', () => {
 
     expect(postman.createEnvironment).not.toHaveBeenCalled();
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips writing a CI workflow when generation is disabled', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue({ info: { name: 'demo' } }),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+    };
+    const repoMutation = {
+      commitAndPush: vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      })
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        ciWorkflowPath: '.github/workflows/postman-sync.yml'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: repoMutation as any
+      }
+    );
+
+    expect(existsSync('.github/workflows/ci.yml')).toBe(false);
+    expect(existsSync('.github/workflows/postman-sync.yml')).toBe(false);
+    expect(repoMutation.commitAndPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stagePaths: expect.arrayContaining(['postman', '.postman', '.github/workflows'])
+      })
+    );
+  });
+
+  it('writes the generated CI workflow to a custom path when configured', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue({ info: { name: 'demo' } }),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        ciWorkflowPath: '.github/workflows/postman-sync.yml'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(existsSync('.github/workflows/ci.yml')).toBe(false);
+    expect(readFileSync('.github/workflows/postman-sync.yml', 'utf8')).toContain(
+      'name: CI/CD Pipeline'
+    );
   });
 });

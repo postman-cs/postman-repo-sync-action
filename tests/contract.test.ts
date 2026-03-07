@@ -16,6 +16,8 @@ describe('postman-repo-sync-action contract', () => {
     expect(postmanRepoSyncActionContract.defaults.integrationBackend).toBe('bifrost');
 
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
+      'generate-ci-workflow',
+      'ci-workflow-path',
       'project-name',
       'workspace-id',
       'baseline-collection-id',

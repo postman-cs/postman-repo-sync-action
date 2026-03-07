@@ -19,6 +19,8 @@ Removed from finalize:
 - Store AWS deployment orchestration concerns in the public action interface.
 - Push directly to `main`.
 
+For existing repositories, use `generate-ci-workflow: false` to avoid touching workflow files, or set `ci-workflow-path` to materialize the generated pipeline under a non-conflicting filename such as `.github/workflows/postman-sync.yml`.
+
 ## Usage
 
 ```yaml
@@ -46,6 +48,23 @@ jobs:
           postman-access-token: ${{ secrets.POSTMAN_ACCESS_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           gh-fallback-token: ${{ secrets.GH_FALLBACK_TOKEN }}
+
+  repo-sync-existing:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: postman-cs/postman-repo-sync-action@v0
+        with:
+          project-name: core-payments
+          workspace-id: ws-123
+          baseline-collection-id: col-baseline
+          smoke-collection-id: col-smoke
+          contract-collection-id: col-contract
+          generate-ci-workflow: false
+          postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
 ```
 
 ## Current-ref push semantics
@@ -58,6 +77,8 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 
 | Input | Default | Notes |
 | --- | --- | --- |
+| `generate-ci-workflow` | `true` | Set to `false` for existing repos that already own their CI workflow layout. |
+| `ci-workflow-path` | `.github/workflows/ci.yml` | Redirect generated CI to a non-conflicting path for existing repos. |
 | `workspace-id` | | Workspace identifier used for workspace-link and export metadata. |
 | `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
 | `integration-backend` | `bifrost` | Public beta starts with Bifrost only. |

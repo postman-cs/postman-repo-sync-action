@@ -20619,7 +20619,9 @@ function readActionInputs(actionCore) {
     githubAuthMode: normalizeGithubAuthMode(
       readInput(actionCore, "github-auth-mode") || "github_token_first"
     ),
-    ciWorkflowBase64: readInput(actionCore, "ci-workflow-base64")
+    ciWorkflowBase64: readInput(actionCore, "ci-workflow-base64"),
+    generateCiWorkflow: parseBooleanInput(readInput(actionCore, "generate-ci-workflow"), true),
+    ciWorkflowPath: readInput(actionCore, "ci-workflow-path") || ".github/workflows/ci.yml"
   };
 }
 async function upsertEnvironments(inputs, dependencies) {
@@ -20775,17 +20777,26 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
   if (!dependencies.repoMutation || inputs.repoWriteMode === "none") {
     return { commitSha: "", resolvedCurrentRef: "", pushed: false };
   }
-  const ciWorkflow = renderCiWorkflow(inputs);
-  ensureDir(".github/workflows");
-  (0, import_node_fs.writeFileSync)(".github/workflows/ci.yml", ciWorkflow);
+  if (inputs.generateCiWorkflow) {
+    const ciWorkflow = renderCiWorkflow(inputs);
+    const parts = inputs.ciWorkflowPath.split("/");
+    if (parts.length > 1) {
+      const dir = parts.slice(0, -1).join("/");
+      ensureDir(dir);
+    }
+    (0, import_node_fs.writeFileSync)(inputs.ciWorkflowPath, ciWorkflow);
+  }
   if ((0, import_node_fs.existsSync)(".github/workflows/provision.yml")) {
     (0, import_node_fs.rmSync)(".github/workflows/provision.yml");
   }
   const stagePaths = [
     inputs.artifactDir,
     ".postman",
-    ".github/workflows"
-  ].filter((entry) => (0, import_node_fs.existsSync)(entry));
+    inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null
+  ].filter((entry) => typeof entry === "string" && (0, import_node_fs.existsSync)(entry));
+  if (!stagePaths.includes(".github/workflows") && (0, import_node_fs.existsSync)(".github/workflows")) {
+    stagePaths.push(".github/workflows");
+  }
   const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ["."];
   const result = await dependencies.repoMutation.commitAndPush({
     repoWriteMode: inputs.repoWriteMode,
