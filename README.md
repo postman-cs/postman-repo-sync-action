@@ -79,7 +79,12 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 | --- | --- | --- |
 | `generate-ci-workflow` | `true` | Set to `false` for existing repos that already own their CI workflow layout. |
 | `ci-workflow-path` | `.github/workflows/ci.yml` | Redirect generated CI to a non-conflicting path for existing repos. |
+| `project-name` | | Service name used for environments, mock servers, and monitors. |
 | `workspace-id` | | Workspace identifier used for workspace-link and export metadata. |
+| `baseline-collection-id` | | Baseline collection exported into the repo and used for mock generation. |
+| `smoke-collection-id` | | Smoke collection used for monitor creation. |
+| `contract-collection-id` | | Contract collection exported into the repo. |
+| `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
 | `integration-backend` | `bifrost` | Public beta starts with Bifrost only. |
 | `workspace-link-enabled` | `true` | Keeps workspace linking in scope. |
@@ -97,6 +102,7 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 | `github-token` | | GitHub token for repo variables and commits. |
 | `gh-fallback-token` | | Fallback GitHub token for workflow-file and variable APIs. |
 | `github-auth-mode` | `github_token_first` | GitHub auth mode for repo variable APIs. |
+| `ci-workflow-base64` | | Optional base64-encoded workflow content that overrides the built-in CI template. |
 
 ## Outputs
 
