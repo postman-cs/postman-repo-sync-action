@@ -1,6 +1,6 @@
 # postman-repo-sync-action
 
-Public beta GitHub Action that owns Postman-to-repo sync concerns split out of `api-catalog-demo-infra/.github/actions/finalize`.
+Public open-alpha GitHub Action that owns Postman-to-repo sync concerns split out of `api-catalog-demo-infra/.github/actions/finalize`.
 
 ## Scope
 
@@ -72,7 +72,7 @@ jobs:
 
 When `repo-write-mode=commit-and-push`, the action pushes back to the current checked out ref instead of hardcoding `main`. Resolution order is `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to `GITHUB_HEAD_REF`. Pushes use `HEAD:refs/heads/<resolved-branch>`.
 
-If the action writes `.github/workflows/ci.yml`, provide a credential source that can update workflow files. The beta prefers `gh-fallback-token` first for workflow-file pushes, then falls back to `github-token`.
+If the action writes `.github/workflows/ci.yml`, provide a credential source that can update workflow files. The action prefers `gh-fallback-token` first for workflow-file pushes, then falls back to `github-token`.
 
 ## Inputs
 
@@ -87,9 +87,9 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 | `contract-collection-id` | | Contract collection exported into the repo. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
-| `integration-backend` | `bifrost` | Public beta starts with Bifrost only. |
+| `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |
 | `workspace-link-enabled` | `true` | Keeps workspace linking in scope. |
-| `environment-sync-enabled` | `true` | Keeps environment association in scope by default for the beta demonstration path. |
+| `environment-sync-enabled` | `true` | Keeps environment association in scope by default for the open-alpha demonstration path. |
 | `system-env-map-json` | `{}` | JSON map of environment slug to system environment id. |
 | `environment-uids-json` | `{}` | JSON map of environment slug to Postman environment uid. |
 | `env-runtime-urls-json` | `{}` | JSON map of environment slug to runtime base URL. |
@@ -121,9 +121,9 @@ The `postman-api-key` is a Postman API key (PMAK) used for all standard Postman 
 
 > **Note:** The PMAK is a long-lived key tied to your Postman account. It does not require periodic renewal like the `postman-access-token`.
 
-### Obtaining `postman-access-token` (Beta)
+### Obtaining `postman-access-token` (Open Alpha)
 
-> **⚠️ Beta limitation:** The `postman-access-token` input requires a manually-extracted session token. There is currently no public API to exchange a Postman API key (PMAK) for an access token programmatically. This manual step will be eliminated before GA.
+> **⚠️ Open-alpha limitation:** The `postman-access-token` input requires a manually-extracted session token. There is currently no public API to exchange a Postman API key (PMAK) for an access token programmatically. This manual step will be eliminated before GA.
 
 The `postman-access-token` is a Postman session token (`x-access-token`) required for internal API operations that the standard PMAK API key cannot perform — specifically workspace ↔ repo git sync (Bifrost) and system environment associations. Without it, those steps are silently skipped.
 
@@ -179,11 +179,11 @@ npm run build
 
 `npm run build` produces the committed `dist/index.cjs` action bundle used by `action.yml`.
 
-## Beta Release Strategy
+## Open-Alpha Release Strategy
 
-- Beta channel tags use `v0.x.y`.
+- Open-alpha channel tags use `v0.x.y`.
 - Consumers can pin immutable tags such as `v0.2.0` for reproducibility.
-- Moving tag `v0` is used only as the rolling beta channel.
+- Moving tag `v0` is used only as the rolling open-alpha channel.
 
 ## REST Migration Seam
 

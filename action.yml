@@ -1,5 +1,5 @@
 name: postman-repo-sync-action
-description: Sync exported Postman artifacts into a repository and expose beta workspace-link and environment-sync contract outputs.
+description: Sync exported Postman artifacts into a repository and expose open-alpha workspace-link and environment-sync contract outputs.
 inputs:
 
   generate-ci-workflow:
@@ -96,7 +96,7 @@ inputs:
     required: false
 outputs:
   integration-backend:
-    description: Resolved integration backend for the beta run.
+    description: Resolved integration backend for the open-alpha run.
   resolved-current-ref:
     description: Resolved push target based on current-ref semantics.
   workspace-link-status:
