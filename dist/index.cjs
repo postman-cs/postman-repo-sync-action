@@ -20683,6 +20683,9 @@ function stripVolatileFields(obj) {
       if (key === "id" && typeof value === "string" && /^[0-9a-f-]{36}$/.test(value)) {
         continue;
       }
+      if (key === "uid" && typeof value === "string" && /^\d+-[0-9a-f-]{36}$/.test(value)) {
+        continue;
+      }
       result[key] = stripVolatileFields(value);
     }
     return result;

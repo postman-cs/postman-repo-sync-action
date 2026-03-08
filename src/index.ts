@@ -325,8 +325,11 @@ function stripVolatileFields(obj: unknown): unknown {
       if (VOLATILE_KEYS.has(key)) {
         continue;
       }
-      // Strip item-level `id` but preserve top-level identifiers
+      // Strip item-level `id` and `uid` but preserve top-level `_postman_id`
       if (key === 'id' && typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value)) {
+        continue;
+      }
+      if (key === 'uid' && typeof value === 'string' && /^\d+-[0-9a-f-]{36}$/.test(value)) {
         continue;
       }
       result[key] = stripVolatileFields(value);
