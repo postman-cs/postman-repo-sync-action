@@ -300,8 +300,45 @@ function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
-function writeJsonFile(path: string, content: unknown): void {
-  writeFileSync(path, JSON.stringify(content, null, 2));
+/**
+ * Keys that Postman regenerates on every export even when the underlying
+ * content has not changed. Stripping them prevents cosmetic no-op commits.
+ */
+const VOLATILE_KEYS = new Set([
+  'createdAt',
+  'updatedAt',
+  'lastUpdatedBy'
+]);
+
+/**
+ * Item-level `id` fields are regenerated on every Postman API export.
+ * We strip them from request/folder entries but preserve `_postman_id`
+ * and `uid` which are the stable collection/environment identifiers.
+ */
+function stripVolatileFields(obj: unknown): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map(stripVolatileFields);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (VOLATILE_KEYS.has(key)) {
+        continue;
+      }
+      // Strip item-level `id` but preserve top-level identifiers
+      if (key === 'id' && typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value)) {
+        continue;
+      }
+      result[key] = stripVolatileFields(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
+function writeJsonFile(path: string, content: unknown, normalize = false): void {
+  const data = normalize ? stripVolatileFields(content) : content;
+  writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
 async function exportArtifacts(
@@ -325,26 +362,30 @@ async function exportArtifacts(
   if (inputs.baselineCollectionId) {
     writeJsonFile(
       `${collectionsDir}/baseline.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.baselineCollectionId)
+      await dependencies.postman.getCollection(inputs.baselineCollectionId),
+      true
     );
   }
   if (inputs.smokeCollectionId) {
     writeJsonFile(
       `${collectionsDir}/smoke.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.smokeCollectionId)
+      await dependencies.postman.getCollection(inputs.smokeCollectionId),
+      true
     );
   }
   if (inputs.contractCollectionId) {
     writeJsonFile(
       `${collectionsDir}/contract.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.contractCollectionId)
+      await dependencies.postman.getCollection(inputs.contractCollectionId),
+      true
     );
   }
 
   for (const [envName, envUid] of Object.entries(envUids)) {
     writeJsonFile(
       `${environmentsDir}/${envName}.postman_environment.json`,
-      await dependencies.postman.getEnvironment(envUid)
+      await dependencies.postman.getEnvironment(envUid),
+      true
     );
   }
 
@@ -439,17 +480,17 @@ async function commitAndPushGeneratedFiles(
     return { commitSha: '', resolvedCurrentRef: '', pushed: false };
   }
 
-  
+
   if (inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs);
-    
+
     // Extract dir from ciWorkflowPath
     const parts = inputs.ciWorkflowPath.split('/');
     if (parts.length > 1) {
       const dir = parts.slice(0, -1).join('/');
       ensureDir(dir);
     }
-    
+
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
   }
 
@@ -462,7 +503,7 @@ async function commitAndPushGeneratedFiles(
     '.postman',
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null
   ].filter((entry) => typeof entry === 'string' && existsSync(entry)) as string[];
-  
+
   // also add .github/workflows directory for provision.yml removal
   if (!stagePaths.includes('.github/workflows') && existsSync('.github/workflows')) {
     stagePaths.push('.github/workflows');
@@ -516,8 +557,7 @@ export async function runRepoSync(
       } catch (error) {
         outputs['environment-sync-status'] = 'failed';
         dependencies.core.warning(
-          `System environment association failed: ${
-            error instanceof Error ? error.message : String(error)
+          `System environment association failed: ${error instanceof Error ? error.message : String(error)
           }`
         );
       }
@@ -611,40 +651,40 @@ export async function runAction(
   const github =
     repository && inputs.githubToken
       ? new GitHubApiClient({
-          repository,
-          token: inputs.githubToken,
-          fallbackToken: inputs.ghFallbackToken,
-          authMode: inputs.githubAuthMode,
-          secretMasker: masker
-        })
+        repository,
+        token: inputs.githubToken,
+        fallbackToken: inputs.ghFallbackToken,
+        authMode: inputs.githubAuthMode,
+        secretMasker: masker
+      })
       : undefined;
 
   const repoMutation =
     repository && (inputs.repoWriteMode === 'commit-only' || inputs.repoWriteMode === 'commit-and-push')
       ? new RepoMutationService({
-          repository,
-          secretMasker: masker,
-          execute: async (command, args) => {
-            const result = await actionExec.getExecOutput(command, args, {
-              ignoreReturnCode: true
-            });
-            return {
-              exitCode: result.exitCode,
-              stdout: result.stdout,
-              stderr: result.stderr
-            };
-          }
-        })
+        repository,
+        secretMasker: masker,
+        execute: async (command, args) => {
+          const result = await actionExec.getExecOutput(command, args, {
+            ignoreReturnCode: true
+          });
+          return {
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr
+          };
+        }
+      })
       : undefined;
 
   const internalIntegration =
     inputs.postmanAccessToken
       ? createInternalIntegrationAdapter({
-          accessToken: inputs.postmanAccessToken,
-          backend: inputs.integrationBackend,
-          teamId: process.env.POSTMAN_TEAM_ID || '',
-          secretMasker: masker
-        })
+        accessToken: inputs.postmanAccessToken,
+        backend: inputs.integrationBackend,
+        teamId: process.env.POSTMAN_TEAM_ID || '',
+        secretMasker: masker
+      })
       : undefined;
 
   if (!github) {

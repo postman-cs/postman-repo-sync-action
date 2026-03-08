@@ -20044,7 +20044,11 @@ var GitHubApiClient = class {
       throw new Error("No GitHub auth token configured");
     }
     const first = await this.requestWithToken(path, init, orderedTokens[0]);
-    if (first.status !== 403 || orderedTokens.length < 2 || !this.canUseFallback(path)) {
+    if (orderedTokens.length < 2 || !this.canUseFallback(path)) {
+      return first;
+    }
+    const isVariableGet404 = first.status === 404 && (!init.method || init.method === "GET") && this.isVariablesEndpoint(path);
+    if (first.status !== 403 && !isVariableGet404) {
       return first;
     }
     return this.requestWithToken(path, init, orderedTokens[1]);
@@ -20661,8 +20665,33 @@ async function upsertEnvironments(inputs, dependencies) {
 function ensureDir(path) {
   (0, import_node_fs.mkdirSync)(path, { recursive: true });
 }
-function writeJsonFile(path, content) {
-  (0, import_node_fs.writeFileSync)(path, JSON.stringify(content, null, 2));
+var VOLATILE_KEYS = /* @__PURE__ */ new Set([
+  "createdAt",
+  "updatedAt",
+  "lastUpdatedBy"
+]);
+function stripVolatileFields(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(stripVolatileFields);
+  }
+  if (obj !== null && typeof obj === "object") {
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (VOLATILE_KEYS.has(key)) {
+        continue;
+      }
+      if (key === "id" && typeof value === "string" && /^[0-9a-f-]{36}$/.test(value)) {
+        continue;
+      }
+      result[key] = stripVolatileFields(value);
+    }
+    return result;
+  }
+  return obj;
+}
+function writeJsonFile(path, content, normalize = false) {
+  const data = normalize ? stripVolatileFields(content) : content;
+  (0, import_node_fs.writeFileSync)(path, JSON.stringify(data, null, 2));
 }
 async function exportArtifacts(inputs, dependencies, envUids) {
   if (!inputs.workspaceId) {
@@ -20679,25 +20708,29 @@ async function exportArtifacts(inputs, dependencies, envUids) {
   if (inputs.baselineCollectionId) {
     writeJsonFile(
       `${collectionsDir}/baseline.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.baselineCollectionId)
+      await dependencies.postman.getCollection(inputs.baselineCollectionId),
+      true
     );
   }
   if (inputs.smokeCollectionId) {
     writeJsonFile(
       `${collectionsDir}/smoke.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.smokeCollectionId)
+      await dependencies.postman.getCollection(inputs.smokeCollectionId),
+      true
     );
   }
   if (inputs.contractCollectionId) {
     writeJsonFile(
       `${collectionsDir}/contract.postman_collection.json`,
-      await dependencies.postman.getCollection(inputs.contractCollectionId)
+      await dependencies.postman.getCollection(inputs.contractCollectionId),
+      true
     );
   }
   for (const [envName, envUid] of Object.entries(envUids)) {
     writeJsonFile(
       `${environmentsDir}/${envName}.postman_environment.json`,
-      await dependencies.postman.getEnvironment(envUid)
+      await dependencies.postman.getEnvironment(envUid),
+      true
     );
   }
   writeJsonFile(".postman/config.json", {
