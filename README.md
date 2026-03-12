@@ -9,7 +9,7 @@ Retained from finalize:
 - Create or update Postman environments from runtime URLs.
 - Associate Postman environments to system environments through Bifrost.
 - Create mock servers and smoke monitors from generated collections.
-- Persist repo variables and export existing Postman collections and environments into the repository under `postman/` and `.postman/`.
+- Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.
 - Link the Postman workspace to the GitHub repository through Bifrost.
 - Commit synced artifacts and push them back to the current checked out ref.
 
@@ -73,6 +73,10 @@ jobs:
 When `repo-write-mode=commit-and-push`, the action pushes back to the current checked out ref instead of hardcoding `main`. Resolution order is `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to `GITHUB_HEAD_REF`. Pushes use `HEAD:refs/heads/<resolved-branch>`.
 
 If the action writes `.github/workflows/ci.yml`, provide a credential source that can update workflow files. The action prefers `gh-fallback-token` first for workflow-file pushes, then falls back to `github-token`.
+
+### Collection v3 export
+
+Collections are exported in the Postman Collection v3 format, producing a multi-file YAML directory structure under `postman/collections/`. Each collection (Baseline, Smoke, Contract) gets its own directory containing `collection.yaml` and nested folder/request YAML files. The `.postman/resources.yaml` manifest maps each v3 collection directory to its Postman UID.
 
 ## Inputs
 
