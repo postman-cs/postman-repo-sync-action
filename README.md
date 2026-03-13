@@ -89,6 +89,9 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `baseline-collection-id` | | Baseline collection exported into the repo and used for mock generation. |
 | `smoke-collection-id` | | Smoke collection used for monitor creation. |
 | `contract-collection-id` | | Contract collection exported into the repo. |
+| `monitor-id` | | Existing smoke monitor ID. When set the action skips monitor creation. |
+| `mock-url` | | Existing mock server URL. When set the action skips mock creation. |
+| `monitor-cron` | `""` | Cron expression for monitor scheduling (e.g. `0 */6 * * *`). When empty the monitor is created without a schedule. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |

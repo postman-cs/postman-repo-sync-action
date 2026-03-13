@@ -107,21 +107,20 @@ export class PostmanAssetsClient {
     workspaceId: string,
     name: string,
     collectionUid: string,
-    environmentUid: string
+    environmentUid: string,
+    cron?: string
   ): Promise<string> {
+    const monitor: Record<string, unknown> = {
+      name,
+      collection: collectionUid,
+      environment: environmentUid
+    };
+    if (cron) {
+      monitor.schedule = { cron, timezone: 'UTC' };
+    }
     const response = await this.request(`/monitors?workspace=${workspaceId}`, {
       method: 'POST',
-      body: JSON.stringify({
-        monitor: {
-          name,
-          collection: collectionUid,
-          environment: environmentUid,
-          schedule: {
-            cron: '*/5 * * * *',
-            timezone: 'UTC'
-          }
-        }
-      })
+      body: JSON.stringify({ monitor })
     });
 
     const uid = String(response?.monitor?.uid || '').trim();

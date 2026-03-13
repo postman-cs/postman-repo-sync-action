@@ -33,6 +33,9 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  monitorId: string;
+  mockUrl: string;
+  monitorCron: string;
   environments: string[];
   repoUrl: string;
   integrationBackend: string;
@@ -224,6 +227,9 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     baselineCollectionId: readInput(actionCore, 'baseline-collection-id'),
     smokeCollectionId: readInput(actionCore, 'smoke-collection-id'),
     contractCollectionId: readInput(actionCore, 'contract-collection-id'),
+    monitorId: readInput(actionCore, 'monitor-id'),
+    mockUrl: readInput(actionCore, 'mock-url'),
+    monitorCron: readInput(actionCore, 'monitor-cron'),
     environments: environments.length > 0 ? environments : ['prod'],
     repoUrl: resolveRepoUrl(readInput(actionCore, 'repo-url')),
     integrationBackend: readInput(actionCore, 'integration-backend') || 'bifrost',
@@ -594,7 +600,10 @@ export async function runRepoSync(
     }
   }
 
-  if (
+  if (inputs.mockUrl) {
+    outputs['mock-url'] = inputs.mockUrl;
+    dependencies.core.info(`Reusing existing mock: ${inputs.mockUrl}`);
+  } else if (
     inputs.workspaceId &&
     inputs.baselineCollectionId &&
     Object.keys(envUids).length > 0
@@ -611,14 +620,18 @@ export async function runRepoSync(
     }
   }
 
-  if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
+  if (inputs.monitorId) {
+    outputs['monitor-id'] = inputs.monitorId;
+    dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
+  } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
       outputs['monitor-id'] = await dependencies.postman.createMonitor(
         inputs.workspaceId,
         `${inputs.projectName} - Smoke Monitor`,
         inputs.smokeCollectionId,
-        monitorEnvUid
+        monitorEnvUid,
+        inputs.monitorCron || undefined
       );
     }
   }

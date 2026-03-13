@@ -18,6 +18,9 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    monitorId: '',
+    mockUrl: '',
+    monitorCron: '',
     environments: ['prod', 'stage'],
     repoUrl: 'https://github.com/postman-cs/repo-sync-demo',
     integrationBackend: 'bifrost',
@@ -317,6 +320,102 @@ describe('repo sync action', () => {
 
     expect(postman.createEnvironment).not.toHaveBeenCalled();
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips mock and monitor creation when IDs are already provided', async () => {
+    const { core, outputs } = createCoreStub();
+    const postman = {
+      createEnvironment: vi
+        .fn()
+        .mockResolvedValueOnce('env-prod')
+        .mockResolvedValueOnce('env-stage'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn(),
+      createMonitor: vi.fn(),
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+    };
+
+    const result = await runRepoSync(
+      createInputs({
+        monitorId: 'mon-existing',
+        mockUrl: 'https://existing-mock.pstmn.io'
+      }),
+      {
+        core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(result['mock-url']).toBe('https://existing-mock.pstmn.io');
+    expect(result['monitor-id']).toBe('mon-existing');
+  });
+
+  it('passes cron to createMonitor when monitor-cron is set', async () => {
+    const { core } = createCoreStub();
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValueOnce('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-scheduled'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        monitorCron: '0 */6 * * *'
+      }),
+      {
+        core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(postman.createMonitor).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments - Smoke Monitor',
+      'col-smoke',
+      'env-prod',
+      '0 */6 * * *'
+    );
   });
 
   it('skips writing a CI workflow when generation is disabled', async () => {
