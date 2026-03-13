@@ -23576,6 +23576,14 @@ var PostmanAssetsClient = class {
       url: String(response?.mock?.mockUrl || "").trim() || String(response?.mock?.config?.serverResponseId || "").trim()
     };
   }
+  async monitorExists(uid) {
+    try {
+      await this.request(`/monitors/${uid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   async getCollection(uid) {
     const response = await this.request(`/collections/${uid}`);
     return response?.collection;
@@ -23993,10 +24001,14 @@ async function runRepoSync(inputs, dependencies) {
       outputs["mock-url"] = mock.url;
     }
   }
-  if (inputs.monitorId) {
+  const monitorValid = inputs.monitorId && await dependencies.postman.monitorExists(inputs.monitorId);
+  if (monitorValid) {
     outputs["monitor-id"] = inputs.monitorId;
     dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
   } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
+    if (inputs.monitorId) {
+      dependencies.core.warning(`Monitor ${inputs.monitorId} no longer exists, creating a new one`);
+    }
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
       outputs["monitor-id"] = await dependencies.postman.createMonitor(

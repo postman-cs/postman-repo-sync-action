@@ -161,6 +161,15 @@ export class PostmanAssetsClient {
     };
   }
 
+  async monitorExists(uid: string): Promise<boolean> {
+    try {
+      await this.request(`/monitors/${uid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async getCollection(uid: string): Promise<any> {
     const response = await this.request(`/collections/${uid}`);
     return response?.collection;

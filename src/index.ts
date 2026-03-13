@@ -97,6 +97,7 @@ interface RepoSyncDependencies {
     | 'createMonitor'
     | 'getCollection'
     | 'getEnvironment'
+    | 'monitorExists'
     | 'updateEnvironment'
   >;
   github?: Pick<GitHubApiClient, 'getRepositoryVariable' | 'setRepositoryVariable'>;
@@ -603,11 +604,7 @@ export async function runRepoSync(
   if (inputs.mockUrl) {
     outputs['mock-url'] = inputs.mockUrl;
     dependencies.core.info(`Reusing existing mock: ${inputs.mockUrl}`);
-  } else if (
-    inputs.workspaceId &&
-    inputs.baselineCollectionId &&
-    Object.keys(envUids).length > 0
-  ) {
+  } else if (inputs.workspaceId && inputs.baselineCollectionId && Object.keys(envUids).length > 0) {
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
       const mock = await dependencies.postman.createMock(
@@ -620,10 +617,14 @@ export async function runRepoSync(
     }
   }
 
-  if (inputs.monitorId) {
+  const monitorValid = inputs.monitorId && await dependencies.postman.monitorExists(inputs.monitorId);
+  if (monitorValid) {
     outputs['monitor-id'] = inputs.monitorId;
     dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
   } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
+    if (inputs.monitorId) {
+      dependencies.core.warning(`Monitor ${inputs.monitorId} no longer exists, creating a new one`);
+    }
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
       outputs['monitor-id'] = await dependencies.postman.createMonitor(

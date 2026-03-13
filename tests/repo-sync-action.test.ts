@@ -190,7 +190,8 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
     const github = {
       getRepositoryVariable: vi.fn().mockResolvedValue(''),
@@ -287,7 +288,8 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
     const github = {
       getRepositoryVariable: vi
@@ -322,7 +324,7 @@ describe('repo sync action', () => {
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
   });
 
-  it('skips mock and monitor creation when IDs are already provided', async () => {
+  it('skips mock and monitor creation when IDs are already provided and verified', async () => {
     const { core, outputs } = createCoreStub();
     const postman = {
       createEnvironment: vi
@@ -337,7 +339,8 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
 
     const result = await runRepoSync(
@@ -380,7 +383,8 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-scheduled'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
 
     await runRepoSync(
@@ -418,6 +422,44 @@ describe('repo sync action', () => {
     );
   });
 
+  it('recreates monitor when it was deleted', async () => {
+    const { core } = createCoreStub();
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValueOnce('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-new'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(false)
+    };
+
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], monitorId: 'mon-deleted' }),
+      {
+        core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '', pushed: false, resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(postman.monitorExists).toHaveBeenCalledWith('mon-deleted');
+    expect(postman.createMonitor).toHaveBeenCalled();
+    expect(result['monitor-id']).toBe('mon-new');
+  });
+
   it('skips writing a CI workflow when generation is disabled', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -425,7 +467,8 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
     const repoMutation = {
       commitAndPush: vi.fn().mockResolvedValue({
@@ -472,7 +515,8 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] })
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      monitorExists: vi.fn().mockResolvedValue(true),
     };
 
     await runRepoSync(
