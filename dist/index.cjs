@@ -23536,20 +23536,18 @@ var PostmanAssetsClient = class {
       })
     });
   }
-  async createMonitor(workspaceId, name, collectionUid, environmentUid) {
+  async createMonitor(workspaceId, name, collectionUid, environmentUid, cron) {
+    const monitor = {
+      name,
+      collection: collectionUid,
+      environment: environmentUid
+    };
+    if (cron) {
+      monitor.schedule = { cron, timezone: "UTC" };
+    }
     const response = await this.request(`/monitors?workspace=${workspaceId}`, {
       method: "POST",
-      body: JSON.stringify({
-        monitor: {
-          name,
-          collection: collectionUid,
-          environment: environmentUid,
-          schedule: {
-            cron: "*/5 * * * *",
-            timezone: "UTC"
-          }
-        }
-      })
+      body: JSON.stringify({ monitor })
     });
     const uid = String(response?.monitor?.uid || "").trim();
     if (!uid) {
@@ -23687,6 +23685,9 @@ function readActionInputs(actionCore) {
     baselineCollectionId: readInput(actionCore, "baseline-collection-id"),
     smokeCollectionId: readInput(actionCore, "smoke-collection-id"),
     contractCollectionId: readInput(actionCore, "contract-collection-id"),
+    monitorId: readInput(actionCore, "monitor-id"),
+    mockUrl: readInput(actionCore, "mock-url"),
+    monitorCron: readInput(actionCore, "monitor-cron"),
     environments: environments.length > 0 ? environments : ["prod"],
     repoUrl: resolveRepoUrl(readInput(actionCore, "repo-url")),
     integrationBackend: readInput(actionCore, "integration-backend") || "bifrost",
@@ -23977,7 +23978,10 @@ async function runRepoSync(inputs, dependencies) {
       }
     }
   }
-  if (inputs.workspaceId && inputs.baselineCollectionId && Object.keys(envUids).length > 0) {
+  if (inputs.mockUrl) {
+    outputs["mock-url"] = inputs.mockUrl;
+    dependencies.core.info(`Reusing existing mock: ${inputs.mockUrl}`);
+  } else if (inputs.workspaceId && inputs.baselineCollectionId && Object.keys(envUids).length > 0) {
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
       const mock = await dependencies.postman.createMock(
@@ -23989,14 +23993,18 @@ async function runRepoSync(inputs, dependencies) {
       outputs["mock-url"] = mock.url;
     }
   }
-  if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
+  if (inputs.monitorId) {
+    outputs["monitor-id"] = inputs.monitorId;
+    dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
+  } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
       outputs["monitor-id"] = await dependencies.postman.createMonitor(
         inputs.workspaceId,
         `${inputs.projectName} - Smoke Monitor`,
         inputs.smokeCollectionId,
-        monitorEnvUid
+        monitorEnvUid,
+        inputs.monitorCron || void 0
       );
     }
   }
