@@ -23542,9 +23542,7 @@ var PostmanAssetsClient = class {
       collection: collectionUid,
       environment: environmentUid
     };
-    if (cron) {
-      monitor.schedule = { cron, timezone: "UTC" };
-    }
+    monitor.schedule = { cron: cron || "0 0 * * 0", timezone: "UTC" };
     const response = await this.request(`/monitors?workspace=${workspaceId}`, {
       method: "POST",
       body: JSON.stringify({ monitor })
@@ -23552,6 +23550,13 @@ var PostmanAssetsClient = class {
     const uid = String(response?.monitor?.uid || "").trim();
     if (!uid) {
       throw new Error("Monitor create did not return a UID");
+    }
+    if (!cron) {
+      await this.request(`/monitors/${uid}`, {
+        method: "PUT",
+        body: JSON.stringify({ monitor: { active: false } })
+      }).catch(() => {
+      });
     }
     return uid;
   }
