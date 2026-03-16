@@ -48,7 +48,7 @@ export const postmanRepoSyncActionContract: {
 } = {
   name: 'postman-repo-sync-action',
   description:
-    'Public beta contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
+    'Public open-alpha contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
   defaults: {
     integrationBackend: 'bifrost',
     artifactDir: 'postman',
@@ -181,7 +181,7 @@ export const postmanRepoSyncActionContract: {
   },
   outputs: {
     'integration-backend': {
-      description: 'Resolved integration backend for the beta run.'
+      description: 'Resolved integration backend for the open-alpha run.'
     },
     'resolved-current-ref': {
       description: 'Resolved push target based on current-ref semantics.'
@@ -213,7 +213,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Bifrost.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Persist repo variables and export existing Postman collections and environments into the repository under `postman/` and `.postman/`.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
       'Link the Postman workspace to the GitHub repository through Bifrost.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

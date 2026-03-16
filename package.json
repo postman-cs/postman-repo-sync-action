@@ -1,7 +1,7 @@
 {
   "name": "postman-repo-sync-action",
-  "version": "0.1.0-beta.0",
-  "description": "Public beta Postman repo sync GitHub Action.",
+  "version": "0.1.0-alpha.0",
+  "description": "Public open-alpha Postman repo sync GitHub Action.",
   "type": "module",
   "main": "dist/index.cjs",
   "files": [

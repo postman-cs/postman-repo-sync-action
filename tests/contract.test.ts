@@ -12,7 +12,7 @@ import {
 const repoRoot = resolve(import.meta.dirname, '..');
 
 describe('postman-repo-sync-action contract', () => {
-  it('keeps the beta surface in kebab-case with bifrost as the default backend', () => {
+  it('keeps the open-alpha surface in kebab-case with bifrost as the default backend', () => {
     expect(postmanRepoSyncActionContract.defaults.integrationBackend).toBe('bifrost');
 
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
@@ -114,11 +114,11 @@ describe('postman-repo-sync-action contract', () => {
     expect(
       createExecutionPlan({
         repoWriteMode: 'commit-and-push',
-        currentRef: 'release/public-beta',
+        currentRef: 'release/public-open-alpha',
         githubHeadRef: 'ignored/head',
         githubRefName: 'ignored/ref'
       }).resolvedCurrentRef
-    ).toBe('release/public-beta');
+    ).toBe('release/public-open-alpha');
 
     expect(
       createExecutionPlan({
