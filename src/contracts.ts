@@ -179,6 +179,11 @@ export const postmanRepoSyncActionContract: {
       required: false,
       default: 'github_token_first'
     },
+    'org-mode': {
+      description: 'Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.',
+      required: false,
+      default: 'false'
+    },
     'ci-workflow-base64': {
       description: 'Optional base64-encoded ci.yml content. Defaults to the built-in template.',
       required: false

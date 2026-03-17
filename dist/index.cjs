@@ -24906,16 +24906,29 @@ var HttpError = class _HttpError extends Error {
 var BifrostInternalIntegrationAdapter = class {
   accessToken;
   fetchImpl;
+  orgMode;
   teamId;
   workerBaseUrl;
   constructor(options) {
     this.accessToken = String(options.accessToken || "").trim();
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.orgMode = options.orgMode ?? false;
     this.teamId = String(options.teamId || "").trim();
     this.workerBaseUrl = String(
       options.workerBaseUrl || "https://catalog-admin.postman-account2009.workers.dev"
     ).replace(/\/+$/, "");
     void (options.secretMasker ?? createSecretMasker([this.accessToken]));
+  }
+  /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
+  bifrostHeaders() {
+    const headers = {
+      "Content-Type": "application/json",
+      "x-access-token": this.accessToken
+    };
+    if (this.teamId && this.orgMode) {
+      headers["x-entity-team-id"] = this.teamId;
+    }
+    return headers;
   }
   async associateSystemEnvironments(workspaceId, associations) {
     if (associations.length === 0) {
@@ -24962,13 +24975,7 @@ var BifrostInternalIntegrationAdapter = class {
         versionControl: true
       }
     };
-    const headers = {
-      "Content-Type": "application/json",
-      "x-access-token": this.accessToken
-    };
-    if (this.teamId) {
-      headers["x-entity-team-id"] = this.teamId;
-    }
+    const headers = this.bifrostHeaders();
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers,
@@ -24985,13 +24992,7 @@ var BifrostInternalIntegrationAdapter = class {
   }
   async createApiKey(name) {
     const url = "https://bifrost-premium-https-v4.gw.postman.com/ws/proxy";
-    const headers = {
-      "Content-Type": "application/json",
-      "x-access-token": this.accessToken
-    };
-    if (this.teamId) {
-      headers["x-entity-team-id"] = this.teamId;
-    }
+    const headers = this.bifrostHeaders();
     const payload = {
       service: "identity",
       method: "POST",
@@ -25291,7 +25292,8 @@ function readActionInputs(actionCore) {
     ciWorkflowBase64: readInput(actionCore, "ci-workflow-base64"),
     generateCiWorkflow: parseBooleanInput(readInput(actionCore, "generate-ci-workflow"), true),
     monitorType: readInput(actionCore, "monitor-type") || "cloud",
-    ciWorkflowPath: readInput(actionCore, "ci-workflow-path") || ".github/workflows/ci.yml"
+    ciWorkflowPath: readInput(actionCore, "ci-workflow-path") || ".github/workflows/ci.yml",
+    orgMode: parseBooleanInput(readInput(actionCore, "org-mode"), false)
   };
 }
 async function upsertEnvironments(inputs, dependencies) {
@@ -25668,6 +25670,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
     const internalIntegration = createInternalIntegrationAdapter({
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
+      orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
     });
@@ -25747,6 +25750,7 @@ async function runAction(actionCore = core2, actionExec = exec) {
   const internalIntegration = inputs.postmanAccessToken ? createInternalIntegrationAdapter({
     accessToken: inputs.postmanAccessToken,
     backend: inputs.integrationBackend,
+    orgMode: inputs.orgMode,
     teamId: resolved.teamId,
     secretMasker: masker
   }) : void 0;

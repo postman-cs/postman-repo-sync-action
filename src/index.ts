@@ -55,6 +55,7 @@ export interface ResolvedInputs {
   generateCiWorkflow: boolean;
   monitorType: string;
   ciWorkflowPath: string;
+  orgMode: boolean;
 }
 
 interface RepoSyncOutputs {
@@ -254,7 +255,8 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     ciWorkflowBase64: readInput(actionCore, 'ci-workflow-base64'),
     generateCiWorkflow: parseBooleanInput(readInput(actionCore, 'generate-ci-workflow'), true),
     monitorType: readInput(actionCore, 'monitor-type') || 'cloud',
-    ciWorkflowPath: readInput(actionCore, 'ci-workflow-path') || '.github/workflows/ci.yml'
+    ciWorkflowPath: readInput(actionCore, 'ci-workflow-path') || '.github/workflows/ci.yml',
+    orgMode: parseBooleanInput(readInput(actionCore, 'org-mode'), false)
   };
 }
 
@@ -738,6 +740,7 @@ async function resolvePostmanApiKeyAndTeamId(
     const internalIntegration = createInternalIntegrationAdapter({
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
+      orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
     });
@@ -834,6 +837,7 @@ export async function runAction(
       ? createInternalIntegrationAdapter({
         accessToken: inputs.postmanAccessToken,
         backend: inputs.integrationBackend,
+        orgMode: inputs.orgMode,
         teamId: resolved.teamId,
         secretMasker: masker
       })

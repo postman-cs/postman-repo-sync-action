@@ -43,6 +43,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     generateCiWorkflow: true,
     monitorType: 'cloud',
     ciWorkflowPath: '.github/workflows/ci.yml',
+    orgMode: false,
     ...overrides
   };
 }

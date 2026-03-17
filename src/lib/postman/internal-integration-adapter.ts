@@ -10,6 +10,7 @@ export interface InternalIntegrationAdapterOptions {
   accessToken: string;
   backend: string;
   fetchImpl?: typeof fetch;
+  orgMode?: boolean;
   secretMasker?: SecretMasker;
   teamId: string;
   workerBaseUrl?: string;
@@ -32,18 +33,32 @@ export interface InternalIntegrationAdapter {
 class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly accessToken: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly orgMode: boolean;
   private readonly teamId: string;
   private readonly workerBaseUrl: string;
 
   constructor(options: InternalIntegrationAdapterOptions) {
     this.accessToken = String(options.accessToken || '').trim();
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.orgMode = options.orgMode ?? false;
     this.teamId = String(options.teamId || '').trim();
     this.workerBaseUrl = String(
       options.workerBaseUrl ||
         'https://catalog-admin.postman-account2009.workers.dev'
     ).replace(/\/+$/, '');
     void (options.secretMasker ?? createSecretMasker([this.accessToken]));
+  }
+
+  /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
+  private bifrostHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-access-token': this.accessToken
+    };
+    if (this.teamId && this.orgMode) {
+      headers['x-entity-team-id'] = this.teamId;
+    }
+    return headers;
   }
 
   async associateSystemEnvironments(
@@ -101,13 +116,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       }
     };
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-access-token': this.accessToken
-    };
-    if (this.teamId) {
-      headers['x-entity-team-id'] = this.teamId;
-    }
+    const headers = this.bifrostHeaders();
 
     const response = await this.fetchImpl(url, {
       method: 'POST',
@@ -127,13 +136,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
 
   async createApiKey(name: string): Promise<string> {
     const url = 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy';
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-access-token': this.accessToken
-    };
-    if (this.teamId) {
-      headers['x-entity-team-id'] = this.teamId;
-    }
+    const headers = this.bifrostHeaders();
 
     const payload = {
       service: 'identity',

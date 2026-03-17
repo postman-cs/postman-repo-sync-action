@@ -42,6 +42,7 @@ describe('postman-repo-sync-action contract', () => {
       'github-token',
       'gh-fallback-token',
       'github-auth-mode',
+      'org-mode',
       'ci-workflow-base64'
     ]);
 
