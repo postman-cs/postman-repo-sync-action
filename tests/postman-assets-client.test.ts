@@ -53,7 +53,8 @@ describe('PostmanAssetsClient', () => {
             uid: 'mon-123'
           }
         })
-      );
+      )
+      .mockResolvedValueOnce(jsonResponse({ monitor: { uid: 'mon-123' } }));
     const client = new PostmanAssetsClient({
       apiKey: 'pmak-test',
       fetchImpl
@@ -67,6 +68,6 @@ describe('PostmanAssetsClient', () => {
     });
     await expect(
       client.createMonitor('ws-123', 'Monitor', 'col-2', 'env-1')
-    ).resolves.toBe('mon-123');
+    ).resolves.toEqual({ uid: 'mon-123', type: 'cli' });
   });
 });

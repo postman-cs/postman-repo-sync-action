@@ -67,6 +67,7 @@ interface RepoSyncOutputs {
   'environment-uids-json': string;
   'mock-url': string;
   'monitor-id': string;
+  'monitor-type': string;
   'repo-sync-summary-json': string;
   'commit-sha': string;
 }
@@ -200,6 +201,7 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'environment-uids-json': JSON.stringify(inputs.environmentUids),
     'mock-url': '',
     'monitor-id': '',
+    'monitor-type': '',
     'repo-sync-summary-json': '{}',
     'commit-sha': ''
   };
@@ -490,6 +492,12 @@ async function persistRepoVariables(
       outputs['monitor-id']
     );
   }
+  if (outputs['monitor-type']) {
+    await dependencies.github.setRepositoryVariable(
+      'MONITOR_TYPE',
+      outputs['monitor-type']
+    );
+  }
 }
 
 function createRepoSummary(
@@ -503,6 +511,7 @@ function createRepoSummary(
     environmentSyncStatus: outputs['environment-sync-status'],
     mockUrl: outputs['mock-url'],
     monitorId: outputs['monitor-id'],
+    monitorType: outputs['monitor-type'],
     pushed,
     resolvedCurrentRef: outputs['resolved-current-ref'],
     workspaceLinkStatus: outputs['workspace-link-status']
@@ -620,20 +629,24 @@ export async function runRepoSync(
   const monitorValid = inputs.monitorId && await dependencies.postman.monitorExists(inputs.monitorId);
   if (monitorValid) {
     outputs['monitor-id'] = inputs.monitorId;
-    dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
+    outputs['monitor-type'] = inputs.monitorCron ? 'cloud' : 'cli';
+    dependencies.core.info(`Reusing existing ${outputs['monitor-type']} monitor: ${inputs.monitorId}`);
   } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     if (inputs.monitorId) {
       dependencies.core.warning(`Monitor ${inputs.monitorId} no longer exists, creating a new one`);
     }
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
-      outputs['monitor-id'] = await dependencies.postman.createMonitor(
+      const monitor = await dependencies.postman.createMonitor(
         inputs.workspaceId,
         `${inputs.projectName} - Smoke Monitor`,
         inputs.smokeCollectionId,
         monitorEnvUid,
         inputs.monitorCron || undefined
       );
+      outputs['monitor-id'] = monitor.uid;
+      outputs['monitor-type'] = monitor.type;
+      dependencies.core.info(`Created ${monitor.type} monitor: ${monitor.uid}`);
     }
   }
 

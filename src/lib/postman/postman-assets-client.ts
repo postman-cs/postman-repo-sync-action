@@ -109,7 +109,7 @@ export class PostmanAssetsClient {
     collectionUid: string,
     environmentUid: string,
     cron?: string
-  ): Promise<string> {
+  ): Promise<{ uid: string; type: 'cli' | 'cloud' }> {
     const monitor: Record<string, unknown> = {
       name,
       collection: collectionUid,
@@ -131,7 +131,7 @@ export class PostmanAssetsClient {
         body: JSON.stringify({ monitor: { active: false } })
       }).catch(() => {});
     }
-    return uid;
+    return { uid, type: cron ? 'cloud' as const : 'cli' as const };
   }
 
   async createMock(

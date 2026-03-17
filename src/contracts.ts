@@ -214,6 +214,9 @@ export const postmanRepoSyncActionContract: {
     'monitor-id': {
       description: 'Created or reused smoke monitor ID.'
     },
+    'monitor-type': {
+      description: 'Monitor type — "cli" (triggered from CI/CD) or "cloud" (runs on a Postman schedule).'
+    },
     'repo-sync-summary-json': {
       description: 'JSON summary of repo materialization and workspace sync outputs.'
     },
@@ -226,7 +229,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Bifrost.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Persist repo variables and export existing Postman collections and environments into the repository under `postman/` and `.postman/`.',
+      'Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
       'Link the Postman workspace to the GitHub repository through Bifrost.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

@@ -22959,6 +22959,9 @@ var CI_WORKFLOW_TEMPLATE = [
   "        run: postman collection run \\${{ vars.POSTMAN_SMOKE_COLLECTION_UID }} -e \\${{ vars.POSTMAN_ENVIRONMENT_UID }} --env-var baseUrl=\\${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }} --report-events --env-var \"\\${{ vars.CI_ENVIRONMENT || 'Production' }}\"",
   "      - name: Run Contract Tests",
   "        run: postman collection run \\${{ vars.POSTMAN_CONTRACT_COLLECTION_UID }} -e \\${{ vars.POSTMAN_ENVIRONMENT_UID }} --env-var baseUrl=\\${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }} --report-events --env-var \"\\${{ vars.CI_ENVIRONMENT || 'Production' }}\"",
+  "      - name: Run Smoke Monitor",
+  "        if: \\${{ vars.SMOKE_MONITOR_UID != '' }}",
+  "        run: postman monitor run \\${{ vars.SMOKE_MONITOR_UID }}",
   "  docs:",
   "    runs-on: ubuntu-latest",
   "    if: \\${{ github.event_name == 'push' && vars.POSTMAN_SPEC_UID != '' && vars.POSTMAN_WORKSPACE_ID != '' }}",
@@ -23558,7 +23561,7 @@ var PostmanAssetsClient = class {
       }).catch(() => {
       });
     }
-    return uid;
+    return { uid, type: cron ? "cloud" : "cli" };
   }
   async createMock(workspaceId, name, collectionUid, environmentUid) {
     const response = await this.request(`/mocks?workspace=${workspaceId}`, {
@@ -23674,6 +23677,7 @@ function createOutputs(inputs) {
     "environment-uids-json": JSON.stringify(inputs.environmentUids),
     "mock-url": "",
     "monitor-id": "",
+    "monitor-type": "",
     "repo-sync-summary-json": "{}",
     "commit-sha": ""
   };
@@ -23911,6 +23915,12 @@ async function persistRepoVariables(inputs, outputs, dependencies, envUids) {
       outputs["monitor-id"]
     );
   }
+  if (outputs["monitor-type"]) {
+    await dependencies.github.setRepositoryVariable(
+      "MONITOR_TYPE",
+      outputs["monitor-type"]
+    );
+  }
 }
 function createRepoSummary(outputs, envUids, pushed) {
   return JSON.stringify({
@@ -23919,6 +23929,7 @@ function createRepoSummary(outputs, envUids, pushed) {
     environmentSyncStatus: outputs["environment-sync-status"],
     mockUrl: outputs["mock-url"],
     monitorId: outputs["monitor-id"],
+    monitorType: outputs["monitor-type"],
     pushed,
     resolvedCurrentRef: outputs["resolved-current-ref"],
     workspaceLinkStatus: outputs["workspace-link-status"]
@@ -24009,20 +24020,24 @@ async function runRepoSync(inputs, dependencies) {
   const monitorValid = inputs.monitorId && await dependencies.postman.monitorExists(inputs.monitorId);
   if (monitorValid) {
     outputs["monitor-id"] = inputs.monitorId;
-    dependencies.core.info(`Reusing existing monitor: ${inputs.monitorId}`);
+    outputs["monitor-type"] = inputs.monitorCron ? "cloud" : "cli";
+    dependencies.core.info(`Reusing existing ${outputs["monitor-type"]} monitor: ${inputs.monitorId}`);
   } else if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     if (inputs.monitorId) {
       dependencies.core.warning(`Monitor ${inputs.monitorId} no longer exists, creating a new one`);
     }
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
     if (monitorEnvUid) {
-      outputs["monitor-id"] = await dependencies.postman.createMonitor(
+      const monitor = await dependencies.postman.createMonitor(
         inputs.workspaceId,
         `${inputs.projectName} - Smoke Monitor`,
         inputs.smokeCollectionId,
         monitorEnvUid,
         inputs.monitorCron || void 0
       );
+      outputs["monitor-id"] = monitor.uid;
+      outputs["monitor-type"] = monitor.type;
+      dependencies.core.info(`Created ${monitor.type} monitor: ${monitor.uid}`);
     }
   }
   if (inputs.workspaceLinkEnabled && inputs.workspaceId && inputs.repoUrl && dependencies.internalIntegration) {

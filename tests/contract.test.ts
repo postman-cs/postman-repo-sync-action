@@ -55,6 +55,7 @@ describe('postman-repo-sync-action contract', () => {
       'environment-uids-json',
       'mock-url',
       'monitor-id',
+      'monitor-type',
       'repo-sync-summary-json',
       'commit-sha'
     ]);
