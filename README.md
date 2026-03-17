@@ -74,6 +74,13 @@ When `repo-write-mode=commit-and-push`, the action pushes back to the current ch
 
 If the action writes `.github/workflows/ci.yml`, provide a credential source that can update workflow files. The action prefers `gh-fallback-token` first for workflow-file pushes, then falls back to `github-token`.
 
+### Monitors: CLI vs cloud
+
+- **No `monitor-cron`** (default): A CLI monitor is created (no Postman cloud schedule). The generated CI workflow includes a **Run Smoke Monitor** step that runs `postman monitor run` on every pipeline run (push/PR), so tests run in your CI without consuming scheduled monitor runs.
+- **`monitor-cron` set**: A cloud monitor is created and runs on that schedule from Postman's infrastructure.
+
+The action outputs `monitor-type` (`cli` or `cloud`) so callers can branch if needed.
+
 ### Collection v3 export
 
 Collections are exported in the Postman Collection v3 format, producing a multi-file YAML directory structure under `postman/collections/`. Each collection (Baseline, Smoke, Contract) gets its own directory containing `collection.yaml` and nested folder/request YAML files. The `.postman/resources.yaml` manifest maps each v3 collection directory to its Postman UID.
@@ -91,7 +98,7 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `contract-collection-id` | | Contract collection exported into the repo. |
 | `monitor-id` | | Existing smoke monitor ID. When set the action skips monitor creation. |
 | `mock-url` | | Existing mock server URL. When set the action skips mock creation. |
-| `monitor-cron` | `""` | Cron expression for monitor scheduling (e.g. `0 */6 * * *`). When empty the monitor is created without a schedule. |
+| `monitor-cron` | `""` | Cron expression for monitor scheduling (e.g. `0 */6 * * *`). When empty a **CLI monitor** is created (runs only when triggered by the generated CI step). When set, a **cloud monitor** runs on that schedule. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |
@@ -172,6 +179,7 @@ The `postman-access-token` is a Postman session token (`x-access-token`) require
 | `environment-uids-json` | JSON map of environment slug to Postman environment uid. |
 | `mock-url` | Created mock server URL. |
 | `monitor-id` | Created smoke monitor UID. |
+| `monitor-type` | `cli` (triggered from CI) or `cloud` (runs on a Postman schedule). |
 | `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
 | `commit-sha` | Commit SHA produced by repo-write-mode when a sync commit is created. |
 
