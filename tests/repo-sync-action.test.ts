@@ -441,3 +441,229 @@ describe('repo sync action', () => {
     );
   });
 });
+
+describe('monitor resolution paths', () => {
+  function makePostman(overrides: Record<string, any> = {}) {
+    return {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-new'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      ...overrides
+    };
+  }
+
+  function makeGithub(vars: Record<string, string> = {}) {
+    return {
+      getRepositoryVariable: vi.fn().mockImplementation((name: string) =>
+        Promise.resolve(vars[name] ?? '')
+      ),
+      setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  function makeDeps(postman: any, github: any) {
+    return {
+      core: createCoreStub().core,
+      postman,
+      github,
+      internalIntegration: {
+        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      },
+      repoMutation: {
+        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+      } as any
+    };
+  }
+
+  it('reuses explicit monitor-id when it exists in Postman', async () => {
+    const postman = makePostman({ monitorExists: vi.fn().mockResolvedValue(true) });
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'explicit-mon' }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.monitorExists).toHaveBeenCalledWith('explicit-mon');
+  });
+
+  it('falls through explicit monitor-id when it is stale (deleted)', async () => {
+    const postman = makePostman({
+      monitorExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'stale-mon' }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).toHaveBeenCalled();
+  });
+
+  it('discovers existing monitor by smoke collection ID', async () => {
+    const postman = makePostman({
+      findMonitorByCollection: vi.fn().mockResolvedValue({ uid: 'discovered-mon', name: 'Smoke Monitor' })
+    });
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.findMonitorByCollection).toHaveBeenCalledWith('col-smoke');
+  });
+
+  it('reuses cached repo variable monitor when it is still valid', async () => {
+    const postman = makePostman({
+      monitorExists: vi.fn().mockResolvedValue(true),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const github = makeGithub({ SMOKE_MONITOR_UID: 'cached-mon' });
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.monitorExists).toHaveBeenCalledWith('cached-mon');
+  });
+
+  it('falls through stale repo variable monitor and creates a new one', async () => {
+    const postman = makePostman({
+      monitorExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const github = makeGithub({ SMOKE_MONITOR_UID: 'stale-cached-mon' });
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).toHaveBeenCalled();
+  });
+
+  it('creates a new monitor when no existing asset is found', async () => {
+    const postman = makePostman();
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMonitor).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments - Smoke Monitor',
+      'col-smoke',
+      'env-prod',
+      undefined
+    );
+  });
+});
+
+describe('mock resolution paths', () => {
+  function makePostman(overrides: Record<string, any> = {}) {
+    return {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-new', url: 'https://mock-new.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Baseline] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      ...overrides
+    };
+  }
+
+  function makeGithub(vars: Record<string, string> = {}) {
+    return {
+      getRepositoryVariable: vi.fn().mockImplementation((name: string) =>
+        Promise.resolve(vars[name] ?? '')
+      ),
+      setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  function makeDeps(postman: any, github: any) {
+    return {
+      core: createCoreStub().core,
+      postman,
+      github,
+      internalIntegration: {
+        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      },
+      repoMutation: {
+        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+      } as any
+    };
+  }
+
+  it('reuses explicit mock-url from input', async () => {
+    const postman = makePostman();
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, mockUrl: 'https://explicit-mock.pstmn.io' }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMock).not.toHaveBeenCalled();
+  });
+
+  it('discovers existing mock by baseline collection ID', async () => {
+    const postman = makePostman({
+      findMockByCollection: vi.fn().mockResolvedValue({ uid: 'discovered-mock', mockUrl: 'https://discovered-mock.pstmn.io' })
+    });
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.findMockByCollection).toHaveBeenCalledWith('col-baseline');
+  });
+
+  it('reuses cached repo variable mock URL', async () => {
+    const postman = makePostman({ findMockByCollection: vi.fn().mockResolvedValue(null) });
+    const github = makeGithub({ MOCK_URL: 'https://cached-mock.pstmn.io' });
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMock).not.toHaveBeenCalled();
+  });
+
+  it('creates a new mock when no existing asset is found', async () => {
+    const postman = makePostman({ findMockByCollection: vi.fn().mockResolvedValue(null) });
+    const github = makeGithub();
+    const result = await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+      makeDeps(postman, github)
+    );
+    
+    expect(postman.createMock).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments Mock',
+      'col-baseline',
+      'env-prod'
+    );
+  });
+});

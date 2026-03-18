@@ -616,59 +616,111 @@ export async function runRepoSync(
   ) {
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
-      let existingMockUrl = '';
-      if (dependencies.github) {
-        existingMockUrl = await dependencies.github.getRepositoryVariable('MOCK_URL').catch(() => '') || '';
+      let resolvedMockUrl = '';
+
+      if (inputs.mockUrl) {
+        resolvedMockUrl = inputs.mockUrl;
+        dependencies.core.info(`Reusing mock from explicit input: ${resolvedMockUrl}`);
       }
-      
-      if (existingMockUrl) {
-        outputs['mock-url'] = existingMockUrl;
-        dependencies.core.info(`Skipping mock creation, existing mock found: ${existingMockUrl}`);
-      } else {
+
+      if (!resolvedMockUrl && inputs.baselineCollectionId) {
+        const discovered = await dependencies.postman.findMockByCollection(inputs.baselineCollectionId);
+        if (discovered) {
+          resolvedMockUrl = discovered.mockUrl;
+          dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
+        }
+      }
+
+      if (!resolvedMockUrl && dependencies.github) {
+        const cached = await dependencies.github.getRepositoryVariable('MOCK_URL').catch(() => '') || '';
+        if (cached) {
+          resolvedMockUrl = cached;
+          dependencies.core.info(`Reusing mock from repo variable: ${resolvedMockUrl}`);
+        }
+      }
+
+      if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
           `${inputs.projectName} Mock`,
           inputs.baselineCollectionId,
           mockEnvUid
         );
-        outputs['mock-url'] = mock.url;
+        resolvedMockUrl = mock.url;
+        dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
+      }
+
+      outputs['mock-url'] = resolvedMockUrl;
+      if (dependencies.github && resolvedMockUrl) {
+        await dependencies.github.setRepositoryVariable('MOCK_URL', resolvedMockUrl).catch(() => undefined);
       }
     }
   }
 
   if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
-    let cronSchedule = '0 0 * * *';
     let disableMonitor = false;
-    
-    if (dependencies.github) {
+
+    let effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : '';
+    if (!effectiveCron && dependencies.github) {
       const storedCron = await dependencies.github.getRepositoryVariable('MONITOR_CRON_SCHEDULE').catch(() => '');
       if (storedCron) {
         if (storedCron.toLowerCase() === 'disabled' || storedCron.toLowerCase() === 'off') {
           disableMonitor = true;
         } else {
-          cronSchedule = storedCron;
+          effectiveCron = storedCron;
         }
       }
     }
 
     if (monitorEnvUid && !disableMonitor && inputs.monitorType !== 'cli') {
-      let existingMonitorId = '';
-      if (dependencies.github) {
-        existingMonitorId = await dependencies.github.getRepositoryVariable('SMOKE_MONITOR_UID').catch(() => '') || '';
+      let resolvedMonitorId = '';
+
+      if (inputs.monitorId) {
+        const valid = await dependencies.postman.monitorExists(inputs.monitorId);
+        if (valid) {
+          resolvedMonitorId = inputs.monitorId;
+          dependencies.core.info(`Reusing monitor from explicit input: ${resolvedMonitorId}`);
+        } else {
+          dependencies.core.warning(`Explicit monitor-id ${inputs.monitorId} not found in Postman, falling through to discovery.`);
+        }
       }
 
-      if (existingMonitorId) {
-        outputs['monitor-id'] = existingMonitorId;
-        dependencies.core.info(`Skipping monitor creation, existing monitor found: ${existingMonitorId}`);
-      } else {
-        outputs['monitor-id'] = await dependencies.postman.createMonitor(
+      if (!resolvedMonitorId && inputs.smokeCollectionId) {
+        const discovered = await dependencies.postman.findMonitorByCollection(inputs.smokeCollectionId);
+        if (discovered) {
+          resolvedMonitorId = discovered.uid;
+          dependencies.core.info(`Discovered existing monitor for collection ${inputs.smokeCollectionId}: ${resolvedMonitorId}`);
+        }
+      }
+
+      if (!resolvedMonitorId && dependencies.github) {
+        const cached = await dependencies.github.getRepositoryVariable('SMOKE_MONITOR_UID').catch(() => '') || '';
+        if (cached) {
+          const valid = await dependencies.postman.monitorExists(cached);
+          if (valid) {
+            resolvedMonitorId = cached;
+            dependencies.core.info(`Reusing monitor from repo variable: ${resolvedMonitorId}`);
+          } else {
+            dependencies.core.warning(`Cached monitor ${cached} no longer exists in Postman, creating a new one.`);
+          }
+        }
+      }
+
+      if (!resolvedMonitorId) {
+        resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
           `${inputs.projectName} - Smoke Monitor`,
           inputs.smokeCollectionId,
           monitorEnvUid,
-          cronSchedule
+          effectiveCron || undefined
         );
+        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured)'}`);
+      }
+
+      outputs['monitor-id'] = resolvedMonitorId;
+      if (dependencies.github && resolvedMonitorId) {
+        await dependencies.github.setRepositoryVariable('SMOKE_MONITOR_UID', resolvedMonitorId).catch(() => undefined);
       }
     } else if (disableMonitor) {
       dependencies.core.info('Monitor creation skipped because MONITOR_CRON_SCHEDULE is disabled.');
