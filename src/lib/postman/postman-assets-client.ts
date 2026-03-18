@@ -108,8 +108,9 @@ export class PostmanAssetsClient {
     name: string,
     collectionUid: string,
     environmentUid: string,
-    cronSchedule: string = '0 0 * * *'
+    cronSchedule?: string
   ): Promise<string> {
+    const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
     const response = await this.request(`/monitors?workspace=${workspaceId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -118,7 +119,7 @@ export class PostmanAssetsClient {
           collection: collectionUid,
           environment: environmentUid,
           schedule: {
-            cron: cronSchedule,
+            cron: effectiveCron,
             timezone: 'UTC'
           }
         }
@@ -129,6 +130,18 @@ export class PostmanAssetsClient {
     if (!uid) {
       throw new Error('Monitor create did not return a UID');
     }
+
+    if (!cronSchedule || !cronSchedule.trim()) {
+      try {
+        await this.request(`/monitors/${uid}`, {
+          method: 'PUT',
+          body: JSON.stringify({ monitor: { active: false } })
+        });
+      } catch {
+        // best-effort disable; monitor still created
+      }
+    }
+
     return uid;
   }
 
@@ -189,4 +202,67 @@ export class PostmanAssetsClient {
     }
     return undefined;
   }
+
+  async listMonitors(): Promise<Array<{uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string}>> {
+    const response = await this.request('/monitors');
+    const monitors = response?.monitors ?? [];
+    return Array.isArray(monitors)
+      ? monitors
+          .filter((m: any) => m?.uid)
+          .map((m: any) => ({
+            uid: String(m.uid),
+            name: String(m.name ?? ''),
+            active: m.active !== false,
+            collectionUid: String(m.collectionUid ?? ''),
+            environmentUid: String(m.environmentUid ?? '')
+          }))
+      : [];
+  }
+
+  async listMocks(): Promise<Array<{uid: string; name: string; collection: string; mockUrl: string; environment: string}>> {
+    const response = await this.request('/mocks');
+    const mocks = response?.mocks ?? [];
+    return Array.isArray(mocks)
+      ? mocks
+          .filter((m: any) => m?.uid)
+          .map((m: any) => ({
+            uid: String(m.uid),
+            name: String(m.name ?? ''),
+            collection: String(m.collection ?? ''),
+            mockUrl: String(m.mockUrl ?? ''),
+            environment: String(m.environment ?? '')
+          }))
+      : [];
+  }
+
+  async monitorExists(uid: string): Promise<boolean> {
+    try {
+      await this.request(`/monitors/${uid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async mockExists(uid: string): Promise<boolean> {
+    try {
+      await this.request(`/mocks/${uid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async findMonitorByCollection(collectionUid: string): Promise<{uid: string; name: string} | null> {
+    const monitors = await this.listMonitors();
+    const match = monitors.find(m => m.collectionUid === collectionUid);
+    return match ? {uid: match.uid, name: match.name} : null;
+  }
+
+  async findMockByCollection(collectionUid: string): Promise<{uid: string; mockUrl: string} | null> {
+    const mocks = await this.listMocks();
+    const match = mocks.find(m => m.collection === collectionUid);
+    return match ? {uid: match.uid, mockUrl: match.mockUrl} : null;
+  }
+
 }
