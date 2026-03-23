@@ -44,7 +44,7 @@ inputs:
     required: false
     default: '["prod"]'
   repo-url:
-    description: Explicit repository URL. Defaults to the GitHub repository URL from the workflow context.
+    description: 'Explicit repository URL (GitHub or GitLab). Defaults to https://github.com/$GITHUB_REPOSITORY on GitHub Actions, or $CI_PROJECT_URL on GitLab CI, when omitted.'
     required: false
   integration-backend:
     description: Integration backend for workspace linking and environment sync.

@@ -10,7 +10,7 @@ Retained from finalize:
 - Associate Postman environments to system environments through Bifrost.
 - Create mock servers and smoke monitors from generated collections.
 - Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.
-- Link the Postman workspace to the GitHub repository through Bifrost.
+- Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.
 - Commit synced artifacts and push them back to the current checked out ref.
 
 Removed from finalize:
@@ -20,6 +20,11 @@ Removed from finalize:
 - Push directly to `main`.
 
 For existing repositories, use `generate-ci-workflow: false` to avoid touching workflow files, or set `ci-workflow-path` to materialize the generated pipeline under a non-conflicting filename such as `.github/workflows/postman-sync.yml`.
+
+
+### Git provider support
+
+Workspace-to-repository linking via Bifrost supports both **GitHub** and **GitLab** (cloud and self-hosted) repository URLs. When `repo-url` is omitted, the action auto-detects the repository URL from `$GITHUB_REPOSITORY` (GitHub Actions) or `$CI_PROJECT_URL` (GitLab CI). You can also pass an explicit `repo-url` for any git provider.
 
 ## Usage
 
@@ -91,7 +96,7 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `smoke-collection-id` | | Smoke collection used for monitor creation. |
 | `contract-collection-id` | | Contract collection exported into the repo. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
-| `repo-url` | | Explicit repository URL. Defaults to `https://github.com/${GITHUB_REPOSITORY}` at runtime when omitted. |
+| `repo-url` | | Explicit repository URL (GitHub or GitLab). Defaults to `https://github.com/$GITHUB_REPOSITORY` on GitHub Actions, or `$CI_PROJECT_URL` on GitLab CI. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |
 | `workspace-link-enabled` | `true` | Keeps workspace linking in scope. |
 | `environment-sync-enabled` | `true` | Keeps environment association in scope by default for the open-alpha demonstration path. |

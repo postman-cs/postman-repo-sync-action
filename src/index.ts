@@ -176,9 +176,13 @@ function normalizeGithubAuthMode(
 
 function resolveRepoUrl(explicitRepoUrl: string): string {
   if (explicitRepoUrl) return explicitRepoUrl;
+  // GitHub Actions
   const repository = process.env.GITHUB_REPOSITORY || '';
-  if (!repository) return '';
-  return `https://github.com/${repository}`;
+  if (repository) return `https://github.com/${repository}`;
+  // GitLab CI provides the full project URL directly
+  const gitlabProjectUrl = process.env.CI_PROJECT_URL || '';
+  if (gitlabProjectUrl) return gitlabProjectUrl;
+  return '';
 }
 
 function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentValues {

@@ -125,6 +125,19 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     });
 
     if (!response.ok) {
+      // Handle Bifrost duplicate-link errors as idempotent success when the
+      // same repo is already connected. Both the legacy ('invalidParamError' +
+      // 'already exists') and current ('projectAlreadyConnected') error shapes
+      // are treated as expected re-link attempts.
+      if (response.status === 400) {
+        const body = await response.text();
+        const isDuplicate =
+          (body.includes('invalidParamError') && body.includes('already exists')) ||
+          body.includes('projectAlreadyConnected');
+        if (isDuplicate) {
+          return;
+        }
+      }
       throw await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: headers,

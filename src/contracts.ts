@@ -237,7 +237,7 @@ export const postmanRepoSyncActionContract: {
       'Associate Postman environments to system environments through Bifrost.',
       'Create mock servers and smoke monitors from generated collections.',
       'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
-      'Link the Postman workspace to the GitHub repository through Bifrost.',
+      'Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],
     removedFromFinalize: [

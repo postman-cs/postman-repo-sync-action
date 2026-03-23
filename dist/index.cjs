@@ -24982,6 +24982,13 @@ var BifrostInternalIntegrationAdapter = class {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
+      if (response.status === 400) {
+        const body = await response.text();
+        const isDuplicate = body.includes("invalidParamError") && body.includes("already exists") || body.includes("projectAlreadyConnected");
+        if (isDuplicate) {
+          return;
+        }
+      }
       throw await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: headers,
@@ -25269,8 +25276,10 @@ function normalizeGithubAuthMode(value) {
 function resolveRepoUrl(explicitRepoUrl) {
   if (explicitRepoUrl) return explicitRepoUrl;
   const repository = process.env.GITHUB_REPOSITORY || "";
-  if (!repository) return "";
-  return `https://github.com/${repository}`;
+  if (repository) return `https://github.com/${repository}`;
+  const gitlabProjectUrl = process.env.CI_PROJECT_URL || "";
+  if (gitlabProjectUrl) return gitlabProjectUrl;
+  return "";
 }
 function buildEnvironmentValues(envName, baseUrl) {
   return [
