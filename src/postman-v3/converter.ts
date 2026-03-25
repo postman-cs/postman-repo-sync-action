@@ -234,12 +234,21 @@ function extractDescription(value: PostmanDescription): string | undefined {
   return undefined;
 }
 
-function sanitizePathSegment(value: string, fallback: string): string {
-  const normalized = value
+/** Keep each folder/request segment short so nested paths stay under OS limits (ENAMETOOLONG). */
+export const MAX_PATH_SEGMENT_CHARS = 120;
+
+export function sanitizePathSegment(value: string, fallback: string): string {
+  let normalized = value
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return normalized || fallback;
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized.length > MAX_PATH_SEGMENT_CHARS) {
+    normalized = `${normalized.slice(0, MAX_PATH_SEGMENT_CHARS - 1)}…`;
+  }
+  return normalized;
 }
 
 function buildUniqueRef(
