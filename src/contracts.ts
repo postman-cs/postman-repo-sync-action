@@ -74,6 +74,25 @@ export const postmanRepoSyncActionContract: {
       description: 'Service project name used for environment, mock, and monitor naming.',
       required: true
     },
+    'collection-sync-mode': {
+      description: 'Collection lifecycle policy (reuse, refresh, or version).',
+      required: false,
+      default: 'reuse'
+    },
+    'spec-sync-mode': {
+      description: 'Spec lifecycle policy (update or version).',
+      required: false,
+      default: 'update'
+    },
+    'release-label': {
+      description: 'Optional release label used for versioned export naming. When omitted for versioned sync, the action derives one from GitHub ref metadata.',
+      required: false
+    },
+    'set-as-current': {
+      description: 'Whether repo-sync should overwrite current/default repo variable pointers.',
+      required: false,
+      default: 'true'
+    },
     'workspace-id': {
       description: 'Postman workspace ID used for workspace-link and export metadata.',
       required: false
@@ -236,7 +255,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Bifrost.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), with optional release-aware naming for versioned sync. Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
       'Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

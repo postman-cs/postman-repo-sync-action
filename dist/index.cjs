@@ -25273,6 +25273,40 @@ function normalizeGithubAuthMode(value) {
   }
   return "github_token_first";
 }
+function normalizeCollectionSyncMode(value) {
+  if (value === "refresh" || value === "version") {
+    return value;
+  }
+  return "reuse";
+}
+function normalizeSpecSyncMode(value) {
+  if (value === "version") {
+    return value;
+  }
+  return "update";
+}
+function normalizeReleaseLabel(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return void 0;
+  }
+  return trimmed.replace(/^refs\/heads\//, "").replace(/^refs\/tags\//, "").replace(/^refs\/pull\//, "pull-").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || void 0;
+}
+function deriveReleaseLabel(inputs) {
+  if (inputs.releaseLabel) {
+    return normalizeReleaseLabel(inputs.releaseLabel);
+  }
+  return normalizeReleaseLabel(process.env.GITHUB_REF_NAME) ?? normalizeReleaseLabel(process.env.GITHUB_HEAD_REF) ?? normalizeReleaseLabel(process.env.GITHUB_REF);
+}
+function createAssetProjectName(inputs, releaseLabel) {
+  if (!releaseLabel || inputs.collectionSyncMode !== "version") {
+    return inputs.projectName;
+  }
+  return `${inputs.projectName} ${releaseLabel}`;
+}
+function shouldPersistCurrentPointers(inputs) {
+  return inputs.collectionSyncMode === "refresh" ? true : inputs.setAsCurrent;
+}
 function resolveRepoUrl(explicitRepoUrl) {
   if (explicitRepoUrl) return explicitRepoUrl;
   const repository = process.env.GITHUB_REPOSITORY || "";
@@ -25330,6 +25364,14 @@ function readActionInputs(actionCore) {
     baselineCollectionId: readInput(actionCore, "baseline-collection-id"),
     smokeCollectionId: readInput(actionCore, "smoke-collection-id"),
     contractCollectionId: readInput(actionCore, "contract-collection-id"),
+    collectionSyncMode: normalizeCollectionSyncMode(
+      readInput(actionCore, "collection-sync-mode") || "reuse"
+    ),
+    specSyncMode: normalizeSpecSyncMode(
+      readInput(actionCore, "spec-sync-mode") || "update"
+    ),
+    releaseLabel: readInput(actionCore, "release-label"),
+    setAsCurrent: parseBooleanInput(readInput(actionCore, "set-as-current"), true),
     environments: environments.length > 0 ? environments : ["prod"],
     repoUrl: resolveRepoUrl(readInput(actionCore, "repo-url")),
     integrationBackend: readInput(actionCore, "integration-backend") || "bifrost",
@@ -25452,7 +25494,10 @@ function buildResourcesManifest(workspaceId, collectionMap) {
     sortKeys: false
   });
 }
-async function exportArtifacts(inputs, dependencies, envUids) {
+function getCollectionDirectoryName(prefix, assetProjectName) {
+  return `${prefix} ${assetProjectName}`;
+}
+async function exportArtifacts(inputs, dependencies, envUids, releaseLabel) {
   if (!inputs.workspaceId) {
     return;
   }
@@ -25467,26 +25512,30 @@ async function exportArtifacts(inputs, dependencies, envUids) {
     ensureDir(".github/workflows");
   }
   const manifestCollections = {};
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
   if (inputs.baselineCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Baseline] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Baseline] ${inputs.projectName}`] = inputs.baselineCollectionId;
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName("[Baseline]", assetProjectName)}`;
+    await convertAndSplitCollection(col, collectionDir);
+    manifestCollections[`../${collectionDir}`] = inputs.baselineCollectionId;
   }
   if (inputs.smokeCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.smokeCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Smoke] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Smoke] ${inputs.projectName}`] = inputs.smokeCollectionId;
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName("[Smoke]", assetProjectName)}`;
+    await convertAndSplitCollection(col, collectionDir);
+    manifestCollections[`../${collectionDir}`] = inputs.smokeCollectionId;
   }
   if (inputs.contractCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.contractCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Contract] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Contract] ${inputs.projectName}`] = inputs.contractCollectionId;
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName("[Contract]", assetProjectName)}`;
+    await convertAndSplitCollection(col, collectionDir);
+    manifestCollections[`../${collectionDir}`] = inputs.contractCollectionId;
   }
   for (const [envName, envUid] of Object.entries(envUids)) {
     writeJsonFile(
@@ -25512,6 +25561,9 @@ function renderCiWorkflow(inputs) {
 }
 async function persistRepoVariables(inputs, outputs, dependencies, envUids) {
   if (!dependencies.github) {
+    return;
+  }
+  if (!shouldPersistCurrentPointers(inputs)) {
     return;
   }
   const primaryEnvName = envUids.prod ? "prod" : inputs.environments[0] || "prod";
@@ -25604,6 +25656,14 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
 async function runRepoSync(inputs, dependencies) {
   const outputs = createOutputs(inputs);
   let pushed = false;
+  const requiresReleaseLabel = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
+  const releaseLabel = requiresReleaseLabel ? deriveReleaseLabel(inputs) : void 0;
+  if (requiresReleaseLabel && !releaseLabel) {
+    throw new Error(
+      "Versioned spec or collection sync requires a release-label or derivable GitHub ref metadata"
+    );
+  }
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
   const envUids = await upsertEnvironments(inputs, dependencies);
   outputs["environment-uids-json"] = JSON.stringify(envUids);
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -25642,7 +25702,7 @@ async function runRepoSync(inputs, dependencies) {
         }
       }
       if (!resolvedMockUrl && dependencies.github) {
-        const cached = await dependencies.github.getRepositoryVariable("MOCK_URL").catch(() => "") || "";
+        const cached = inputs.collectionSyncMode === "version" ? "" : await dependencies.github.getRepositoryVariable("MOCK_URL").catch(() => "") || "";
         if (cached) {
           resolvedMockUrl = cached;
           dependencies.core.info(`Reusing mock from repo variable: ${resolvedMockUrl}`);
@@ -25651,7 +25711,7 @@ async function runRepoSync(inputs, dependencies) {
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
-          `${inputs.projectName} Mock`,
+          `${assetProjectName} Mock`,
           inputs.baselineCollectionId,
           mockEnvUid
         );
@@ -25659,7 +25719,7 @@ async function runRepoSync(inputs, dependencies) {
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
       }
       outputs["mock-url"] = resolvedMockUrl;
-      if (dependencies.github && resolvedMockUrl) {
+      if (dependencies.github && resolvedMockUrl && shouldPersistCurrentPointers(inputs)) {
         await dependencies.github.setRepositoryVariable("MOCK_URL", resolvedMockUrl).catch(() => void 0);
       }
     }
@@ -25697,7 +25757,7 @@ async function runRepoSync(inputs, dependencies) {
         }
       }
       if (!resolvedMonitorId && dependencies.github) {
-        const cached = await dependencies.github.getRepositoryVariable("SMOKE_MONITOR_UID").catch(() => "") || "";
+        const cached = inputs.collectionSyncMode === "version" ? "" : await dependencies.github.getRepositoryVariable("SMOKE_MONITOR_UID").catch(() => "") || "";
         if (cached) {
           const valid = await dependencies.postman.monitorExists(cached);
           if (valid) {
@@ -25711,7 +25771,7 @@ async function runRepoSync(inputs, dependencies) {
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
-          `${inputs.projectName} - Smoke Monitor`,
+          `${assetProjectName} - Smoke Monitor`,
           inputs.smokeCollectionId,
           monitorEnvUid,
           effectiveCron || void 0
@@ -25719,7 +25779,7 @@ async function runRepoSync(inputs, dependencies) {
         dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? "" : " (disabled \u2014 no cron configured)"}`);
       }
       outputs["monitor-id"] = resolvedMonitorId;
-      if (dependencies.github && resolvedMonitorId) {
+      if (dependencies.github && resolvedMonitorId && shouldPersistCurrentPointers(inputs)) {
         await dependencies.github.setRepositoryVariable("SMOKE_MONITOR_UID", resolvedMonitorId).catch(() => void 0);
       }
     } else if (disableMonitor) {
@@ -25740,7 +25800,7 @@ async function runRepoSync(inputs, dependencies) {
       );
     }
   }
-  await exportArtifacts(inputs, dependencies, envUids);
+  await exportArtifacts(inputs, dependencies, envUids, releaseLabel);
   await persistRepoVariables(inputs, outputs, dependencies, envUids);
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
   outputs["commit-sha"] = commit.commitSha;

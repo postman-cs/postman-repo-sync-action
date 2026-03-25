@@ -18,6 +18,10 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    collectionSyncMode: 'reuse',
+    specSyncMode: 'update',
+    releaseLabel: undefined,
+    setAsCurrent: true,
     environments: ['prod', 'stage'],
     repoUrl: 'https://github.com/postman-cs/repo-sync-demo',
     integrationBackend: 'bifrost',
@@ -288,6 +292,94 @@ describe('repo sync action', () => {
     });
   });
 
+  it('exports versioned collection directories and preserves current repo vars when requested', async () => {
+    const previousRefName = process.env.GITHUB_REF_NAME;
+    process.env.GITHUB_REF_NAME = 'release/v1.1.1';
+
+    try {
+      const postman = {
+        createEnvironment: vi
+          .fn()
+          .mockResolvedValueOnce('env-prod')
+          .mockResolvedValueOnce('env-stage'),
+        updateEnvironment: vi.fn().mockResolvedValue(undefined),
+        createMock: vi.fn().mockResolvedValue({
+          uid: 'mock-v111',
+          url: 'https://mock-v111.pstmn.io'
+        }),
+        createMonitor: vi.fn().mockResolvedValue('mon-v111'),
+        getCollection: vi
+          .fn()
+          .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments release-v1.1.1'))
+          .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments release-v1.1.1'))
+          .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments release-v1.1.1')),
+        getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+        listMonitors: vi.fn().mockResolvedValue([]),
+        listMocks: vi.fn().mockResolvedValue([]),
+        monitorExists: vi.fn().mockResolvedValue(false),
+        mockExists: vi.fn().mockResolvedValue(false),
+        findMonitorByCollection: vi.fn().mockResolvedValue(null),
+        findMockByCollection: vi.fn().mockResolvedValue(null)
+      };
+      const github = {
+        getRepositoryVariable: vi.fn().mockResolvedValue(''),
+        setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+      };
+
+      await runRepoSync(
+        createInputs({
+          collectionSyncMode: 'version',
+          specSyncMode: 'version',
+          setAsCurrent: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          github,
+          internalIntegration: {
+            associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+            connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          },
+          repoMutation: {
+            commitAndPush: vi.fn().mockResolvedValue({
+              commitSha: '',
+              pushed: false,
+              resolvedCurrentRef: 'feature/repo-sync'
+            })
+          } as any
+        }
+      );
+
+      expect(
+        existsSync('postman/collections/[Baseline] core-payments release-v1.1.1/collection.yaml')
+      ).toBe(true);
+
+      const resourcesYaml = loadYaml(
+        readFileSync('.postman/resources.yaml', 'utf8')
+      ) as Record<string, any>;
+      expect(resourcesYaml.cloudResources.collections).toEqual({
+        '../postman/collections/[Baseline] core-payments release-v1.1.1': 'col-baseline',
+        '../postman/collections/[Smoke] core-payments release-v1.1.1': 'col-smoke',
+        '../postman/collections/[Contract] core-payments release-v1.1.1': 'col-contract'
+      });
+
+      const currentPointerWrites = github.setRepositoryVariable.mock.calls.filter(([name]) =>
+        [
+          'POSTMAN_ENV_UIDS_JSON',
+          'POSTMAN_ENVIRONMENT_UID',
+          'RUNTIME_BASE_URL',
+          'ENV_RUNTIME_URLS_JSON',
+          'MOCK_URL',
+          'SMOKE_MONITOR_UID'
+        ].includes(String(name))
+      );
+      expect(currentPointerWrites).toHaveLength(0);
+    } finally {
+      if (previousRefName === undefined) delete process.env.GITHUB_REF_NAME;
+      else process.env.GITHUB_REF_NAME = previousRefName;
+    }
+  });
+
   it('updates existing environments on reruns instead of creating duplicates', async () => {
     const postman = {
       createEnvironment: vi.fn(),
@@ -540,6 +632,20 @@ describe('monitor resolution paths', () => {
     expect(postman.monitorExists).toHaveBeenCalledWith('cached-mon');
   });
 
+  it('skips cached repo variable monitor reuse in version mode', async () => {
+    const postman = makePostman({
+      monitorExists: vi.fn().mockResolvedValue(true),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const github = makeGithub({ SMOKE_MONITOR_UID: 'cached-mon' });
+    await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, collectionSyncMode: 'version', releaseLabel: 'v1.1.1' }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.monitorExists).not.toHaveBeenCalledWith('cached-mon');
+  });
+
   it('falls through stale repo variable monitor and creates a new one', async () => {
     const postman = makePostman({
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -649,6 +755,17 @@ describe('mock resolution paths', () => {
     );
     
     expect(postman.createMock).not.toHaveBeenCalled();
+  });
+
+  it('skips cached repo variable mock reuse in version mode', async () => {
+    const postman = makePostman({ findMockByCollection: vi.fn().mockResolvedValue(null) });
+    const github = makeGithub({ MOCK_URL: 'https://cached-mock.pstmn.io' });
+    await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, collectionSyncMode: 'version', releaseLabel: 'v1.1.1' }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.createMock).toHaveBeenCalled();
   });
 
   it('creates a new mock when no existing asset is found', async () => {
