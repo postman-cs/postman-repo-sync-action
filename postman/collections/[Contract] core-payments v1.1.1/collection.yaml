@@ -1,8 +1,0 @@
-$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/
-type: collection
-name: '[Baseline] core-payments'
-description: Collection description
-id: collection-id
-items:
-  - ref: ./List Payments.request.yaml
-  - ref: ./Orders/folder.yaml
