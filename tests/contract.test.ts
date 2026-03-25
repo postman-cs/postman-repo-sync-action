@@ -19,6 +19,10 @@ describe('postman-repo-sync-action contract', () => {
       'generate-ci-workflow',
       'ci-workflow-path',
       'project-name',
+      'collection-sync-mode',
+      'spec-sync-mode',
+      'release-label',
+      'set-as-current',
       'workspace-id',
       'baseline-collection-id',
       'monitor-type',
@@ -96,6 +100,9 @@ describe('postman-repo-sync-action contract', () => {
     );
 
     expect(actionYaml.inputs['integration-backend']?.default).toBe('bifrost');
+    expect(actionYaml.inputs['collection-sync-mode']?.default).toBe('reuse');
+    expect(actionYaml.inputs['spec-sync-mode']?.default).toBe('update');
+    expect(actionYaml.inputs['set-as-current']?.default).toBe('true');
     expect(actionYaml.inputs['workspace-link-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['environment-sync-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['artifact-dir']?.default).toBe('postman');

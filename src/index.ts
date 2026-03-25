@@ -33,6 +33,10 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  collectionSyncMode: 'reuse' | 'refresh' | 'version';
+  specSyncMode: 'update' | 'version';
+  releaseLabel?: string;
+  setAsCurrent: boolean;
   environments: string[];
   repoUrl: string;
   integrationBackend: string;
@@ -174,6 +178,61 @@ function normalizeGithubAuthMode(
   return 'github_token_first';
 }
 
+function normalizeCollectionSyncMode(
+  value: string
+): 'reuse' | 'refresh' | 'version' {
+  if (value === 'refresh' || value === 'version') {
+    return value;
+  }
+  return 'reuse';
+}
+
+function normalizeSpecSyncMode(value: string): 'update' | 'version' {
+  if (value === 'version') {
+    return value;
+  }
+  return 'update';
+}
+
+function normalizeReleaseLabel(value: string | undefined): string | undefined {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return (
+    trimmed
+      .replace(/^refs\/heads\//, '')
+      .replace(/^refs\/tags\//, '')
+      .replace(/^refs\/pull\//, 'pull-')
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || undefined
+  );
+}
+
+function deriveReleaseLabel(inputs: ResolvedInputs): string | undefined {
+  if (inputs.releaseLabel) {
+    return normalizeReleaseLabel(inputs.releaseLabel);
+  }
+
+  return (
+    normalizeReleaseLabel(process.env.GITHUB_REF_NAME) ??
+    normalizeReleaseLabel(process.env.GITHUB_HEAD_REF) ??
+    normalizeReleaseLabel(process.env.GITHUB_REF)
+  );
+}
+
+function createAssetProjectName(inputs: ResolvedInputs, releaseLabel?: string): string {
+  if (!releaseLabel || inputs.collectionSyncMode !== 'version') {
+    return inputs.projectName;
+  }
+  return `${inputs.projectName} ${releaseLabel}`;
+}
+
+function shouldPersistCurrentPointers(inputs: ResolvedInputs): boolean {
+  return inputs.collectionSyncMode === 'refresh' ? true : inputs.setAsCurrent;
+}
+
 function resolveRepoUrl(explicitRepoUrl: string): string {
   if (explicitRepoUrl) return explicitRepoUrl;
   // GitHub Actions
@@ -239,6 +298,14 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     baselineCollectionId: readInput(actionCore, 'baseline-collection-id'),
     smokeCollectionId: readInput(actionCore, 'smoke-collection-id'),
     contractCollectionId: readInput(actionCore, 'contract-collection-id'),
+    collectionSyncMode: normalizeCollectionSyncMode(
+      readInput(actionCore, 'collection-sync-mode') || 'reuse'
+    ),
+    specSyncMode: normalizeSpecSyncMode(
+      readInput(actionCore, 'spec-sync-mode') || 'update'
+    ),
+    releaseLabel: readInput(actionCore, 'release-label'),
+    setAsCurrent: parseBooleanInput(readInput(actionCore, 'set-as-current'), true),
     environments: environments.length > 0 ? environments : ['prod'],
     repoUrl: resolveRepoUrl(readInput(actionCore, 'repo-url')),
     integrationBackend: readInput(actionCore, 'integration-backend') || 'bifrost',
@@ -388,10 +455,15 @@ function buildResourcesManifest(
   });
 }
 
+function getCollectionDirectoryName(prefix: '[Baseline]' | '[Smoke]' | '[Contract]', assetProjectName: string): string {
+  return `${prefix} ${assetProjectName}`;
+}
+
 async function exportArtifacts(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
-  envUids: Record<string, string>
+  envUids: Record<string, string>,
+  releaseLabel?: string
 ): Promise<void> {
   if (!inputs.workspaceId) {
     return;
@@ -409,29 +481,33 @@ async function exportArtifacts(
   }
 
   const manifestCollections: Record<string, string> = {};
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
 
   if (inputs.baselineCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Baseline] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Baseline] ${inputs.projectName}`] =
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName('[Baseline]', assetProjectName)}`;
+    await convertAndSplitCollection(col as any, collectionDir);
+    manifestCollections[`../${collectionDir}`] =
       inputs.baselineCollectionId;
   }
   if (inputs.smokeCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.smokeCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Smoke] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Smoke] ${inputs.projectName}`] =
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName('[Smoke]', assetProjectName)}`;
+    await convertAndSplitCollection(col as any, collectionDir);
+    manifestCollections[`../${collectionDir}`] =
       inputs.smokeCollectionId;
   }
   if (inputs.contractCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.contractCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Contract] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Contract] ${inputs.projectName}`] =
+    const collectionDir = `${collectionsDir}/${getCollectionDirectoryName('[Contract]', assetProjectName)}`;
+    await convertAndSplitCollection(col as any, collectionDir);
+    manifestCollections[`../${collectionDir}`] =
       inputs.contractCollectionId;
   }
 
@@ -468,6 +544,10 @@ async function persistRepoVariables(
   envUids: Record<string, string>
 ): Promise<void> {
   if (!dependencies.github) {
+    return;
+  }
+
+  if (!shouldPersistCurrentPointers(inputs)) {
     return;
   }
 
@@ -585,6 +665,17 @@ export async function runRepoSync(
 ): Promise<RepoSyncOutputs> {
   const outputs = createOutputs(inputs);
   let pushed = false;
+  const requiresReleaseLabel =
+    inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
+  const releaseLabel = requiresReleaseLabel ? deriveReleaseLabel(inputs) : undefined;
+
+  if (requiresReleaseLabel && !releaseLabel) {
+    throw new Error(
+      'Versioned spec or collection sync requires a release-label or derivable GitHub ref metadata'
+    );
+  }
+
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
 
   const envUids = await upsertEnvironments(inputs, dependencies);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
@@ -636,7 +727,10 @@ export async function runRepoSync(
       }
 
       if (!resolvedMockUrl && dependencies.github) {
-        const cached = await dependencies.github.getRepositoryVariable('MOCK_URL').catch(() => '') || '';
+        const cached =
+          inputs.collectionSyncMode === 'version'
+            ? ''
+            : (await dependencies.github.getRepositoryVariable('MOCK_URL').catch(() => '')) || '';
         if (cached) {
           resolvedMockUrl = cached;
           dependencies.core.info(`Reusing mock from repo variable: ${resolvedMockUrl}`);
@@ -646,7 +740,7 @@ export async function runRepoSync(
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
-          `${inputs.projectName} Mock`,
+          `${assetProjectName} Mock`,
           inputs.baselineCollectionId,
           mockEnvUid
         );
@@ -655,7 +749,7 @@ export async function runRepoSync(
       }
 
       outputs['mock-url'] = resolvedMockUrl;
-      if (dependencies.github && resolvedMockUrl) {
+      if (dependencies.github && resolvedMockUrl && shouldPersistCurrentPointers(inputs)) {
         await dependencies.github.setRepositoryVariable('MOCK_URL', resolvedMockUrl).catch(() => undefined);
       }
     }
@@ -699,7 +793,10 @@ export async function runRepoSync(
       }
 
       if (!resolvedMonitorId && dependencies.github) {
-        const cached = await dependencies.github.getRepositoryVariable('SMOKE_MONITOR_UID').catch(() => '') || '';
+        const cached =
+          inputs.collectionSyncMode === 'version'
+            ? ''
+            : (await dependencies.github.getRepositoryVariable('SMOKE_MONITOR_UID').catch(() => '')) || '';
         if (cached) {
           const valid = await dependencies.postman.monitorExists(cached);
           if (valid) {
@@ -714,7 +811,7 @@ export async function runRepoSync(
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
-          `${inputs.projectName} - Smoke Monitor`,
+          `${assetProjectName} - Smoke Monitor`,
           inputs.smokeCollectionId,
           monitorEnvUid,
           effectiveCron || undefined
@@ -723,7 +820,7 @@ export async function runRepoSync(
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
-      if (dependencies.github && resolvedMonitorId) {
+      if (dependencies.github && resolvedMonitorId && shouldPersistCurrentPointers(inputs)) {
         await dependencies.github.setRepositoryVariable('SMOKE_MONITOR_UID', resolvedMonitorId).catch(() => undefined);
       }
     } else if (disableMonitor) {
@@ -751,7 +848,7 @@ export async function runRepoSync(
     }
   }
 
-  await exportArtifacts(inputs, dependencies, envUids);
+  await exportArtifacts(inputs, dependencies, envUids, releaseLabel);
   await persistRepoVariables(inputs, outputs, dependencies, envUids);
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);

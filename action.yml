@@ -13,6 +13,21 @@ inputs:
   project-name:
     description: Service project name used for environment, mock, and monitor naming.
     required: true
+  collection-sync-mode:
+    description: Collection lifecycle policy (reuse, refresh, or version).
+    required: false
+    default: reuse
+  spec-sync-mode:
+    description: Spec lifecycle policy (update or version).
+    required: false
+    default: update
+  release-label:
+    description: Optional release label used for versioned exports.
+    required: false
+  set-as-current:
+    description: Whether repo-sync should overwrite current/default repo variable pointers.
+    required: false
+    default: 'true'
   workspace-id:
     description: Postman workspace ID used for workspace-link and export metadata.
     required: false
