@@ -1,0 +1,10 @@
+workspace:
+  id: ws-123
+cloudResources:
+  collections:
+    ../postman/collections/[Baseline] core-payments: col-baseline
+    ../postman/collections/[Smoke] core-payments: col-smoke
+    ../postman/collections/[Contract] core-payments: col-contract
+localResources:
+  specs:
+    - ../index.yaml

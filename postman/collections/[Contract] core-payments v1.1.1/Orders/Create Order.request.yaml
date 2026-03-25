@@ -1,0 +1,18 @@
+type: http
+name: Create Order
+url: https://api.example.com/orders
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: '{"status":"created"}'
+examples:
+  - response:
+      statusCode: 201
+      statusText: Created
+      body:
+        type: json
+        content: '{"id":"ord_123"}'
+    name: Created

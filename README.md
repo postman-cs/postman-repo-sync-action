@@ -83,6 +83,14 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 
 Collections are exported in the Postman Collection v3 format, producing a multi-file YAML directory structure under `postman/collections/`. Each collection (Baseline, Smoke, Contract) gets its own directory containing `collection.yaml` and nested folder/request YAML files. The `.postman/resources.yaml` manifest maps each v3 collection directory to its Postman UID.
 
+Lifecycle behavior is backward-compatible by default:
+
+- `collection-sync-mode: reuse`
+- `spec-sync-mode: update`
+- `set-as-current: true`
+
+If you do not set those inputs, repo-sync preserves today’s behavior and continues to treat the exported assets as the current/default set.
+
 ## Inputs
 
 | Input | Default | Notes |
@@ -90,6 +98,10 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `generate-ci-workflow` | `true` | Set to `false` for existing repos that already own their CI workflow layout. |
 | `ci-workflow-path` | `.github/workflows/ci.yml` | Redirect generated CI to a non-conflicting path for existing repos. |
 | `project-name` | | Service name used for environments, mock servers, and monitors. |
+| `collection-sync-mode` | `reuse` | Collection lifecycle policy from bootstrap. `version` enables release-aware export naming and avoids reusing cached current monitor/mock variables. |
+| `spec-sync-mode` | `update` | Spec lifecycle policy passed through for consistency across the onboarding flow. |
+| `release-label` | | Optional release label used for versioned export naming. When omitted during versioned sync, the action derives one from GitHub tag or branch metadata. |
+| `set-as-current` | `true` | Whether repo-sync should overwrite current/default GitHub repo variables such as environment, mock, and monitor pointers. |
 | `workspace-id` | | Workspace identifier used for workspace-link and export metadata. |
 | `baseline-collection-id` | | Baseline collection exported into the repo and used for mock generation. |
 | `monitor-type` | `cloud` | Type of monitor to create (`cloud` or `cli`). `cli` uses GitHub Actions cron.
@@ -114,6 +126,66 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `gh-fallback-token` | | Fallback GitHub token for workflow-file and variable APIs. |
 | `github-auth-mode` | `github_token_first` | GitHub auth mode for repo variable APIs. |
 | `ci-workflow-base64` | | Optional base64-encoded workflow content that overrides the built-in CI template. |
+
+## Lifecycle Modes
+
+### Export naming
+
+- `reuse` and `refresh`: exports continue to use the existing collection directory names, such as `[Baseline] <project-name>`.
+- `version`: exports become release-aware, for example `[Baseline] <project-name> <release-label>`, and `.postman/resources.yaml` is written with those versioned paths.
+
+### Repo variable behavior
+
+- `refresh`: repo-sync updates the current/default environment, runtime URL, mock, and monitor variables.
+- `version` with `set-as-current: true`: repo-sync updates the current/default variables to the new release.
+- `version` with `set-as-current: false`: repo-sync exports the versioned assets but leaves current/default environment, mock, and monitor pointers unchanged.
+
+### Mock and monitor reuse
+
+In `version` mode, repo-sync does not reuse cached `MOCK_URL` or `SMOKE_MONITOR_UID` from the current/default variables. It either discovers an asset for the supplied collection ID or creates a new release-scoped mock/monitor as needed.
+
+### Release label derivation
+
+When versioned sync is requested and `release-label` is omitted, the action derives one using:
+
+1. explicit `release-label`
+2. Git tag name
+3. branch name or ref metadata
+
+If versioned sync is requested and no usable label can be derived, the run fails with a clear error.
+
+## Versioning Examples
+
+Refresh the current exported collection set in place:
+
+```yaml
+- uses: postman-cs/postman-repo-sync-action@v0
+  with:
+    project-name: core-payments
+    workspace-id: ws-123
+    baseline-collection-id: col-baseline
+    smoke-collection-id: col-smoke
+    contract-collection-id: col-contract
+    collection-sync-mode: refresh
+    postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
+```
+
+Export a side-by-side versioned release without moving the current/default mock and monitor pointers:
+
+```yaml
+- uses: postman-cs/postman-repo-sync-action@v0
+  with:
+    project-name: core-payments
+    workspace-id: ws-123
+    baseline-collection-id: col-baseline-v111
+    smoke-collection-id: col-smoke-v111
+    contract-collection-id: col-contract-v111
+    collection-sync-mode: version
+    spec-sync-mode: version
+    release-label: v1.1.1
+    set-as-current: false
+    postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
+```
 
 ### Obtaining `postman-api-key`
 
