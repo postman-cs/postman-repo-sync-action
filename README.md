@@ -76,6 +76,78 @@ steps:
 
 > **Note:** Azure DevOps secret variables must be mapped into step `env`; do not reference them directly on the CLI.
 
+### CLI Usage (Non-GitHub CI)
+
+The `postman-repo-sync` CLI is available for GitLab CI, Bitbucket Pipelines, Azure DevOps, and other CI systems that need the repo sync workflow outside GitHub Actions. GitHub Actions users should continue using the `action.yml` interface.
+
+Install it globally:
+
+```bash
+npm install -g postman-repo-sync-action
+```
+
+Basic usage:
+
+```bash
+postman-repo-sync \
+  --project-name core-payments \
+  --workspace-id ws-123 \
+  --baseline-collection-id col-baseline \
+  --smoke-collection-id col-smoke \
+  --contract-collection-id col-contract \
+  --postman-api-key "$POSTMAN_API_KEY" \
+  --result-json ./postman-repo-sync-result.json \
+  --dotenv-path ./postman-repo-sync.env \
+  --repo-write-mode commit-only
+```
+
+The CLI auto-detects the CI provider from environment variables and uses that context to resolve the repository branch, commit SHA, and repo URL. `--repo-write-mode` defaults to `commit-and-push`; use `commit-only` when push credentials are not configured.
+
+JSON is written to stdout. Use `--result-json` to write the same JSON payload to a file, or `--dotenv-path` to emit shell-sourceable `KEY=VALUE` output with the `POSTMAN_REPO_SYNC_` prefix. All logs go to stderr, so stdout stays reserved for JSON output.
+
+GitLab CI:
+
+```yaml
+repo_sync:
+  image: node:20
+  script:
+    - npm install -g postman-repo-sync-action
+    - postman-repo-sync --project-name core-payments --workspace-id ws-123 --baseline-collection-id col-baseline --smoke-collection-id col-smoke --contract-collection-id col-contract --postman-api-key "$POSTMAN_API_KEY" --result-json postman-repo-sync-result.json --dotenv-path postman-repo-sync.env --repo-write-mode commit-and-push
+  artifacts:
+    paths:
+      - postman-repo-sync-result.json
+      - postman-repo-sync.env
+```
+
+Bitbucket Pipelines:
+
+```yaml
+image: node:20
+
+pipelines:
+  default:
+    - step:
+        name: Postman repo sync
+        script:
+          - npm install -g postman-repo-sync-action
+          - postman-repo-sync --project-name core-payments --workspace-id ws-123 --baseline-collection-id col-baseline --smoke-collection-id col-smoke --contract-collection-id col-contract --postman-api-key "$POSTMAN_API_KEY" --result-json postman-repo-sync-result.json --dotenv-path postman-repo-sync.env --repo-write-mode commit-and-push
+        artifacts:
+          - postman-repo-sync-result.json
+          - postman-repo-sync.env
+```
+
+Azure DevOps:
+
+```yaml
+steps:
+  - script: |
+      npm install -g postman-repo-sync-action
+      postman-repo-sync --project-name core-payments --workspace-id ws-123 --baseline-collection-id col-baseline --smoke-collection-id col-smoke --contract-collection-id col-contract --postman-api-key "$(POSTMAN_API_KEY)" --result-json $(Build.ArtifactStagingDirectory)/postman-repo-sync-result.json --dotenv-path $(Build.ArtifactStagingDirectory)/postman-repo-sync.env --repo-write-mode commit-and-push
+    displayName: Postman repo sync
+```
+
+The CLI accepts the same repo-context signals as the action and auto-detects branch, SHA, and repo URL from provider-specific environment variables when available.
+
 ## Usage
 
 ```yaml
