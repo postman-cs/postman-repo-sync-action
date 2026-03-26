@@ -207,7 +207,28 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 
 The generated CI workflow reads `.postman/resources.yaml` directly to resolve the smoke/contract collection IDs and environment ID for Postman CLI runs. It does not depend on repository variables for those asset mappings.
 
+To match the app scaffold more closely, repo-sync also ensures these directories exist under `postman/`:
+
+- `collections`
+- `environments`
+- `flows`
+- `globals`
+- `mocks`
+- `specs`
+
+It also writes `postman/globals/workspace.globals.yaml` when missing.
+
 Folder and request **names are truncated to 120 characters** per path segment when writing files (with an ellipsis). That avoids `ENAMETOOLONG` when Postman item names are very long (for example, copied from long OpenAPI operation summaries).
+
+### Local spec metadata
+
+Repo-sync now scans the repository for local OpenAPI files and records them in `.postman/resources.yaml` under `localResources.specs`.
+
+- If `spec-path` is provided, it is used as the preferred local spec for `cloudResources.specs` and `.postman/workflows.yaml`.
+- If `spec-path` is omitted and exactly one local OpenAPI file is found, that file is used automatically.
+- If the local spec target is ambiguous or missing, repo-sync skips the spec cloud map and `workflows.yaml` rather than emitting incorrect relationships.
+
+When a local spec file and exported collections are both available, repo-sync writes `.postman/workflows.yaml` with `syncSpecToCollection` entries so the spec↔collection relationship metadata matches the app more closely.
 
 ### Lifecycle and versioning
 
@@ -234,6 +255,7 @@ Folder and request **names are truncated to 120 characters** per path segment wh
 | `collection-sync-mode` | `refresh` | Collection lifecycle mode: `refresh`, `reuse`, or `version`. |
 | `spec-sync-mode` | `update` | Spec lifecycle mode: `update` or `version`. |
 | `release-label` | | Optional release label for versioned naming. Falls back to `github-ref-name` when omitted. |
+| `spec-path` | | Optional repo-root-relative path to the local spec file for `resources.yaml` and `workflows.yaml` metadata. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL (GitHub or GitLab). Defaults to `https://github.com/$GITHUB_REPOSITORY` on GitHub Actions, or `$CI_PROJECT_URL` on GitLab CI. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |

@@ -66,6 +66,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     sslClientPassphrase: '',
     sslExtraCaCerts: '',
     specId: '',
+    specPath: '',
     teamId: '',
     repository: 'postman-cs/repo-sync-demo',
     ...overrides
@@ -254,8 +255,17 @@ describe('repo sync action', () => {
         resolvedCurrentRef: 'feature/repo-sync'
       })
     };
+    mkdirSync('packages/sdk', { recursive: true });
+    writeFileSync(
+      'packages/sdk/openapi.json',
+      JSON.stringify({
+        openapi: '3.1.0',
+        info: { title: 'SDK API', version: '1.0.0' },
+        paths: {}
+      })
+    );
 
-    const result = await runRepoSync(createInputs(), {
+    const result = await runRepoSync(createInputs({ specId: 'spec-123' }), {
       core,
       postman,
       github,
@@ -281,6 +291,11 @@ describe('repo sync action', () => {
     expect(ciWorkflow).not.toContain('vars.POSTMAN_ENVIRONMENT_UID');
     expect(existsSync('.postman/config.json')).toBe(false);
     expect(existsSync('.postman/releases.yaml')).toBe(false);
+    expect(existsSync('postman/flows')).toBe(true);
+    expect(existsSync('postman/globals')).toBe(true);
+    expect(existsSync('postman/mocks')).toBe(true);
+    expect(existsSync('postman/specs')).toBe(true);
+    expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(true);
 
     const baselineCollection = loadYaml(
       readFileSync('postman/collections/[Baseline] core-payments/collection.yaml', 'utf8')
@@ -295,6 +310,10 @@ describe('repo sync action', () => {
       )
     ) as Record<string, any>;
     const resourcesYaml = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as Record<
+      string,
+      any
+    >;
+    const workflowsYaml = loadYaml(readFileSync('.postman/workflows.yaml', 'utf8')) as Record<
       string,
       any
     >;
@@ -322,7 +341,7 @@ describe('repo sync action', () => {
           '../postman/environments/prod.postman_environment.json',
           '../postman/environments/stage.postman_environment.json'
         ],
-        specs: ['../index.yaml']
+        specs: ['../packages/sdk/openapi.json']
       },
       cloudResources: {
         collections: {
@@ -333,7 +352,28 @@ describe('repo sync action', () => {
         environments: {
           '../postman/environments/prod.postman_environment.json': 'env-prod',
           '../postman/environments/stage.postman_environment.json': 'env-stage'
+        },
+        specs: {
+          '../packages/sdk/openapi.json': 'spec-123'
         }
+      }
+    });
+    expect(workflowsYaml).toEqual({
+      workflows: {
+        syncSpecToCollection: [
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/[Baseline] core-payments'
+          },
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/[Smoke] core-payments'
+          },
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/[Contract] core-payments'
+          }
+        ]
       }
     });
   });

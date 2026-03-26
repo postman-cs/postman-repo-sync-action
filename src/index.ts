@@ -3,8 +3,10 @@ import * as exec from '@actions/exec';
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'node:fs';
 import * as path from 'node:path';
@@ -71,6 +73,7 @@ export interface ResolvedInputs {
   sslClientPassphrase: string;
   sslExtraCaCerts: string;
   specId: string;
+  specPath: string;
   teamId: string;
   repository: string;
 }
@@ -258,6 +261,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
     specId: getInput('spec-id', env),
+    specPath: getInput('spec-path', env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
     releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
@@ -328,6 +332,11 @@ type PostmanResourcesState = {
   };
 };
 
+type SpecReference = {
+  repoRelativePath: string;
+  configRelativePath: string;
+};
+
 function readResourcesState(): PostmanResourcesState | null {
   try {
     return loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as PostmanResourcesState;
@@ -364,6 +373,106 @@ function getEnvironmentUidsFromResources(
       })
       .filter((entry): entry is [string, string] => Boolean(entry))
   );
+}
+
+function normalizeToPosix(filePath: string): string {
+  return filePath.split(path.sep).join('/');
+}
+
+function isOpenApiSpecFile(filePath: string): boolean {
+  if (!(filePath.endsWith('.json') || filePath.endsWith('.yaml') || filePath.endsWith('.yml'))) {
+    return false;
+  }
+
+  try {
+    const raw = readFileSync(filePath, 'utf8');
+    const parsed = filePath.endsWith('.json')
+      ? JSON.parse(raw)
+      : loadYaml(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return false;
+    }
+
+    const doc = parsed as Record<string, unknown>;
+    if (doc.swagger === '2.0' && doc.paths && typeof doc.paths === 'object') {
+      return true;
+    }
+    if (
+      typeof doc.openapi === 'string' &&
+      doc.paths &&
+      typeof doc.paths === 'object'
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+function scanLocalSpecReferences(baseDir = '.'): SpecReference[] {
+  const ignoredDirs = new Set([
+    '.git',
+    '.omc',
+    '.omx',
+    '.llm-plans',
+    'node_modules',
+    'dist'
+  ]);
+  const found = new Set<string>();
+  const refs: SpecReference[] = [];
+
+  const visit = (currentDir: string): void => {
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      if (ignoredDirs.has(entry.name)) {
+        continue;
+      }
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !isOpenApiSpecFile(fullPath)) {
+        continue;
+      }
+
+      const repoRelativePath = normalizeToPosix(path.relative(baseDir, fullPath));
+      if (found.has(repoRelativePath)) {
+        continue;
+      }
+      found.add(repoRelativePath);
+      refs.push({
+        repoRelativePath,
+        configRelativePath: normalizeToPosix(path.join('..', repoRelativePath))
+      });
+    }
+  };
+
+  visit(baseDir);
+  return refs.sort((left, right) => left.repoRelativePath.localeCompare(right.repoRelativePath));
+}
+
+function resolveMappedSpecReference(
+  explicitSpecPath: string,
+  discoveredSpecs: SpecReference[]
+): SpecReference | undefined {
+  const normalizedExplicitPath = normalizeToPosix(explicitSpecPath.trim());
+  if (normalizedExplicitPath) {
+    const explicitFullPath = path.resolve(normalizedExplicitPath);
+    if (existsSync(explicitFullPath) && statSync(explicitFullPath).isFile()) {
+      return {
+        repoRelativePath: normalizedExplicitPath,
+        configRelativePath: normalizeToPosix(path.join('..', normalizedExplicitPath))
+      };
+    }
+  }
+
+  if (discoveredSpecs.length === 1) {
+    return discoveredSpecs[0];
+  }
+
+  return undefined;
 }
 
 function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
@@ -629,6 +738,8 @@ function buildResourcesManifest(
   collectionMap: Record<string, string>,
   envMap: Record<string, string>,
   artifactDir: string,
+  localSpecRefs: string[],
+  mappedSpecRef?: string,
   specId?: string
 ): string {
   const manifest: Record<string, unknown> = {
@@ -657,10 +768,11 @@ function buildResourcesManifest(
     }
   }
 
-  // Specs
-  localResources.specs = ['../index.yaml'];
-  if (specId) {
-    cloudResources.specs = { '../index.yaml': specId };
+  if (localSpecRefs.length > 0) {
+    localResources.specs = localSpecRefs;
+  }
+  if (mappedSpecRef && specId) {
+    cloudResources.specs = { [mappedSpecRef]: specId };
   }
 
   if (Object.keys(localResources).length > 0) {
@@ -675,6 +787,27 @@ function buildResourcesManifest(
     noRefs: true,
     sortKeys: false
   });
+}
+
+function buildSpecCollectionWorkflowManifest(
+  specRef: string,
+  collectionRefs: string[]
+): string {
+  return dumpYaml(
+    {
+      workflows: {
+        syncSpecToCollection: collectionRefs.map((collectionRef) => ({
+          spec: specRef,
+          collection: collectionRef
+        }))
+      }
+    },
+    {
+      lineWidth: -1,
+      noRefs: true,
+      sortKeys: false
+    }
+  );
 }
 
 
@@ -704,16 +837,28 @@ async function exportArtifacts(
 
   const collectionsDir = `${inputs.artifactDir}/collections`;
   const environmentsDir = `${inputs.artifactDir}/environments`;
+  const flowsDir = `${inputs.artifactDir}/flows`;
+  const globalsDir = `${inputs.artifactDir}/globals`;
   const mocksDir = `${inputs.artifactDir}/mocks`;
+  const specsDir = `${inputs.artifactDir}/specs`;
   ensureDir(collectionsDir);
   ensureDir(environmentsDir);
+  ensureDir(flowsDir);
+  ensureDir(globalsDir);
   ensureDir(mocksDir);
+  ensureDir(specsDir);
   ensureDir('.postman');
+  const globalsFilePath = `${globalsDir}/workspace.globals.yaml`;
+  if (!existsSync(globalsFilePath)) {
+    writeFileSync(globalsFilePath, 'name: Globals\nvalues: []\n');
+  }
   if (inputs.generateCiWorkflow) {
     ensureDir('.github/workflows');
   }
 
   const manifestCollections: Record<string, string> = {};
+  const discoveredSpecs = scanLocalSpecReferences();
+  const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
 
   if (inputs.baselineCollectionId) {
     const col = stripVolatileFields(
@@ -756,8 +901,20 @@ async function exportArtifacts(
     manifestCollections,
     envUids,
     inputs.artifactDir,
+    discoveredSpecs.map((spec) => spec.configRelativePath),
+    mappedSpec?.configRelativePath,
     inputs.specId || undefined
   ));
+
+  if (mappedSpec && Object.keys(manifestCollections).length > 0) {
+    writeFileSync(
+      '.postman/workflows.yaml',
+      buildSpecCollectionWorkflowManifest(
+        mappedSpec.configRelativePath,
+        Object.keys(manifestCollections)
+      )
+    );
+  }
 }
 
 function renderCiWorkflow(inputs: ResolvedInputs): string {

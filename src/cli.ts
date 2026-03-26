@@ -177,6 +177,7 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'ssl-client-passphrase',
     'ssl-extra-ca-certs',
     'spec-id',
+    'spec-path',
     'team-id'
   ];
 
