@@ -24497,11 +24497,60 @@ var CI_WORKFLOW_TEMPLATE = [
   "      - name: Install Postman CLI",
   '        run: curl -o- "https://dl-cli.pstmn.io/install/unix.sh" | sh',
   "      - name: Login to Postman CLI",
-  "        run: postman login --with-api-key \\${{ secrets.POSTMAN_API_KEY }}",
+  "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
+  "      - name: Decode SSL certificates",
+  "        if: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}",
+  "        env:",
+  "          POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}",
+  "          POSTMAN_SSL_CLIENT_KEY_B64: ${{ secrets.POSTMAN_SSL_CLIENT_KEY_B64 }}",
+  "          POSTMAN_SSL_EXTRA_CA_CERTS_B64: ${{ secrets.POSTMAN_SSL_EXTRA_CA_CERTS_B64 }}",
+  "        run: |",
+  '          mkdir -p "$RUNNER_TEMP/postman-ssl"',
+  '          printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.crt"',
+  '          printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.key"',
+  '          if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
+  '            printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/ca.crt"',
+  "          fi",
   "      - name: Run Smoke Tests",
-  "        run: postman collection run \\${{ vars.POSTMAN_SMOKE_COLLECTION_UID }} -e \\${{ vars.POSTMAN_ENVIRONMENT_UID }} --env-var baseUrl=\\${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }} --report-events --env-var \"\\${{ vars.CI_ENVIRONMENT || 'Production' }}\"",
+  "        env:",
+  "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+  "        run: |",
+  "          CMD=(postman collection run ${{ vars.POSTMAN_SMOKE_COLLECTION_UID }}",
+  "            -e ${{ vars.POSTMAN_ENVIRONMENT_UID }}",
+  '            --env-var "baseUrl=${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }}"',
+  "            --report-events",
+  `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+  '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
+  '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
+  '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
+  '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+  '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+  "            fi",
+  '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
+  '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
+  "            fi",
+  "          fi",
+  '          "${CMD[@]}"',
   "      - name: Run Contract Tests",
-  "        run: postman collection run \\${{ vars.POSTMAN_CONTRACT_COLLECTION_UID }} -e \\${{ vars.POSTMAN_ENVIRONMENT_UID }} --env-var baseUrl=\\${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }} --report-events --env-var \"\\${{ vars.CI_ENVIRONMENT || 'Production' }}\"",
+  "        env:",
+  "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+  "        run: |",
+  "          CMD=(postman collection run ${{ vars.POSTMAN_CONTRACT_COLLECTION_UID }}",
+  "            -e ${{ vars.POSTMAN_ENVIRONMENT_UID }}",
+  '            --env-var "baseUrl=${{ vars.RUNTIME_BASE_URL || vars.DEV_GW_URL }}"',
+  "            --report-events",
+  `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+  '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
+  '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
+  '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
+  '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+  '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+  "            fi",
+  '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
+  '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
+  "            fi",
+  "          fi",
+  '          "${CMD[@]}"',
   ""
 ].join("\\n");
 
@@ -25229,6 +25278,56 @@ var PostmanAssetsClient = class {
   }
 };
 
+// src/lib/ssl-validation.ts
+var import_node_crypto = require("node:crypto");
+function decodeBase64Pem(value, label) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  const sanitized = normalized.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=]+$/.test(sanitized) || sanitized.length % 4 !== 0) {
+    throw new Error(`${label} must be valid base64`);
+  }
+  const decoded = Buffer.from(sanitized, "base64");
+  if (decoded.length === 0) {
+    throw new Error(`${label} must decode to non-empty PEM content`);
+  }
+  const normalizedInput = sanitized.replace(/=+$/u, "");
+  const normalizedDecoded = decoded.toString("base64").replace(/=+$/u, "");
+  if (normalizedInput !== normalizedDecoded) {
+    throw new Error(`${label} must be valid base64`);
+  }
+  return decoded;
+}
+function validateCertMaterial(certBase64, keyBase64, passphrase) {
+  const certBuffer = decodeBase64Pem(certBase64, "ssl-client-cert");
+  const keyBuffer = decodeBase64Pem(keyBase64, "ssl-client-key");
+  let certificate;
+  try {
+    certificate = new import_node_crypto.X509Certificate(certBuffer);
+  } catch (error) {
+    throw new Error(
+      `Invalid client certificate: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  let privateKey;
+  try {
+    privateKey = (0, import_node_crypto.createPrivateKey)({
+      key: keyBuffer,
+      passphrase,
+      format: "pem"
+    });
+  } catch (error) {
+    throw new Error(
+      `Invalid client key (wrong passphrase?): ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!certificate.checkPrivateKey(privateKey)) {
+    throw new Error("Client certificate and private key do not match");
+  }
+}
+
 // src/index.ts
 function parseBooleanInput(value, defaultValue) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -25316,10 +25415,24 @@ function readActionInputs(actionCore) {
   const postmanAccessToken = readInput(actionCore, "postman-access-token");
   const githubToken = readInput(actionCore, "github-token");
   const ghFallbackToken = readInput(actionCore, "gh-fallback-token");
+  const sslClientCert = readInput(actionCore, "ssl-client-cert");
+  const sslClientKey = readInput(actionCore, "ssl-client-key");
+  const sslClientPassphrase = readInput(actionCore, "ssl-client-passphrase");
+  const sslExtraCaCerts = readInput(actionCore, "ssl-extra-ca-certs");
   actionCore.setSecret(postmanApiKey);
   if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
   if (githubToken) actionCore.setSecret(githubToken);
   if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
+  if (sslClientCert) actionCore.setSecret(sslClientCert);
+  if (sslClientKey) actionCore.setSecret(sslClientKey);
+  if (sslClientPassphrase) actionCore.setSecret(sslClientPassphrase);
+  if (sslExtraCaCerts) actionCore.setSecret(sslExtraCaCerts);
+  if (sslClientCert) {
+    if (!sslClientKey) {
+      throw new Error("ssl-client-key is required when ssl-client-cert is provided");
+    }
+    validateCertMaterial(sslClientCert, sslClientKey, sslClientPassphrase || void 0);
+  }
   const environments = parseJsonArray(readInput(actionCore, "environments-json") || '["prod"]');
   const systemEnvMap = parseJsonMap(readInput(actionCore, "system-env-map-json") || "{}");
   const environmentUids = parseJsonMap(readInput(actionCore, "environment-uids-json") || "{}");
@@ -25363,8 +25476,61 @@ function readActionInputs(actionCore) {
     orgMode: parseBooleanInput(readInput(actionCore, "org-mode"), false),
     monitorId: readInput(actionCore, "monitor-id"),
     mockUrl: readInput(actionCore, "mock-url"),
-    monitorCron: readInput(actionCore, "monitor-cron")
+    monitorCron: readInput(actionCore, "monitor-cron"),
+    sslClientCert,
+    sslClientKey,
+    sslClientPassphrase,
+    sslExtraCaCerts
   };
+}
+async function persistSslSecrets(inputs, actionCore, actionExec, repository, githubClient) {
+  if (!inputs.sslClientCert) {
+    return;
+  }
+  if (!githubClient) {
+    actionCore.warning(
+      "SSL inputs were provided but GitHub secret persistence is unavailable. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional)."
+    );
+    return;
+  }
+  const token = inputs.ghFallbackToken || inputs.githubToken;
+  if (!token || !repository) {
+    actionCore.warning(
+      "SSL inputs were provided but no GitHub token/repository context is available for secret persistence. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional)."
+    );
+    return;
+  }
+  const secretsToPersist = [
+    ["POSTMAN_SSL_CLIENT_CERT_B64", inputs.sslClientCert],
+    ["POSTMAN_SSL_CLIENT_KEY_B64", inputs.sslClientKey]
+  ];
+  if (inputs.sslClientPassphrase) {
+    secretsToPersist.push(["POSTMAN_SSL_CLIENT_PASSPHRASE", inputs.sslClientPassphrase]);
+  }
+  if (inputs.sslExtraCaCerts) {
+    secretsToPersist.push(["POSTMAN_SSL_EXTRA_CA_CERTS_B64", inputs.sslExtraCaCerts]);
+  }
+  try {
+    for (const [name, value] of secretsToPersist) {
+      const result = await actionExec.getExecOutput(
+        "gh",
+        ["secret", "set", name, "--repo", repository],
+        {
+          input: Buffer.from(value),
+          env: { ...process.env, GH_TOKEN: token },
+          ignoreReturnCode: true
+        }
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr || `gh secret set ${name} failed`);
+      }
+    }
+    actionCore.info("SSL certificate inputs persisted to repository secrets");
+  } catch (error) {
+    actionCore.warning(
+      `Unable to persist SSL certificate secrets automatically (missing secrets:write permissions?): ${error instanceof Error ? error.message : String(error)}. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).`
+    );
+  }
 }
 async function upsertEnvironments(inputs, dependencies) {
   const envUids = { ...inputs.environmentUids };
@@ -25832,7 +25998,11 @@ async function runAction(actionCore = core2, actionExec = exec) {
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
     inputs.githubToken,
-    inputs.ghFallbackToken
+    inputs.ghFallbackToken,
+    inputs.sslClientCert,
+    inputs.sslClientKey,
+    inputs.sslClientPassphrase,
+    inputs.sslExtraCaCerts
   ]);
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker);
   const postman = new PostmanAssetsClient({
@@ -25881,6 +26051,7 @@ async function runAction(actionCore = core2, actionExec = exec) {
       "Skipping workspace linking because postman-access-token is not configured"
     );
   }
+  await persistSslSecrets(inputs, actionCore, actionExec, repository, github);
   return runRepoSync(inputs, {
     core: actionCore,
     postman,

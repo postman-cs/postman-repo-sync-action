@@ -112,6 +112,18 @@ inputs:
   ci-workflow-base64:
     description: Optional base64-encoded ci.yml content. Defaults to the built-in template.
     required: false
+  ssl-client-cert:
+    description: Base64-encoded PEM client certificate for Postman CLI mTLS runs.
+    required: false
+  ssl-client-key:
+    description: Base64-encoded PEM client private key for Postman CLI mTLS runs.
+    required: false
+  ssl-client-passphrase:
+    description: Optional passphrase for encrypted ssl-client-key.
+    required: false
+  ssl-extra-ca-certs:
+    description: Optional base64-encoded PEM CA certificate bundle for custom trust.
+    required: false
 outputs:
   integration-backend:
     description: Resolved integration backend for the open-alpha run.

@@ -47,6 +47,10 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     monitorId: '',
     mockUrl: '',
     monitorCron: '',
+    sslClientCert: '',
+    sslClientKey: '',
+    sslClientPassphrase: '',
+    sslExtraCaCerts: '',
     ...overrides
   };
 }
@@ -172,6 +176,22 @@ describe('repo sync action', () => {
       'github-token',
       'fallback-token'
     ]);
+  });
+
+  it('requires ssl-client-key when ssl-client-cert is provided', () => {
+    const { core } = createCoreStub({
+      'project-name': 'core-payments',
+      'postman-api-key': 'pmak-test',
+      'ssl-client-cert': Buffer.from('dummy-cert').toString('base64'),
+      'environments-json': '["prod"]',
+      'system-env-map-json': '{}',
+      'environment-uids-json': '{}',
+      'env-runtime-urls-json': '{}'
+    });
+
+    expect(() => readActionInputs(core)).toThrow(
+      'ssl-client-key is required when ssl-client-cert is provided'
+    );
   });
 
   it('materializes repo sync outputs and files', async () => {

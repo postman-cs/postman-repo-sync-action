@@ -18,6 +18,7 @@ import {
 } from './lib/postman/internal-integration-adapter.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { createSecretMasker, type SecretMasker } from './lib/secrets.js';
+import { validateCertMaterial } from './lib/ssl-validation.js';
 
 type EnvironmentValues = {
   key: string;
@@ -59,6 +60,10 @@ export interface ResolvedInputs {
   monitorId: string;
   mockUrl: string;
   monitorCron: string;
+  sslClientCert: string;
+  sslClientKey: string;
+  sslClientPassphrase: string;
+  sslExtraCaCerts: string;
 }
 
 interface RepoSyncOutputs {
@@ -222,11 +227,26 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   const postmanAccessToken = readInput(actionCore, 'postman-access-token');
   const githubToken = readInput(actionCore, 'github-token');
   const ghFallbackToken = readInput(actionCore, 'gh-fallback-token');
+  const sslClientCert = readInput(actionCore, 'ssl-client-cert');
+  const sslClientKey = readInput(actionCore, 'ssl-client-key');
+  const sslClientPassphrase = readInput(actionCore, 'ssl-client-passphrase');
+  const sslExtraCaCerts = readInput(actionCore, 'ssl-extra-ca-certs');
 
   actionCore.setSecret(postmanApiKey);
   if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
   if (githubToken) actionCore.setSecret(githubToken);
   if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
+  if (sslClientCert) actionCore.setSecret(sslClientCert);
+  if (sslClientKey) actionCore.setSecret(sslClientKey);
+  if (sslClientPassphrase) actionCore.setSecret(sslClientPassphrase);
+  if (sslExtraCaCerts) actionCore.setSecret(sslExtraCaCerts);
+
+  if (sslClientCert) {
+    if (!sslClientKey) {
+      throw new Error('ssl-client-key is required when ssl-client-cert is provided');
+    }
+    validateCertMaterial(sslClientCert, sslClientKey, sslClientPassphrase || undefined);
+  }
 
   const environments = parseJsonArray(readInput(actionCore, 'environments-json') || '["prod"]');
   const systemEnvMap = parseJsonMap(readInput(actionCore, 'system-env-map-json') || '{}');
@@ -272,8 +292,73 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     orgMode: parseBooleanInput(readInput(actionCore, 'org-mode'), false),
     monitorId: readInput(actionCore, 'monitor-id'),
     mockUrl: readInput(actionCore, 'mock-url'),
-    monitorCron: readInput(actionCore, 'monitor-cron')
+    monitorCron: readInput(actionCore, 'monitor-cron'),
+    sslClientCert,
+    sslClientKey,
+    sslClientPassphrase,
+    sslExtraCaCerts
   };
+}
+
+async function persistSslSecrets(
+  inputs: ResolvedInputs,
+  actionCore: Pick<CoreLike, 'info' | 'warning'>,
+  actionExec: ExecLike,
+  repository: string,
+  githubClient?: Pick<GitHubApiClient, 'setRepositoryVariable'>
+): Promise<void> {
+  if (!inputs.sslClientCert) {
+    return;
+  }
+
+  if (!githubClient) {
+    actionCore.warning(
+      'SSL inputs were provided but GitHub secret persistence is unavailable. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).'
+    );
+    return;
+  }
+
+  const token = inputs.ghFallbackToken || inputs.githubToken;
+  if (!token || !repository) {
+    actionCore.warning(
+      'SSL inputs were provided but no GitHub token/repository context is available for secret persistence. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).'
+    );
+    return;
+  }
+
+  const secretsToPersist: Array<[name: string, value: string]> = [
+    ['POSTMAN_SSL_CLIENT_CERT_B64', inputs.sslClientCert],
+    ['POSTMAN_SSL_CLIENT_KEY_B64', inputs.sslClientKey]
+  ];
+  if (inputs.sslClientPassphrase) {
+    secretsToPersist.push(['POSTMAN_SSL_CLIENT_PASSPHRASE', inputs.sslClientPassphrase]);
+  }
+  if (inputs.sslExtraCaCerts) {
+    secretsToPersist.push(['POSTMAN_SSL_EXTRA_CA_CERTS_B64', inputs.sslExtraCaCerts]);
+  }
+
+  try {
+    for (const [name, value] of secretsToPersist) {
+      const result = await actionExec.getExecOutput(
+        'gh',
+        ['secret', 'set', name, '--repo', repository],
+        {
+          input: Buffer.from(value),
+          env: { ...process.env, GH_TOKEN: token },
+          ignoreReturnCode: true
+        }
+      );
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr || `gh secret set ${name} failed`);
+      }
+    }
+    actionCore.info('SSL certificate inputs persisted to repository secrets');
+  } catch (error) {
+    actionCore.warning(
+      `Unable to persist SSL certificate secrets automatically (missing secrets:write permissions?): ${error instanceof Error ? error.message : String(error)}. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).`
+    );
+  }
 }
 
 async function upsertEnvironments(
@@ -860,7 +945,11 @@ export async function runAction(
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
     inputs.githubToken,
-    inputs.ghFallbackToken
+    inputs.ghFallbackToken,
+    inputs.sslClientCert,
+    inputs.sslClientKey,
+    inputs.sslClientPassphrase,
+    inputs.sslExtraCaCerts
   ]);
 
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker);
@@ -924,6 +1013,8 @@ export async function runAction(
       'Skipping workspace linking because postman-access-token is not configured'
     );
   }
+
+  await persistSslSecrets(inputs, actionCore, actionExec, repository, github);
 
   return runRepoSync(inputs, {
     core: actionCore,

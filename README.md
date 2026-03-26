@@ -26,6 +26,56 @@ For existing repositories, use `generate-ci-workflow: false` to avoid touching w
 
 Workspace-to-repository linking via Bifrost supports both **GitHub** and **GitLab** (cloud and self-hosted) repository URLs. When `repo-url` is omitted, the action auto-detects the repository URL from `$GITHUB_REPOSITORY` (GitHub Actions) or `$CI_PROJECT_URL` (GitLab CI). You can also pass an explicit `repo-url` for any git provider.
 
+### mTLS / Client Certificate Support
+
+The generated CI workflow supports client certificates for testing APIs that require mTLS.
+
+On GitHub, set these repository secrets:
+
+- `POSTMAN_SSL_CLIENT_CERT_B64`
+- `POSTMAN_SSL_CLIENT_KEY_B64`
+- `POSTMAN_SSL_CLIENT_PASSPHRASE` (optional)
+- `POSTMAN_SSL_EXTRA_CA_CERTS_B64` (optional)
+
+When you pass the matching inputs to the action with a token that has `secrets:write`, the action can auto-persist these secrets for the generated workflow.
+
+GitLab CI:
+
+```yaml
+variables:
+  POSTMAN_SSL_CLIENT_CERT_B64: $POSTMAN_SSL_CLIENT_CERT_B64
+  POSTMAN_SSL_CLIENT_KEY_B64: $POSTMAN_SSL_CLIENT_KEY_B64
+  POSTMAN_SSL_CLIENT_PASSPHRASE: $POSTMAN_SSL_CLIENT_PASSPHRASE
+  POSTMAN_SSL_EXTRA_CA_CERTS_B64: $POSTMAN_SSL_EXTRA_CA_CERTS_B64
+```
+
+Bitbucket Pipelines:
+
+```yaml
+definitions:
+  variables:
+    POSTMAN_SSL_CLIENT_CERT_B64: "$POSTMAN_SSL_CLIENT_CERT_B64"
+    POSTMAN_SSL_CLIENT_KEY_B64: "$POSTMAN_SSL_CLIENT_KEY_B64"
+    POSTMAN_SSL_CLIENT_PASSPHRASE: "$POSTMAN_SSL_CLIENT_PASSPHRASE"
+    POSTMAN_SSL_EXTRA_CA_CERTS_B64: "$POSTMAN_SSL_EXTRA_CA_CERTS_B64"
+```
+
+> **Note:** Bitbucket secured variables have a size ceiling, so large cert chains may need to be split or stored elsewhere.
+
+Azure DevOps:
+
+```yaml
+steps:
+  - script: npx postman-repo-sync-action
+    env:
+      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)
+      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)
+      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)
+      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)
+```
+
+> **Note:** Azure DevOps secret variables must be mapped into step `env`; do not reference them directly on the CLI.
+
 ## Usage
 
 ```yaml
@@ -110,6 +160,10 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 | `committer-email` | `help@postman.com` | Commit author email for sync commits. |
 | `postman-api-key` | | Postman API key for environment, mock, and monitor work. |
 | `postman-access-token` | | Postman access token for Bifrost and system environment association. |
+| `ssl-client-cert` | | Base64-encoded client certificate for mTLS-enabled API testing. |
+| `ssl-client-key` | | Base64-encoded private key paired with `ssl-client-cert`. |
+| `ssl-client-passphrase` | | Optional passphrase for the client key. |
+| `ssl-extra-ca-certs` | | Base64-encoded extra CA certificates used to trust private certificate chains. |
 | `github-token` | | GitHub token for repo variables and commits. |
 | `gh-fallback-token` | | Fallback GitHub token for workflow-file and variable APIs. |
 | `github-auth-mode` | `github_token_first` | GitHub auth mode for repo variable APIs. |

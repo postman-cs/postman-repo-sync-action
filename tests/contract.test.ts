@@ -46,7 +46,11 @@ describe('postman-repo-sync-action contract', () => {
       'gh-fallback-token',
       'github-auth-mode',
       'org-mode',
-      'ci-workflow-base64'
+      'ci-workflow-base64',
+      'ssl-client-cert',
+      'ssl-client-key',
+      'ssl-client-passphrase',
+      'ssl-extra-ca-certs'
     ]);
 
     expect(Object.keys(postmanRepoSyncActionContract.outputs)).toEqual([
