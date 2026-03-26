@@ -1,3 +1,12 @@
+// Mock must be at top of file — vitest hoists vi.mock before all imports
+vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
+  createInternalIntegrationAdapter: vi.fn(() => ({
+    createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
+    associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+    connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+  }))
+}));
+
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   readActionInputs,
+  resolvePostmanApiKeyAndTeamId,
   runRepoSync,
   type ResolvedInputs
 } from '../src/index.js';
@@ -18,6 +28,10 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    collectionSyncMode: 'refresh',
+    specSyncMode: 'update',
+    releaseLabel: undefined,
+    setAsCurrent: true,
     environments: ['prod', 'stage'],
     repoUrl: 'https://github.com/postman-cs/repo-sync-demo',
     integrationBackend: 'bifrost',
@@ -174,6 +188,9 @@ describe('repo sync action', () => {
     const inputs = readActionInputs(core);
 
     expect(inputs.projectName).toBe('core-payments');
+    expect(inputs.collectionSyncMode).toBe('refresh');
+    expect(inputs.specSyncMode).toBe('update');
+    expect(inputs.setAsCurrent).toBe(true);
     expect(secrets).toEqual([
       'pmak-test',
       'postman-access-token',
@@ -464,6 +481,194 @@ describe('repo sync action', () => {
       'name: CI/CD Pipeline'
     );
   });
+
+  it('creates release-labeled collection directories for versioned exports', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        collectionSyncMode: 'version',
+        releaseLabel: 'release-2026-03'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(
+      existsSync('postman/collections/[Baseline] core-payments release-2026-03/collection.yaml')
+    ).toBe(true);
+    expect(
+      existsSync('postman/collections/[Smoke] core-payments release-2026-03/collection.yaml')
+    ).toBe(true);
+    expect(
+      existsSync('postman/collections/[Contract] core-payments release-2026-03/collection.yaml')
+    ).toBe(true);
+  });
+
+  it('skips current pointer writes when version mode sets set-as-current false', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-new', url: 'https://mock-new.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-new'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null)
+    };
+    const github = {
+      getRepositoryVariable: vi.fn().mockResolvedValue(''),
+      setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        collectionSyncMode: 'version',
+        releaseLabel: 'r2',
+        setAsCurrent: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(github.setRepositoryVariable).not.toHaveBeenCalledWith(
+      'POSTMAN_CORE_PAYMENTS_MOCK_URL',
+      expect.any(String)
+    );
+    expect(github.setRepositoryVariable).not.toHaveBeenCalledWith(
+      'POSTMAN_MOCK_URL',
+      expect.any(String)
+    );
+    expect(github.setRepositoryVariable).not.toHaveBeenCalledWith(
+      'POSTMAN_CORE_PAYMENTS_SMOKE_MONITOR_UID',
+      expect.any(String)
+    );
+    expect(github.setRepositoryVariable).not.toHaveBeenCalledWith(
+      'POSTMAN_SMOKE_MONITOR_UID',
+      expect.any(String)
+    );
+  });
+
+  it('skips cached monitor/mock repo variable reuse in version mode', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-versioned', url: 'https://mock-versioned.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-versioned'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(true),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null)
+    };
+    const github = {
+      getRepositoryVariable: vi.fn().mockImplementation((name: string) => {
+        if (name.includes('MOCK_URL')) return Promise.resolve('https://cached-mock.pstmn.io');
+        if (name.includes('SMOKE_MONITOR_UID')) return Promise.resolve('cached-mon');
+        return Promise.resolve('');
+      }),
+      setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        collectionSyncMode: 'version',
+        releaseLabel: 'r3'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as any
+      }
+    );
+
+    expect(postman.createMock).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments r3 Mock',
+      'col-baseline',
+      'env-prod'
+    );
+    expect(postman.createMonitor).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments r3 - Smoke Monitor',
+      'col-smoke',
+      'env-prod',
+      undefined
+    );
+    expect(postman.monitorExists).not.toHaveBeenCalledWith('cached-mon');
+  });
 });
 
 describe('monitor resolution paths', () => {
@@ -689,5 +894,389 @@ describe('mock resolution paths', () => {
       'col-baseline',
       'env-prod'
     );
+  });
+});
+
+describe('org-mode auto-detection', () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+    return new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+      ...init
+    });
+  }
+
+  it('sets orgMode=true when teams have shared organizationId matching teamId', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const mockFetch = vi.fn<typeof fetch>();
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+    const createdApiKey = 'pmak-generated-1';
+
+    globalThis.fetch = mockFetch;
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
+
+      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
+        return jsonResponse({ apikey: { key: createdApiKey } });
+      }
+
+      if (urlStr.includes('/me')) {
+        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 99900 } });
+      }
+
+      if (urlStr.includes('/teams')) {
+        return jsonResponse({
+          data: [
+            { id: 99901, name: 'Sub Team A', handle: 'sub-a', organizationId: 99900 },
+            { id: 99902, name: 'Sub Team B', handle: 'sub-b', organizationId: 99900 },
+            { id: 99903, name: 'Sub Team C', handle: 'sub-c', organizationId: 99900 }
+          ]
+        });
+      }
+
+      return new Response('', { status: 404 });
+    });
+
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
+
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike as any,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.teamId).toBe('99900');
+    expect(inputs.orgMode).toBe(true);
+  });
+
+  it('leaves orgMode=false when getTeams() throws (detection failure is non-fatal)', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+
+    const localExecLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+
+    const createdApiKey = 'pmak-generated-2';
+
+    let fetchCallCount = 0;
+    globalThis.fetch = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      const urlStr = String(url);
+      fetchCallCount++;
+
+      if (fetchCallCount === 1 && urlStr.includes('/me')) {
+        return new Response('', { status: 401 });
+      }
+
+      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
+        return jsonResponse({ apikey: { key: createdApiKey } });
+      }
+
+      if (urlStr.includes('/me')) {
+        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 99901 } });
+      }
+
+      if (urlStr.includes('/teams')) {
+        throw new Error('Network error fetching teams');
+      }
+
+      return new Response('', { status: 404 });
+    });
+
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
+
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      localExecLike as any,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.teamId).toBe('99901');
+    expect(inputs.orgMode).toBe(false);
+    expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+  });
+
+  it('does not set orgMode when teams have no shared organizationId', async () => {
+    globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response('', { status: 401 })
+    );
+
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+
+    const createdApiKey = 'pmak-generated-3';
+
+    let fetchCallCount = 0;
+    globalThis.fetch = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      const urlStr = String(url);
+      fetchCallCount++;
+
+      if (fetchCallCount === 1 && urlStr.includes('/me')) {
+        return new Response('', { status: 401 });
+      }
+
+      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
+        return jsonResponse({ apikey: { key: createdApiKey } });
+      }
+
+      if (urlStr.includes('/me')) {
+        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 88801 } });
+      }
+
+      if (urlStr.includes('/teams')) {
+        return jsonResponse({
+          data: [
+            { id: 88801, name: 'Team A', handle: 'team-a', organizationId: 88800 },
+            { id: 88802, name: 'Team B', handle: 'team-b', organizationId: 99900 }
+          ]
+        });
+      }
+
+      return new Response('', { status: 404 });
+    });
+
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
+
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike as any,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.teamId).toBe('88801');
+    expect(inputs.orgMode).toBe(false);
+    expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+  });
+});
+
+describe('repo-variable fallback resolution', () => {
+  function makePostman(overrides: Record<string, any> = {}) {
+    return {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      ...overrides
+    };
+  }
+
+  function makeGithub(vars: Record<string, string> = {}) {
+    return {
+      getRepositoryVariable: vi.fn().mockImplementation((name: string) =>
+        Promise.resolve(vars[name] ?? '')
+      ),
+      setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  function makeDeps(postman: any, github: any) {
+    return {
+      core: createCoreStub().core,
+      postman,
+      github,
+      internalIntegration: {
+        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      },
+      repoMutation: {
+        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+      } as any
+    };
+  }
+
+  it('resolves workspace-id from repo variable when input is empty', async () => {
+    const postman = makePostman();
+    const github = makeGithub({ 'POSTMAN_CORE_PAYMENTS_WORKSPACE_ID': 'ws-from-repo' });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        workspaceId: '',
+        baselineCollectionId: 'col-baseline',
+        smokeCollectionId: 'col-smoke',
+        contractCollectionId: 'col-contract'
+      }),
+      makeDeps(postman, github)
+    );
+
+    expect(github.getRepositoryVariable).toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_WORKSPACE_ID');
+    expect(postman.createEnvironment).toHaveBeenCalledWith('ws-from-repo', expect.any(String), expect.any(Array));
+  });
+
+  it('resolves baseline-collection-id from repo variable when input is empty', async () => {
+    const postman = makePostman({
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments'))
+    });
+    const github = makeGithub({ 'POSTMAN_CORE_PAYMENTS_BASELINE_COLLECTION_UID': 'col-base-repo' });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        workspaceId: 'ws-123',
+        baselineCollectionId: '',
+        smokeCollectionId: 'col-smoke',
+        contractCollectionId: 'col-contract'
+      }),
+      makeDeps(postman, github)
+    );
+
+    expect(github.getRepositoryVariable).toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_BASELINE_COLLECTION_UID');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-base-repo');
+  });
+
+  it('resolves smoke-collection-id from repo variable when input is empty', async () => {
+    const postman = makePostman({
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments'))
+    });
+    const github = makeGithub({ 'POSTMAN_CORE_PAYMENTS_SMOKE_COLLECTION_UID': 'col-smoke-repo' });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        workspaceId: 'ws-123',
+        baselineCollectionId: 'col-baseline',
+        smokeCollectionId: '',
+        contractCollectionId: 'col-contract'
+      }),
+      makeDeps(postman, github)
+    );
+
+    expect(github.getRepositoryVariable).toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_SMOKE_COLLECTION_UID');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-repo');
+  });
+
+  it('resolves contract-collection-id from repo variable when input is empty', async () => {
+    const postman = makePostman({
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments'))
+    });
+    const github = makeGithub({ 'POSTMAN_CORE_PAYMENTS_CONTRACT_COLLECTION_UID': 'col-contract-repo' });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        workspaceId: 'ws-123',
+        baselineCollectionId: 'col-baseline',
+        smokeCollectionId: 'col-smoke',
+        contractCollectionId: ''
+      }),
+      makeDeps(postman, github)
+    );
+
+    expect(github.getRepositoryVariable).toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_CONTRACT_COLLECTION_UID');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-contract-repo');
+  });
+
+  it('resolves all four IDs from repo variables when all inputs are empty', async () => {
+    const postman = makePostman({
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments'))
+    });
+    const github = makeGithub({
+      'POSTMAN_CORE_PAYMENTS_WORKSPACE_ID': 'ws-repo-all',
+      'POSTMAN_CORE_PAYMENTS_BASELINE_COLLECTION_UID': 'col-base-repo-all',
+      'POSTMAN_CORE_PAYMENTS_SMOKE_COLLECTION_UID': 'col-smoke-repo-all',
+      'POSTMAN_CORE_PAYMENTS_CONTRACT_COLLECTION_UID': 'col-contract-repo-all'
+    });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        workspaceId: '',
+        baselineCollectionId: '',
+        smokeCollectionId: '',
+        contractCollectionId: ''
+      }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.getCollection).toHaveBeenCalledWith('col-base-repo-all');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-repo-all');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-contract-repo-all');
+    expect(postman.createEnvironment).toHaveBeenCalledWith('ws-repo-all', expect.any(String), expect.any(Array));
   });
 });

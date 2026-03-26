@@ -203,6 +203,21 @@ export class PostmanAssetsClient {
     return undefined;
   }
 
+  async getTeams(): Promise<Array<{ id: number; name: string; handle: string; organizationId?: number }>> {
+    const data = await this.request('/teams');
+    const teams = data?.data ?? [];
+    return Array.isArray(teams)
+      ? teams
+          .filter((t: any) => t?.id && t?.name)
+          .map((t: any) => ({
+            id: Number(t.id),
+            name: String(t.name),
+            handle: String(t.handle || ''),
+            ...(t.organizationId != null ? { organizationId: Number(t.organizationId) } : {})
+          }))
+      : [];
+  }
+
   async listMonitors(): Promise<Array<{uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string}>> {
     const response = await this.request('/monitors');
     const monitors = response?.monitors ?? [];

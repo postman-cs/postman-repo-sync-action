@@ -190,3 +190,77 @@ describe('discovery and validation methods', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('getTeams', () => {
+  it('returns teams with organizationId parsed from API response', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: [
+          { id: 1, name: 'Team Alpha', handle: 'alpha', organizationId: 100 },
+          { id: 2, name: 'Team Beta', handle: 'beta', organizationId: 100 },
+          { id: 3, name: 'Team Gamma', handle: 'gamma', organizationId: 200 }
+        ]
+      })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    const result = await client.getTeams();
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual({ id: 1, name: 'Team Alpha', handle: 'alpha', organizationId: 100 });
+    expect(result[1]).toEqual({ id: 2, name: 'Team Beta', handle: 'beta', organizationId: 100 });
+    expect(result[2]).toEqual({ id: 3, name: 'Team Gamma', handle: 'gamma', organizationId: 200 });
+  });
+
+  it('returns empty array when teams list is empty', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ data: [] })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    const result = await client.getTeams();
+    expect(result).toEqual([]);
+  });
+
+  it('filters out teams missing id or name', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: [
+          { id: 1, name: 'Valid Team', handle: 'valid' },
+          { id: null, name: 'Missing ID', handle: 'no-id' },
+          { name: 'Missing ID 2', handle: 'no-id-2' },
+          { id: 4, name: '', handle: 'empty-name' }
+        ]
+      })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    const result = await client.getTeams();
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(1);
+  });
+});
+
+describe('getMe', () => {
+  it('returns user object with teamId from API', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        user: {
+          id: 'user-123',
+          name: 'Test User',
+          teamId: 12345
+        }
+      })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    const result = await client.getMe();
+    expect(result).toEqual({
+      user: { id: 'user-123', name: 'Test User', teamId: 12345 }
+    });
+  });
+
+  it('returns null when response has no body', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    const result = await client.getMe();
+    expect(result).toBeNull();
+  });
+});

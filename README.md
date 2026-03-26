@@ -207,6 +207,16 @@ Collections are exported in the Postman Collection v3 format, producing a multi-
 
 Folder and request **names are truncated to 120 characters** per path segment when writing files (with an ellipsis). That avoids `ENAMETOOLONG` when Postman item names are very long (for example, copied from long OpenAPI operation summaries).
 
+### Lifecycle and versioning
+
+`collection-sync-mode` controls collection lifecycle behavior:
+
+- `refresh` (default): always refresh assets and persist current pointer repo variables.
+- `reuse`: reuse existing assets when possible and persist current pointers only when `set-as-current` is true.
+- `version`: require a release label (`release-label` input or `github-ref-name`), suffix collection export directories and mock/monitor names with that release label, and skip cached `MOCK_URL` and `SMOKE_MONITOR_UID` repo variable reuse.
+
+`spec-sync-mode` supports `update` (default) and `version`. If either sync mode is `version`, this action requires a derived or explicit release label.
+
 ## Inputs
 
 | Input | Default | Notes |
@@ -216,9 +226,13 @@ Folder and request **names are truncated to 120 characters** per path segment wh
 | `project-name` | | Service name used for environments, mock servers, and monitors. |
 | `workspace-id` | | Workspace identifier used for workspace-link and export metadata. |
 | `baseline-collection-id` | | Baseline collection exported into the repo and used for mock generation. |
-| `monitor-type` | `cloud` | Type of monitor to create (`cloud` or `cli`). `cli` uses GitHub Actions cron.
+| `monitor-type` | `cloud` | Type of monitor to create (`cloud` or `cli`). `cli` uses GitHub Actions cron. |
 | `smoke-collection-id` | | Smoke collection used for monitor creation. |
 | `contract-collection-id` | | Contract collection exported into the repo. |
+| `collection-sync-mode` | `refresh` | Collection lifecycle mode: `refresh`, `reuse`, or `version`. |
+| `spec-sync-mode` | `update` | Spec lifecycle mode: `update` or `version`. |
+| `release-label` | | Optional release label for versioned naming. Falls back to `github-ref-name` when omitted. |
+| `set-as-current` | `true` | Controls current pointer repo variable updates for non-`refresh` modes. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL (GitHub or GitLab). Defaults to `https://github.com/$GITHUB_REPOSITORY` on GitHub Actions, or `$CI_PROJECT_URL` on GitLab CI. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |

@@ -24035,9 +24035,16 @@ function extractDescription(value) {
   }
   return void 0;
 }
+var MAX_PATH_SEGMENT_CHARS = 120;
 function sanitizePathSegment(value, fallback) {
-  const normalized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
-  return normalized || fallback;
+  let normalized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized.length > MAX_PATH_SEGMENT_CHARS) {
+    normalized = `${normalized.slice(0, MAX_PATH_SEGMENT_CHARS - 1)}\u2026`;
+  }
+  return normalized;
 }
 function buildUniqueRef(baseName, kind, usedRefs) {
   const fallback = kind === "folder" ? "Folder" : "Request";
@@ -25306,6 +25313,16 @@ var PostmanAssetsClient = class {
     }
     return void 0;
   }
+  async getTeams() {
+    const data = await this.request("/teams");
+    const teams = data?.data ?? [];
+    return Array.isArray(teams) ? teams.filter((t) => t?.id && t?.name).map((t) => ({
+      id: Number(t.id),
+      name: String(t.name),
+      handle: String(t.handle || ""),
+      ...t.organizationId != null ? { organizationId: Number(t.organizationId) } : {}
+    })) : [];
+  }
   async listMonitors() {
     const response = await this.request("/monitors");
     const monitors = response?.monitors ?? [];
@@ -25451,6 +25468,41 @@ function normalizeRepoWriteMode(value) {
   }
   return "commit-and-push";
 }
+function normalizeCollectionSyncMode(value) {
+  if (value === "reuse" || value === "refresh" || value === "version") {
+    return value;
+  }
+  return "refresh";
+}
+function normalizeSpecSyncMode(value) {
+  if (value === "update" || value === "version") {
+    return value;
+  }
+  return "update";
+}
+function normalizeReleaseLabel(value) {
+  const cleaned = normalizeInputValue(value).replace(/^refs\/heads\//, "").replace(/^refs\/tags\//, "").replace(/\s+/g, "-").replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-").replace(/^[._-]+|[._-]+$/g, "");
+  return cleaned;
+}
+function deriveReleaseLabel(inputs) {
+  const explicit = normalizeReleaseLabel(inputs.releaseLabel || "");
+  if (explicit) {
+    return explicit;
+  }
+  return normalizeReleaseLabel(inputs.githubRefName);
+}
+function createAssetProjectName(inputs, releaseLabel) {
+  if ((inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version") && releaseLabel) {
+    return `${inputs.projectName} ${releaseLabel}`;
+  }
+  return inputs.projectName;
+}
+function shouldPersistCurrentPointers(inputs) {
+  if (inputs.collectionSyncMode === "refresh") {
+    return true;
+  }
+  return inputs.setAsCurrent;
+}
 function normalizeGithubAuthMode(value) {
   if (value === "github_token_first" || value === "fallback_pat_first" || value === "app_token") {
     return value;
@@ -25474,6 +25526,10 @@ function resolveInputs(env = process.env) {
     baselineCollectionId: getInput("baseline-collection-id", env),
     smokeCollectionId: getInput("smoke-collection-id", env),
     contractCollectionId: getInput("contract-collection-id", env),
+    collectionSyncMode: normalizeCollectionSyncMode(getInput("collection-sync-mode", env) || "refresh"),
+    specSyncMode: normalizeSpecSyncMode(getInput("spec-sync-mode", env) || "update"),
+    releaseLabel: normalizeReleaseLabel(getInput("release-label", env)) || void 0,
+    setAsCurrent: parseBooleanInput(getInput("set-as-current", env), true),
     environments: environments.length > 0 ? environments : ["prod"],
     repoUrl: repoContext.repoUrl || "",
     integrationBackend: getInput("integration-backend", env) || "bifrost",
@@ -25594,6 +25650,10 @@ function readActionInputs(actionCore) {
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, "baseline-collection-id"),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, "smoke-collection-id"),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, "contract-collection-id"),
+    INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, "collection-sync-mode") || "refresh",
+    INPUT_SPEC_SYNC_MODE: readInput(actionCore, "spec-sync-mode") || "update",
+    INPUT_RELEASE_LABEL: readInput(actionCore, "release-label"),
+    INPUT_SET_AS_CURRENT: readInput(actionCore, "set-as-current") || "true",
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, "environments-json") || '["prod"]',
     INPUT_REPO_URL: readInput(actionCore, "repo-url"),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, "integration-backend") || "bifrost",
@@ -25747,6 +25807,9 @@ async function upsertEnvironments(inputs, dependencies) {
 function ensureDir(path4) {
   (0, import_node_fs.mkdirSync)(path4, { recursive: true });
 }
+function getCollectionDirectoryName(kind, projectName) {
+  return `[${kind}] ${projectName}`;
+}
 var VOLATILE_KEYS = /* @__PURE__ */ new Set([
   "createdAt",
   "updatedAt",
@@ -25804,7 +25867,7 @@ function assertPathWithinCwd(targetPath, fieldName) {
     throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
   }
 }
-async function exportArtifacts(inputs, dependencies, envUids) {
+async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) {
   if (!inputs.workspaceId) {
     return;
   }
@@ -25827,22 +25890,25 @@ async function exportArtifacts(inputs, dependencies, envUids) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Baseline] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Baseline] ${inputs.projectName}`] = inputs.baselineCollectionId;
+    const dirName = getCollectionDirectoryName("Baseline", assetProjectName);
+    await convertAndSplitCollection(col, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] = inputs.baselineCollectionId;
   }
   if (inputs.smokeCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.smokeCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Smoke] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Smoke] ${inputs.projectName}`] = inputs.smokeCollectionId;
+    const dirName = getCollectionDirectoryName("Smoke", assetProjectName);
+    await convertAndSplitCollection(col, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] = inputs.smokeCollectionId;
   }
   if (inputs.contractCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.contractCollectionId)
     );
-    await convertAndSplitCollection(col, `${collectionsDir}/[Contract] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Contract] ${inputs.projectName}`] = inputs.contractCollectionId;
+    const dirName = getCollectionDirectoryName("Contract", assetProjectName);
+    await convertAndSplitCollection(col, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] = inputs.contractCollectionId;
   }
   for (const [envName, envUid] of Object.entries(envUids)) {
     writeJsonFile(
@@ -25868,6 +25934,9 @@ function renderCiWorkflow(inputs) {
 }
 async function persistRepoVariables(inputs, outputs, dependencies, envUids) {
   if (!dependencies.github) {
+    return;
+  }
+  if (!shouldPersistCurrentPointers(inputs)) {
     return;
   }
   const primaryEnvName = envUids.prod ? "prod" : inputs.environments[0] || "prod";
@@ -25960,6 +26029,43 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
 async function runRepoSync(inputs, dependencies) {
   const outputs = createOutputs(inputs);
   let pushed = false;
+  const persistCurrentPointers = shouldPersistCurrentPointers(inputs);
+  const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
+  const releaseLabel = deriveReleaseLabel(inputs);
+  if (versionRequested && !releaseLabel) {
+    throw new Error("release-label is required when collection-sync-mode or spec-sync-mode is version");
+  }
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
+  if (dependencies.github) {
+    if (!inputs.workspaceId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, "WORKSPACE_ID");
+      if (stored) {
+        inputs.workspaceId = stored;
+        dependencies.core.info(`Resolved workspace-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.baselineCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, "BASELINE_COLLECTION_UID");
+      if (stored) {
+        inputs.baselineCollectionId = stored;
+        dependencies.core.info(`Resolved baseline-collection-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.smokeCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, "SMOKE_COLLECTION_UID");
+      if (stored) {
+        inputs.smokeCollectionId = stored;
+        dependencies.core.info(`Resolved smoke-collection-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.contractCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, "CONTRACT_COLLECTION_UID");
+      if (stored) {
+        inputs.contractCollectionId = stored;
+        dependencies.core.info(`Resolved contract-collection-id from repo variable: ${stored}`);
+      }
+    }
+  }
   const envUids = await upsertEnvironments(inputs, dependencies);
   outputs["environment-uids-json"] = JSON.stringify(envUids);
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -25997,7 +26103,7 @@ async function runRepoSync(inputs, dependencies) {
           dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
         }
       }
-      if (!resolvedMockUrl && dependencies.github) {
+      if (!resolvedMockUrl && dependencies.github && inputs.collectionSyncMode !== "version") {
         const cached = await readVariable(dependencies.github, inputs.projectName, "MOCK_URL") || "";
         if (cached) {
           resolvedMockUrl = cached;
@@ -26007,19 +26113,21 @@ async function runRepoSync(inputs, dependencies) {
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
-          `${inputs.projectName} Mock`,
+          `${assetProjectName} Mock`,
           inputs.baselineCollectionId,
           mockEnvUid
         );
         resolvedMockUrl = mock.url;
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
-        await writeVariable(
-          dependencies.github,
-          inputs.projectName,
-          "MOCK_URL",
-          resolvedMockUrl,
-          dependencies.core
-        );
+        if (dependencies.github && resolvedMockUrl && persistCurrentPointers) {
+          await writeVariable(
+            dependencies.github,
+            inputs.projectName,
+            "MOCK_URL",
+            resolvedMockUrl,
+            dependencies.core
+          );
+        }
       }
       outputs["mock-url"] = resolvedMockUrl;
     }
@@ -26060,7 +26168,7 @@ async function runRepoSync(inputs, dependencies) {
           dependencies.core.info(`Discovered existing monitor for collection ${inputs.smokeCollectionId}: ${resolvedMonitorId}`);
         }
       }
-      if (!resolvedMonitorId && dependencies.github) {
+      if (!resolvedMonitorId && dependencies.github && inputs.collectionSyncMode !== "version") {
         const cached = await readVariable(dependencies.github, inputs.projectName, "SMOKE_MONITOR_UID") || "";
         if (cached) {
           const valid = await dependencies.postman.monitorExists(cached);
@@ -26075,19 +26183,21 @@ async function runRepoSync(inputs, dependencies) {
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
-          `${inputs.projectName} - Smoke Monitor`,
+          `${assetProjectName} - Smoke Monitor`,
           inputs.smokeCollectionId,
           monitorEnvUid,
           effectiveCron || void 0
         );
         dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? "" : " (disabled \u2014 no cron configured)"}`);
-        await writeVariable(
-          dependencies.github,
-          inputs.projectName,
-          "SMOKE_MONITOR_UID",
-          resolvedMonitorId,
-          dependencies.core
-        );
+        if (dependencies.github && resolvedMonitorId && persistCurrentPointers) {
+          await writeVariable(
+            dependencies.github,
+            inputs.projectName,
+            "SMOKE_MONITOR_UID",
+            resolvedMonitorId,
+            dependencies.core
+          );
+        }
       }
       outputs["monitor-id"] = resolvedMonitorId;
     } else if (disableMonitor) {
@@ -26108,7 +26218,7 @@ async function runRepoSync(inputs, dependencies) {
       );
     }
   }
-  await exportArtifacts(inputs, dependencies, envUids);
+  await exportArtifacts(inputs, dependencies, envUids, assetProjectName);
   await persistRepoVariables(inputs, outputs, dependencies, envUids);
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
   outputs["commit-sha"] = commit.commitSha;
@@ -26192,6 +26302,24 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       actionCore.warning("No GitHub token provided; cannot save generated POSTMAN_API_KEY secret.");
     } else {
       actionCore.info("Skipping generated POSTMAN_API_KEY GitHub secret persistence for this run.");
+    }
+  }
+  if (!inputs.orgMode && teamId) {
+    try {
+      const client = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+      const teams = await client.getTeams();
+      if (teams.length > 1 && teams.every((t) => t.organizationId == null)) {
+        actionCore.warning(
+          "GET /teams returned multiple teams but none include organizationId. Org-mode auto-detection may be degraded due to an upstream API change. Set org-mode and team-id explicitly if Bifrost calls fail."
+        );
+      }
+      const orgIds = new Set(teams.filter((t) => t.organizationId != null).map((t) => t.organizationId));
+      const meTeamId = parseInt(teamId, 10);
+      if (teams.length > 1 && orgIds.size === 1 && orgIds.has(meTeamId)) {
+        inputs.orgMode = true;
+        actionCore.info(`Org-mode auto-detected (${teams.length} sub-teams under org ${meTeamId}). x-entity-team-id will be included in Bifrost calls.`);
+      }
+    } catch {
     }
   }
   return { apiKey, teamId };
@@ -26398,6 +26526,10 @@ function parseCliArgs(argv, env = process.env) {
     "baseline-collection-id",
     "smoke-collection-id",
     "contract-collection-id",
+    "collection-sync-mode",
+    "spec-sync-mode",
+    "release-label",
+    "set-as-current",
     "environments-json",
     "repo-url",
     "integration-backend",

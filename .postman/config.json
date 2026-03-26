@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1",
   "workspace": {
-    "id": "ws-123"
+    "id": "ws-repo-all"
   },
   "collectionPaths": [
     "postman/collections/"

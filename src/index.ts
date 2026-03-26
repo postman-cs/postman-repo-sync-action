@@ -36,6 +36,10 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  collectionSyncMode: 'reuse' | 'refresh' | 'version';
+  specSyncMode: 'update' | 'version';
+  releaseLabel?: string;
+  setAsCurrent: boolean;
   environments: string[];
   repoUrl: string;
   integrationBackend: string;
@@ -189,6 +193,56 @@ function normalizeRepoWriteMode(value: string): 'none' | 'commit-only' | 'commit
   return 'commit-and-push';
 }
 
+function normalizeCollectionSyncMode(value: string): 'reuse' | 'refresh' | 'version' {
+  if (value === 'reuse' || value === 'refresh' || value === 'version') {
+    return value;
+  }
+  return 'refresh';
+}
+
+function normalizeSpecSyncMode(value: string): 'update' | 'version' {
+  if (value === 'update' || value === 'version') {
+    return value;
+  }
+  return 'update';
+}
+
+function normalizeReleaseLabel(value: string): string {
+  const cleaned = normalizeInputValue(value)
+    .replace(/^refs\/heads\//, '')
+    .replace(/^refs\/tags\//, '')
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return cleaned;
+}
+
+function deriveReleaseLabel(inputs: Pick<ResolvedInputs, 'releaseLabel' | 'githubRefName'>): string {
+  const explicit = normalizeReleaseLabel(inputs.releaseLabel || '');
+  if (explicit) {
+    return explicit;
+  }
+  return normalizeReleaseLabel(inputs.githubRefName);
+}
+
+function createAssetProjectName(
+  inputs: Pick<ResolvedInputs, 'projectName' | 'collectionSyncMode' | 'specSyncMode'>,
+  releaseLabel: string
+): string {
+  if ((inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version') && releaseLabel) {
+    return `${inputs.projectName} ${releaseLabel}`;
+  }
+  return inputs.projectName;
+}
+
+function shouldPersistCurrentPointers(inputs: Pick<ResolvedInputs, 'collectionSyncMode' | 'setAsCurrent'>): boolean {
+  if (inputs.collectionSyncMode === 'refresh') {
+    return true;
+  }
+  return inputs.setAsCurrent;
+}
+
 function normalizeGithubAuthMode(
   value: string
 ): 'github_token_first' | 'fallback_pat_first' | 'app_token' {
@@ -221,6 +275,10 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     baselineCollectionId: getInput('baseline-collection-id', env),
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
+    collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
+    specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
+    releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
+    setAsCurrent: parseBooleanInput(getInput('set-as-current', env), true),
     environments: environments.length > 0 ? environments : ['prod'],
     repoUrl: repoContext.repoUrl || '',
     integrationBackend: getInput('integration-backend', env) || 'bifrost',
@@ -372,6 +430,10 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
+    INPUT_SPEC_SYNC_MODE: readInput(actionCore, 'spec-sync-mode') || 'update',
+    INPUT_RELEASE_LABEL: readInput(actionCore, 'release-label'),
+    INPUT_SET_AS_CURRENT: readInput(actionCore, 'set-as-current') || 'true',
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, 'environments-json') || '["prod"]',
     INPUT_REPO_URL: readInput(actionCore, 'repo-url'),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, 'integration-backend') || 'bifrost',
@@ -549,6 +611,10 @@ function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
+function getCollectionDirectoryName(kind: 'Baseline' | 'Smoke' | 'Contract', projectName: string): string {
+  return `[${kind}] ${projectName}`;
+}
+
 /**
  * Keys that Postman regenerates on every export even when the underlying
  * content has not changed. Stripping them prevents cosmetic no-op commits.
@@ -628,7 +694,8 @@ export function assertPathWithinCwd(targetPath: string, fieldName: string): void
 async function exportArtifacts(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
-  envUids: Record<string, string>
+  envUids: Record<string, string>,
+  assetProjectName: string
 ): Promise<void> {
   if (!inputs.workspaceId) {
     return;
@@ -656,24 +723,27 @@ async function exportArtifacts(
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Baseline] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Baseline] ${inputs.projectName}`] =
+    const dirName = getCollectionDirectoryName('Baseline', assetProjectName);
+    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.baselineCollectionId;
   }
   if (inputs.smokeCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.smokeCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Smoke] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Smoke] ${inputs.projectName}`] =
+    const dirName = getCollectionDirectoryName('Smoke', assetProjectName);
+    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.smokeCollectionId;
   }
   if (inputs.contractCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.contractCollectionId)
     );
-    await convertAndSplitCollection(col as any, `${collectionsDir}/[Contract] ${inputs.projectName}`);
-    manifestCollections[`../${collectionsDir}/[Contract] ${inputs.projectName}`] =
+    const dirName = getCollectionDirectoryName('Contract', assetProjectName);
+    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.contractCollectionId;
   }
 
@@ -710,6 +780,10 @@ async function persistRepoVariables(
   envUids: Record<string, string>
 ): Promise<void> {
   if (!dependencies.github) {
+    return;
+  }
+
+  if (!shouldPersistCurrentPointers(inputs)) {
     return;
   }
 
@@ -827,6 +901,45 @@ export async function runRepoSync(
 ): Promise<RepoSyncOutputs> {
   const outputs = createOutputs(inputs);
   let pushed = false;
+  const persistCurrentPointers = shouldPersistCurrentPointers(inputs);
+  const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
+  const releaseLabel = deriveReleaseLabel(inputs);
+  if (versionRequested && !releaseLabel) {
+    throw new Error('release-label is required when collection-sync-mode or spec-sync-mode is version');
+  }
+  const assetProjectName = createAssetProjectName(inputs, releaseLabel);
+
+  // Auto-resolve asset IDs from repo variables when not provided explicitly
+  if (dependencies.github) {
+    if (!inputs.workspaceId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, 'WORKSPACE_ID');
+      if (stored) {
+        inputs.workspaceId = stored;
+        dependencies.core.info(`Resolved workspace-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.baselineCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, 'BASELINE_COLLECTION_UID');
+      if (stored) {
+        inputs.baselineCollectionId = stored;
+        dependencies.core.info(`Resolved baseline-collection-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.smokeCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, 'SMOKE_COLLECTION_UID');
+      if (stored) {
+        inputs.smokeCollectionId = stored;
+        dependencies.core.info(`Resolved smoke-collection-id from repo variable: ${stored}`);
+      }
+    }
+    if (!inputs.contractCollectionId) {
+      const stored = await readVariable(dependencies.github, inputs.projectName, 'CONTRACT_COLLECTION_UID');
+      if (stored) {
+        inputs.contractCollectionId = stored;
+        dependencies.core.info(`Resolved contract-collection-id from repo variable: ${stored}`);
+      }
+    }
+  }
 
   const envUids = await upsertEnvironments(inputs, dependencies);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
@@ -877,7 +990,7 @@ export async function runRepoSync(
         }
       }
 
-      if (!resolvedMockUrl && dependencies.github) {
+      if (!resolvedMockUrl && dependencies.github && inputs.collectionSyncMode !== 'version') {
         const cached = (await readVariable(dependencies.github, inputs.projectName, 'MOCK_URL')) || '';
         if (cached) {
           resolvedMockUrl = cached;
@@ -888,19 +1001,21 @@ export async function runRepoSync(
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
-          `${inputs.projectName} Mock`,
+          `${assetProjectName} Mock`,
           inputs.baselineCollectionId,
           mockEnvUid
         );
         resolvedMockUrl = mock.url;
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
-        await writeVariable(
-          dependencies.github,
-          inputs.projectName,
-          'MOCK_URL',
-          resolvedMockUrl,
-          dependencies.core
-        );
+        if (dependencies.github && resolvedMockUrl && persistCurrentPointers) {
+          await writeVariable(
+            dependencies.github,
+            inputs.projectName,
+            'MOCK_URL',
+            resolvedMockUrl,
+            dependencies.core
+          );
+        }
       }
 
       outputs['mock-url'] = resolvedMockUrl;
@@ -948,7 +1063,7 @@ export async function runRepoSync(
         }
       }
 
-      if (!resolvedMonitorId && dependencies.github) {
+      if (!resolvedMonitorId && dependencies.github && inputs.collectionSyncMode !== 'version') {
         const cached =
           (await readVariable(dependencies.github, inputs.projectName, 'SMOKE_MONITOR_UID')) || '';
         if (cached) {
@@ -965,19 +1080,21 @@ export async function runRepoSync(
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
-          `${inputs.projectName} - Smoke Monitor`,
+          `${assetProjectName} - Smoke Monitor`,
           inputs.smokeCollectionId,
           monitorEnvUid,
           effectiveCron || undefined
         );
         dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured)'}`);
-        await writeVariable(
-          dependencies.github,
-          inputs.projectName,
-          'SMOKE_MONITOR_UID',
-          resolvedMonitorId,
-          dependencies.core
-        );
+        if (dependencies.github && resolvedMonitorId && persistCurrentPointers) {
+          await writeVariable(
+            dependencies.github,
+            inputs.projectName,
+            'SMOKE_MONITOR_UID',
+            resolvedMonitorId,
+            dependencies.core
+          );
+        }
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
@@ -1006,7 +1123,7 @@ export async function runRepoSync(
     }
   }
 
-  await exportArtifacts(inputs, dependencies, envUids);
+  await exportArtifacts(inputs, dependencies, envUids, assetProjectName);
   await persistRepoVariables(inputs, outputs, dependencies, envUids);
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
@@ -1106,6 +1223,30 @@ export async function resolvePostmanApiKeyAndTeamId(
       actionCore.warning('No GitHub token provided; cannot save generated POSTMAN_API_KEY secret.');
     } else {
       actionCore.info('Skipping generated POSTMAN_API_KEY GitHub secret persistence for this run.');
+    }
+  }
+
+
+  // Auto-detect org-mode when not explicitly set
+  if (!inputs.orgMode && teamId) {
+    try {
+      const client = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+      const teams = await client.getTeams();
+      if (teams.length > 1 && teams.every(t => t.organizationId == null)) {
+        actionCore.warning(
+          'GET /teams returned multiple teams but none include organizationId. ' +
+          'Org-mode auto-detection may be degraded due to an upstream API change. ' +
+          'Set org-mode and team-id explicitly if Bifrost calls fail.'
+        );
+      }
+      const orgIds = new Set(teams.filter(t => t.organizationId != null).map(t => t.organizationId));
+      const meTeamId = parseInt(teamId, 10);
+      if (teams.length > 1 && orgIds.size === 1 && orgIds.has(meTeamId)) {
+        inputs.orgMode = true;
+        actionCore.info(`Org-mode auto-detected (${teams.length} sub-teams under org ${meTeamId}). x-entity-team-id will be included in Bifrost calls.`);
+      }
+    } catch {
+      // Non-fatal: if detection fails, orgMode stays false (header omitted) which is safe
     }
   }
 

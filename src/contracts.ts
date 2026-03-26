@@ -34,6 +34,9 @@ export const postmanRepoSyncActionContract: {
     integrationBackend: string;
     artifactDir: string;
     repoWriteMode: string;
+    collectionSyncMode: string;
+    specSyncMode: string;
+    setAsCurrent: boolean;
     workspaceLinkEnabled: boolean;
     environmentSyncEnabled: boolean;
     committerName: string;
@@ -53,6 +56,9 @@ export const postmanRepoSyncActionContract: {
     integrationBackend: 'bifrost',
     artifactDir: 'postman',
     repoWriteMode: 'commit-and-push',
+    collectionSyncMode: 'refresh',
+    specSyncMode: 'update',
+    setAsCurrent: true,
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,
     committerName: 'Postman CSE',
@@ -94,6 +100,25 @@ export const postmanRepoSyncActionContract: {
     'contract-collection-id': {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
+    },
+    'collection-sync-mode': {
+      description: 'Collection sync lifecycle mode (refresh, reuse, or version).',
+      required: false,
+      default: 'refresh'
+    },
+    'spec-sync-mode': {
+      description: 'Spec sync lifecycle mode (update or version).',
+      required: false,
+      default: 'update'
+    },
+    'release-label': {
+      description: 'Optional release label used for versioned naming.',
+      required: false
+    },
+    'set-as-current': {
+      description: 'Whether this run should update current repo pointer variables.',
+      required: false,
+      default: 'true'
     },
     'monitor-id': {
       description: 'Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one.',
