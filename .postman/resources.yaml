@@ -7,8 +7,6 @@ localResources:
     - ../postman/collections/[Contract] core-payments
   environments:
     - ../postman/environments/prod.postman_environment.json
-  specs:
-    - ../index.yaml
 cloudResources:
   collections:
     ../postman/collections/[Baseline] core-payments: col-baseline

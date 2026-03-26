@@ -233,6 +233,10 @@ export const postmanRepoSyncActionContract: {
     'spec-id': {
       description: 'Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.',
       required: false
+    },
+    'spec-path': {
+      description: 'Optional repo-root-relative path to the local spec file for resources/workflows metadata.',
+      required: false
     }
   },
   outputs: {
