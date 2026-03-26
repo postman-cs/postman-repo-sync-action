@@ -12,7 +12,6 @@ import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 import { convertAndSplitCollection } from './postman-v3/converter.js';
 import { CI_WORKFLOW_TEMPLATE } from './lib/ci-workflow-template.js';
-import { GitHubApiClient } from './lib/github/github-api-client.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext } from './lib/repo/context.js';
 import {
@@ -40,7 +39,6 @@ export interface ResolvedInputs {
   collectionSyncMode: 'reuse' | 'refresh' | 'version';
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
-  setAsCurrent: boolean;
   environments: string[];
   repoUrl: string;
   integrationBackend: string;
@@ -60,7 +58,6 @@ export interface ResolvedInputs {
   postmanAccessToken: string;
   githubToken: string;
   ghFallbackToken: string;
-  githubAuthMode: 'github_token_first' | 'fallback_pat_first' | 'app_token';
   ciWorkflowBase64: string;
   generateCiWorkflow: boolean;
   monitorType: string;
@@ -74,7 +71,6 @@ export interface ResolvedInputs {
   sslClientPassphrase: string;
   sslExtraCaCerts: string;
   specId: string;
-  releasesJson: string;
   teamId: string;
   repository: string;
 }
@@ -125,7 +121,10 @@ export interface RepoSyncDependencies {
     | 'findMonitorByCollection'
     | 'findMockByCollection'
   >;
-  github?: Pick<GitHubApiClient, 'getRepositoryVariable' | 'setRepositoryVariable'>;
+  github?: {
+    getRepositoryVariable(name: string): Promise<string>;
+    setRepositoryVariable(name: string, value: string): Promise<void>;
+  };
   internalIntegration?: Pick<
     InternalIntegrationAdapter,
     'associateSystemEnvironments' | 'connectWorkspaceToRepository'
@@ -239,26 +238,6 @@ function createAssetProjectName(
   return inputs.projectName;
 }
 
-function shouldPersistCurrentPointers(inputs: Pick<ResolvedInputs, 'collectionSyncMode' | 'setAsCurrent'>): boolean {
-  if (inputs.collectionSyncMode === 'refresh') {
-    return true;
-  }
-  return inputs.setAsCurrent;
-}
-
-function normalizeGithubAuthMode(
-  value: string
-): 'github_token_first' | 'fallback_pat_first' | 'app_token' {
-  if (
-    value === 'github_token_first' ||
-    value === 'fallback_pat_first' ||
-    value === 'app_token'
-  ) {
-    return value;
-  }
-  return 'github_token_first';
-}
-
 export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInputs {
   const repoContext = detectRepoContext(
     {
@@ -279,11 +258,9 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
     specId: getInput('spec-id', env),
-    releasesJson: getInput('releases-json', env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
     releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
-    setAsCurrent: parseBooleanInput(getInput('set-as-current', env), true),
     environments: environments.length > 0 ? environments : ['prod'],
     repoUrl: repoContext.repoUrl || '',
     integrationBackend: getInput('integration-backend', env) || 'bifrost',
@@ -306,7 +283,6 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanAccessToken: getInput('postman-access-token', env),
     githubToken: getInput('github-token', env),
     ghFallbackToken: getInput('gh-fallback-token', env),
-    githubAuthMode: normalizeGithubAuthMode(getInput('github-auth-mode', env) || 'github_token_first'),
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
     generateCiWorkflow: parseBooleanInput(getInput('generate-ci-workflow', env), true),
     monitorType: getInput('monitor-type', env) || 'cloud',
@@ -339,6 +315,57 @@ function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentVa
   ];
 }
 
+type CloudResourceMap = Record<string, string>;
+
+type PostmanResourcesState = {
+  workspace?: {
+    id?: string;
+  };
+  cloudResources?: {
+    collections?: CloudResourceMap;
+    environments?: CloudResourceMap;
+    specs?: CloudResourceMap;
+  };
+};
+
+function readResourcesState(): PostmanResourcesState | null {
+  try {
+    return loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as PostmanResourcesState;
+  } catch {
+    return null;
+  }
+}
+
+function findCloudResourceId(
+  map: CloudResourceMap | undefined,
+  matcher: (filePath: string) => boolean
+): string | undefined {
+  if (!map) {
+    return undefined;
+  }
+
+  const match = Object.entries(map).find(([filePath]) => matcher(filePath));
+  return match?.[1];
+}
+
+function getEnvironmentUidsFromResources(
+  resourcesState: PostmanResourcesState | null
+): Record<string, string> {
+  const cloudEnvironments = resourcesState?.cloudResources?.environments;
+  if (!cloudEnvironments) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(cloudEnvironments)
+      .map(([filePath, uid]) => {
+        const match = filePath.match(/\/environments\/(.+)\.postman_environment\.json$/);
+        return match ? [match[1], uid] : null;
+      })
+      .filter((entry): entry is [string, string] => Boolean(entry))
+  );
+}
+
 function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
   return {
     'integration-backend': inputs.integrationBackend,
@@ -356,49 +383,6 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'repo-sync-summary-json': '{}',
     'commit-sha': ''
   };
-}
-
-function varName(projectName: string, baseName: string): string {
-  const slug = projectName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  return `POSTMAN_${slug}_${baseName}`;
-}
-
-async function readVariable(
-  github: { getRepositoryVariable(name: string): Promise<string> } | undefined,
-  projectName: string,
-  baseName: string
-): Promise<string | undefined> {
-  if (!github) return undefined;
-  const namespaced = await github.getRepositoryVariable(varName(projectName, baseName)).catch(() => undefined);
-  if (namespaced) return namespaced;
-  const legacy = await github.getRepositoryVariable(`POSTMAN_${baseName}`).catch(() => undefined);
-  return legacy || undefined;
-}
-
-async function persistVariable(
-  github: { setRepositoryVariable(name: string, value: string): Promise<void> } | undefined,
-  name: string,
-  value: string,
-  actionCore: { warning(msg: string): void }
-): Promise<void> {
-  if (!github || !value) return;
-  try {
-    await github.setRepositoryVariable(name, value);
-  } catch (err) {
-    actionCore.warning(`Failed to persist ${name}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-async function writeVariable(
-  github: { setRepositoryVariable(name: string, value: string): Promise<void> } | undefined,
-  projectName: string,
-  baseName: string,
-  value: string,
-  actionCore: { warning(msg: string): void }
-): Promise<void> {
-  if (!github || !value) return;
-  await persistVariable(github, varName(projectName, baseName), value, actionCore);
-  await persistVariable(github, `POSTMAN_${baseName}`, value, actionCore);
 }
 
 export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSecret'>): ResolvedInputs {
@@ -438,7 +422,6 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
     INPUT_SPEC_SYNC_MODE: readInput(actionCore, 'spec-sync-mode') || 'update',
     INPUT_RELEASE_LABEL: readInput(actionCore, 'release-label'),
-    INPUT_SET_AS_CURRENT: readInput(actionCore, 'set-as-current') || 'true',
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, 'environments-json') || '["prod"]',
     INPUT_REPO_URL: readInput(actionCore, 'repo-url'),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, 'integration-backend') || 'bifrost',
@@ -458,7 +441,6 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
-    INPUT_GITHUB_AUTH_MODE: readInput(actionCore, 'github-auth-mode') || 'github_token_first',
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, 'ci-workflow-base64'),
     INPUT_GENERATE_CI_WORKFLOW: readInput(actionCore, 'generate-ci-workflow'),
     INPUT_MONITOR_TYPE: readInput(actionCore, 'monitor-type') || 'cloud',
@@ -506,17 +488,9 @@ async function persistSslSecrets(
   actionCore: Pick<CoreLike, 'info' | 'warning'>,
   actionExec: ExecLike,
   repository: string,
-  githubClient?: Pick<GitHubApiClient, 'setRepositoryVariable'>,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
   if (!inputs.sslClientCert) {
-    return;
-  }
-
-  if (!githubClient) {
-    actionCore.warning(
-      'SSL inputs were provided but GitHub secret persistence is unavailable. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).'
-    );
     return;
   }
 
@@ -565,22 +539,15 @@ async function persistSslSecrets(
 
 async function upsertEnvironments(
   inputs: ResolvedInputs,
-  dependencies: RepoSyncDependencies
+  dependencies: RepoSyncDependencies,
+  resourcesState: PostmanResourcesState | null
 ): Promise<Record<string, string>> {
-  const envUids = { ...inputs.environmentUids };
+  const envUids = {
+    ...getEnvironmentUidsFromResources(resourcesState),
+    ...inputs.environmentUids
+  };
   if (!inputs.workspaceId) {
     return envUids;
-  }
-
-  if (dependencies.github) {
-    try {
-      const existing = await readVariable(dependencies.github, inputs.projectName, 'ENV_UIDS_JSON');
-      if (existing) {
-        Object.assign(envUids, parseJsonMap(existing));
-      }
-    } catch {
-      // no-op, missing variable is expected on first run
-    }
   }
 
   for (const envName of inputs.environments) {
@@ -599,13 +566,6 @@ async function upsertEnvironments(
       inputs.workspaceId,
       `${inputs.projectName} - ${envName}`,
       values
-    );
-    await writeVariable(
-      dependencies.github,
-      inputs.projectName,
-      'ENV_UIDS_JSON',
-      JSON.stringify(envUids),
-      dependencies.core
     );
   }
 
@@ -798,19 +758,6 @@ async function exportArtifacts(
     inputs.artifactDir,
     inputs.specId || undefined
   ));
-
-  if (inputs.releasesJson) {
-    try {
-      const releases = JSON.parse(inputs.releasesJson);
-      writeFileSync('.postman/releases.yaml', dumpYaml(releases, {
-        lineWidth: -1,
-        noRefs: true,
-        sortKeys: false
-      }));
-    } catch {
-      // Invalid JSON -- skip releases.yaml write
-    }
-  }
 }
 
 function renderCiWorkflow(inputs: ResolvedInputs): string {
@@ -818,56 +765,6 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
     return Buffer.from(inputs.ciWorkflowBase64, 'base64').toString('utf8');
   }
   return CI_WORKFLOW_TEMPLATE;
-}
-
-async function persistRepoVariables(
-  inputs: ResolvedInputs,
-  outputs: RepoSyncOutputs,
-  dependencies: RepoSyncDependencies,
-  envUids: Record<string, string>
-): Promise<void> {
-  if (!dependencies.github) {
-    return;
-  }
-
-  if (!shouldPersistCurrentPointers(inputs)) {
-    return;
-  }
-
-  const primaryEnvName = envUids.prod ? 'prod' : inputs.environments[0] || 'prod';
-  const primaryEnvUid = envUids[primaryEnvName] || Object.values(envUids)[0] || '';
-  const primaryBaseUrl = String(
-    inputs.envRuntimeUrls[primaryEnvName] || Object.values(inputs.envRuntimeUrls)[0] || ''
-  ).trim();
-
-  await writeVariable(
-    dependencies.github,
-    inputs.projectName,
-    'ENV_UIDS_JSON',
-    JSON.stringify(envUids),
-    dependencies.core
-  );
-  if (primaryEnvUid) {
-    await writeVariable(dependencies.github, inputs.projectName, 'ENVIRONMENT_UID', primaryEnvUid, dependencies.core);
-  }
-  if (primaryBaseUrl) {
-    await writeVariable(dependencies.github, inputs.projectName, 'RUNTIME_BASE_URL', primaryBaseUrl, dependencies.core);
-  }
-  if (Object.keys(inputs.envRuntimeUrls).length > 0) {
-    await writeVariable(
-      dependencies.github,
-      inputs.projectName,
-      'ENV_RUNTIME_URLS_JSON',
-      JSON.stringify(inputs.envRuntimeUrls),
-      dependencies.core
-    );
-  }
-  if (outputs['mock-url']) {
-    await writeVariable(dependencies.github, inputs.projectName, 'MOCK_URL', outputs['mock-url'], dependencies.core);
-  }
-  if (outputs['monitor-id']) {
-    await writeVariable(dependencies.github, inputs.projectName, 'SMOKE_MONITOR_UID', outputs['monitor-id'], dependencies.core);
-  }
 }
 
 function createRepoSummary(
@@ -948,75 +845,46 @@ export async function runRepoSync(
 ): Promise<RepoSyncOutputs> {
   const outputs = createOutputs(inputs);
   let pushed = false;
-  const persistCurrentPointers = shouldPersistCurrentPointers(inputs);
   const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
     throw new Error('release-label is required when collection-sync-mode or spec-sync-mode is version');
   }
   const assetProjectName = createAssetProjectName(inputs, releaseLabel);
+  const resourcesState = readResourcesState();
 
   // .postman/ file fallback (works for all CI providers, not just GitHub)
-  try {
-    const raw = readFileSync('.postman/resources.yaml', 'utf8');
-    const resourcesState = loadYaml(raw) as Record<string, unknown> | null;
-    if (resourcesState) {
-      const ws = (resourcesState.workspace as Record<string, string> | undefined);
-      if (!inputs.workspaceId && ws?.id) {
-        inputs.workspaceId = ws.id;
-        dependencies.core.info('Resolved workspace-id from .postman/resources.yaml');
-      }
-      const cloudCollections = (resourcesState.cloudResources as Record<string, unknown> | undefined)?.collections as Record<string, string> | undefined;
-      if (cloudCollections) {
-        if (!inputs.baselineCollectionId) {
-          const match = Object.entries(cloudCollections).find(([k]) => k.includes('[Baseline]'));
-          if (match) { inputs.baselineCollectionId = match[1]; dependencies.core.info('Resolved baseline-collection-id from .postman/resources.yaml'); }
-        }
-        if (!inputs.smokeCollectionId) {
-          const match = Object.entries(cloudCollections).find(([k]) => k.includes('[Smoke]'));
-          if (match) { inputs.smokeCollectionId = match[1]; dependencies.core.info('Resolved smoke-collection-id from .postman/resources.yaml'); }
-        }
-        if (!inputs.contractCollectionId) {
-          const match = Object.entries(cloudCollections).find(([k]) => k.includes('[Contract]'));
-          if (match) { inputs.contractCollectionId = match[1]; dependencies.core.info('Resolved contract-collection-id from .postman/resources.yaml'); }
-        }
-      }
+  if (resourcesState) {
+    if (!inputs.workspaceId && resourcesState.workspace?.id) {
+      inputs.workspaceId = resourcesState.workspace.id;
+      dependencies.core.info('Resolved workspace-id from .postman/resources.yaml');
     }
-  } catch { /* .postman/resources.yaml doesn't exist yet */ }
 
-  // Auto-resolve asset IDs from repo variables when not provided explicitly
-  if (dependencies.github) {
-    if (!inputs.workspaceId) {
-      const stored = await readVariable(dependencies.github, inputs.projectName, 'WORKSPACE_ID');
-      if (stored) {
-        inputs.workspaceId = stored;
-        dependencies.core.info(`Resolved workspace-id from repo variable: ${stored}`);
-      }
-    }
+    const cloudCollections = resourcesState.cloudResources?.collections;
     if (!inputs.baselineCollectionId) {
-      const stored = await readVariable(dependencies.github, inputs.projectName, 'BASELINE_COLLECTION_UID');
-      if (stored) {
-        inputs.baselineCollectionId = stored;
-        dependencies.core.info(`Resolved baseline-collection-id from repo variable: ${stored}`);
+      inputs.baselineCollectionId =
+        findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Baseline]')) || '';
+      if (inputs.baselineCollectionId) {
+        dependencies.core.info('Resolved baseline-collection-id from .postman/resources.yaml');
       }
     }
     if (!inputs.smokeCollectionId) {
-      const stored = await readVariable(dependencies.github, inputs.projectName, 'SMOKE_COLLECTION_UID');
-      if (stored) {
-        inputs.smokeCollectionId = stored;
-        dependencies.core.info(`Resolved smoke-collection-id from repo variable: ${stored}`);
+      inputs.smokeCollectionId =
+        findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Smoke]')) || '';
+      if (inputs.smokeCollectionId) {
+        dependencies.core.info('Resolved smoke-collection-id from .postman/resources.yaml');
       }
     }
     if (!inputs.contractCollectionId) {
-      const stored = await readVariable(dependencies.github, inputs.projectName, 'CONTRACT_COLLECTION_UID');
-      if (stored) {
-        inputs.contractCollectionId = stored;
-        dependencies.core.info(`Resolved contract-collection-id from repo variable: ${stored}`);
+      inputs.contractCollectionId =
+        findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Contract]')) || '';
+      if (inputs.contractCollectionId) {
+        dependencies.core.info('Resolved contract-collection-id from .postman/resources.yaml');
       }
     }
   }
 
-  const envUids = await upsertEnvironments(inputs, dependencies);
+  const envUids = await upsertEnvironments(inputs, dependencies, resourcesState);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
 
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -1065,14 +933,6 @@ export async function runRepoSync(
         }
       }
 
-      if (!resolvedMockUrl && dependencies.github && inputs.collectionSyncMode !== 'version') {
-        const cached = (await readVariable(dependencies.github, inputs.projectName, 'MOCK_URL')) || '';
-        if (cached) {
-          resolvedMockUrl = cached;
-          dependencies.core.info(`Reusing mock from repo variable: ${resolvedMockUrl}`);
-        }
-      }
-
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
@@ -1082,15 +942,6 @@ export async function runRepoSync(
         );
         resolvedMockUrl = mock.url;
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
-        if (dependencies.github && resolvedMockUrl && persistCurrentPointers) {
-          await writeVariable(
-            dependencies.github,
-            inputs.projectName,
-            'MOCK_URL',
-            resolvedMockUrl,
-            dependencies.core
-          );
-        }
       }
 
       outputs['mock-url'] = resolvedMockUrl;
@@ -1099,25 +950,9 @@ export async function runRepoSync(
 
   if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
-    let disableMonitor = false;
-
     let effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : '';
-    if (!effectiveCron && dependencies.github) {
-      const storedCron = (await readVariable(
-        dependencies.github,
-        inputs.projectName,
-        'MONITOR_CRON_SCHEDULE'
-      )) || '';
-      if (storedCron) {
-        if (storedCron.toLowerCase() === 'disabled' || storedCron.toLowerCase() === 'off') {
-          disableMonitor = true;
-        } else {
-          effectiveCron = storedCron;
-        }
-      }
-    }
 
-    if (monitorEnvUid && !disableMonitor && inputs.monitorType !== 'cli') {
+    if (monitorEnvUid && inputs.monitorType !== 'cli') {
       let resolvedMonitorId = '';
 
       if (inputs.monitorId) {
@@ -1138,20 +973,6 @@ export async function runRepoSync(
         }
       }
 
-      if (!resolvedMonitorId && dependencies.github && inputs.collectionSyncMode !== 'version') {
-        const cached =
-          (await readVariable(dependencies.github, inputs.projectName, 'SMOKE_MONITOR_UID')) || '';
-        if (cached) {
-          const valid = await dependencies.postman.monitorExists(cached);
-          if (valid) {
-            resolvedMonitorId = cached;
-            dependencies.core.info(`Reusing monitor from repo variable: ${resolvedMonitorId}`);
-          } else {
-            dependencies.core.warning(`Cached monitor ${cached} no longer exists in Postman, creating a new one.`);
-          }
-        }
-      }
-
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
@@ -1161,20 +982,9 @@ export async function runRepoSync(
           effectiveCron || undefined
         );
         dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured)'}`);
-        if (dependencies.github && resolvedMonitorId && persistCurrentPointers) {
-          await writeVariable(
-            dependencies.github,
-            inputs.projectName,
-            'SMOKE_MONITOR_UID',
-            resolvedMonitorId,
-            dependencies.core
-          );
-        }
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
-    } else if (disableMonitor) {
-      dependencies.core.info('Monitor creation skipped because MONITOR_CRON_SCHEDULE is disabled.');
     }
   }
 
@@ -1199,7 +1009,6 @@ export async function runRepoSync(
   }
 
   await exportArtifacts(inputs, dependencies, envUids, assetProjectName);
-  await persistRepoVariables(inputs, outputs, dependencies, envUids);
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
   outputs['commit-sha'] = commit.commitSha;
@@ -1353,17 +1162,6 @@ export function createRepoSyncDependencies(
     secretMasker: masker
   });
 
-  const github =
-    repository && (inputs.githubToken || inputs.ghFallbackToken)
-      ? new GitHubApiClient({
-          repository,
-          token: inputs.githubToken || inputs.ghFallbackToken,
-          fallbackToken: inputs.ghFallbackToken,
-          authMode: inputs.githubAuthMode,
-          secretMasker: masker
-        })
-      : undefined;
-
   const repoMutation =
     repository &&
     (inputs.repoWriteMode === 'commit-only' || inputs.repoWriteMode === 'commit-and-push')
@@ -1396,7 +1194,6 @@ export function createRepoSyncDependencies(
   return {
     core: factories.core,
     postman,
-    github,
     internalIntegration,
     repoMutation
   };
@@ -1435,9 +1232,6 @@ export async function runAction(
     }
   );
 
-  if (!dependencies.github) {
-    actionCore.info('GitHub variable persistence disabled for this run');
-  }
   if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
     actionCore.warning(
       'Skipping system environment association because postman-access-token is not configured'
@@ -1449,7 +1243,7 @@ export async function runAction(
     );
   }
 
-  await persistSslSecrets(inputs, actionCore, actionExec, repository, dependencies.github);
+  await persistSslSecrets(inputs, actionCore, actionExec, repository);
 
   return runRepoSync(inputs, dependencies);
 }

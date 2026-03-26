@@ -40,10 +40,6 @@ inputs:
   release-label:
     description: Optional release label used for versioned naming.
     required: false
-  set-as-current:
-    description: Whether this run should update current repo pointer variables.
-    required: false
-    default: 'true'
   monitor-id:
     description: Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one.
     required: false
@@ -116,10 +112,6 @@ inputs:
   gh-fallback-token:
     description: Fallback token for repository variable APIs and workflow-file pushes.
     required: false
-  github-auth-mode:
-    description: GitHub auth mode for repository variable APIs.
-    required: false
-    default: github_token_first
   org-mode:
     description: Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.
     required: false
@@ -141,9 +133,6 @@ inputs:
     required: false
   spec-id:
     description: Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.
-    required: false
-  releases-json:
-    description: JSON-serialized releases manifest from bootstrap, persisted as .postman/releases.yaml.
     required: false
 outputs:
   integration-backend:

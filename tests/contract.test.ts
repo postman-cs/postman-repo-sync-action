@@ -27,7 +27,6 @@ describe('postman-repo-sync-action contract', () => {
       'collection-sync-mode',
       'spec-sync-mode',
       'release-label',
-      'set-as-current',
       'monitor-id',
       'mock-url',
       'monitor-cron',
@@ -48,15 +47,13 @@ describe('postman-repo-sync-action contract', () => {
       'postman-access-token',
       'github-token',
       'gh-fallback-token',
-      'github-auth-mode',
       'org-mode',
       'ci-workflow-base64',
       'ssl-client-cert',
       'ssl-client-key',
       'ssl-client-passphrase',
       'ssl-extra-ca-certs',
-      'spec-id',
-      'releases-json'
+      'spec-id'
     ]);
 
     expect(Object.keys(postmanRepoSyncActionContract.outputs)).toEqual([

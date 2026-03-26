@@ -9,7 +9,7 @@ Retained from finalize:
 - Create or update Postman environments from runtime URLs.
 - Associate Postman environments to system environments through Bifrost.
 - Create mock servers and smoke monitors from generated collections.
-- Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.
+- Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.
 - Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.
 - Commit synced artifacts and push them back to the current checked out ref.
 
@@ -205,15 +205,17 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 
 Collections are exported in the Postman Collection v3 format, producing a multi-file YAML directory structure under `postman/collections/`. Each collection (Baseline, Smoke, Contract) gets its own directory containing `collection.yaml` and nested folder/request YAML files. The `.postman/resources.yaml` manifest maps each v3 collection directory to its Postman UID.
 
+The generated CI workflow reads `.postman/resources.yaml` directly to resolve the smoke/contract collection IDs and environment ID for Postman CLI runs. It does not depend on repository variables for those asset mappings.
+
 Folder and request **names are truncated to 120 characters** per path segment when writing files (with an ellipsis). That avoids `ENAMETOOLONG` when Postman item names are very long (for example, copied from long OpenAPI operation summaries).
 
 ### Lifecycle and versioning
 
 `collection-sync-mode` controls collection lifecycle behavior:
 
-- `refresh` (default): always refresh assets and persist current pointer repo variables.
-- `reuse`: reuse existing assets when possible and persist current pointers only when `set-as-current` is true.
-- `version`: require a release label (`release-label` input or `github-ref-name`), suffix collection export directories and mock/monitor names with that release label, and skip cached `MOCK_URL` and `SMOKE_MONITOR_UID` repo variable reuse.
+- `refresh` (default): always refresh assets and rewrite `.postman/resources.yaml` for the checked-out ref.
+- `reuse`: reuse existing assets from explicit inputs or the checked-out ref's `.postman/resources.yaml`.
+- `version`: require a release label (`release-label` input or `github-ref-name`), suffix collection export directories and mock/monitor names with that release label, and reuse only the checked-out ref's `.postman/resources.yaml` mappings.
 
 `spec-sync-mode` supports `update` (default) and `version`. If either sync mode is `version`, this action requires a derived or explicit release label.
 
@@ -232,14 +234,13 @@ Folder and request **names are truncated to 120 characters** per path segment wh
 | `collection-sync-mode` | `refresh` | Collection lifecycle mode: `refresh`, `reuse`, or `version`. |
 | `spec-sync-mode` | `update` | Spec lifecycle mode: `update` or `version`. |
 | `release-label` | | Optional release label for versioned naming. Falls back to `github-ref-name` when omitted. |
-| `set-as-current` | `true` | Controls current pointer repo variable updates for non-`refresh` modes. |
 | `environments-json` | `["prod"]` | Environment slugs to create or update. |
 | `repo-url` | | Explicit repository URL (GitHub or GitLab). Defaults to `https://github.com/$GITHUB_REPOSITORY` on GitHub Actions, or `$CI_PROJECT_URL` on GitLab CI. |
 | `integration-backend` | `bifrost` | Public open-alpha starts with Bifrost only. |
 | `workspace-link-enabled` | `true` | Keeps workspace linking in scope. |
 | `environment-sync-enabled` | `true` | Keeps environment association in scope by default for the open-alpha demonstration path. |
 | `system-env-map-json` | `{}` | JSON map of environment slug to system environment id. |
-| `environment-uids-json` | `{}` | JSON map of environment slug to Postman environment uid. |
+| `environment-uids-json` | `{}` | Optional explicit JSON map of environment slug to Postman environment uid. |
 | `env-runtime-urls-json` | `{}` | JSON map of environment slug to runtime base URL. |
 | `artifact-dir` | `postman` | Root directory for exported Postman artifacts. |
 | `repo-write-mode` | `commit-and-push` | Generates files and pushes with current-ref semantics. |
@@ -252,9 +253,8 @@ Folder and request **names are truncated to 120 characters** per path segment wh
 | `ssl-client-key` | | Base64-encoded private key paired with `ssl-client-cert`. |
 | `ssl-client-passphrase` | | Optional passphrase for the client key. |
 | `ssl-extra-ca-certs` | | Base64-encoded extra CA certificates used to trust private certificate chains. |
-| `github-token` | | GitHub token for repo variables and commits. |
+| `github-token` | | GitHub token for commits, workflow updates, and optional secret persistence. |
 | `gh-fallback-token` | | Fallback GitHub token for workflow-file and variable APIs. |
-| `github-auth-mode` | `github_token_first` | GitHub auth mode for repo variable APIs. |
 | `ci-workflow-base64` | | Optional base64-encoded workflow content that overrides the built-in CI template. |
 
 ### Contract smoke monitoring

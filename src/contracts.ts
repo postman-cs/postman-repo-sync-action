@@ -36,7 +36,6 @@ export const postmanRepoSyncActionContract: {
     repoWriteMode: string;
     collectionSyncMode: string;
     specSyncMode: string;
-    setAsCurrent: boolean;
     workspaceLinkEnabled: boolean;
     environmentSyncEnabled: boolean;
     committerName: string;
@@ -58,7 +57,6 @@ export const postmanRepoSyncActionContract: {
     repoWriteMode: 'commit-and-push',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
-    setAsCurrent: true,
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,
     committerName: 'Postman CSE',
@@ -114,11 +112,6 @@ export const postmanRepoSyncActionContract: {
     'release-label': {
       description: 'Optional release label used for versioned naming.',
       required: false
-    },
-    'set-as-current': {
-      description: 'Whether this run should update current repo pointer variables.',
-      required: false,
-      default: 'true'
     },
     'monitor-id': {
       description: 'Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one.',
@@ -212,11 +205,6 @@ export const postmanRepoSyncActionContract: {
       description: 'Fallback token for repository variable APIs and workflow-file pushes.',
       required: false
     },
-    'github-auth-mode': {
-      description: 'GitHub auth mode for repository variable APIs.',
-      required: false,
-      default: 'github_token_first'
-    },
     'org-mode': {
       description: 'Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.',
       required: false,
@@ -244,10 +232,6 @@ export const postmanRepoSyncActionContract: {
     },
     'spec-id': {
       description: 'Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.',
-      required: false
-    },
-    'releases-json': {
-      description: 'JSON-serialized releases manifest from bootstrap, persisted as .postman/releases.yaml.',
       required: false
     }
   },
@@ -285,7 +269,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Bifrost.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files). Persist repo variables and export environments into the repository under `postman/` and `.postman/`.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
       'Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

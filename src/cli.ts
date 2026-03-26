@@ -144,7 +144,6 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'collection-sync-mode',
     'spec-sync-mode',
     'release-label',
-    'set-as-current',
     'environments-json',
     'repo-url',
     'integration-backend',
@@ -165,7 +164,6 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'postman-access-token',
     'github-token',
     'gh-fallback-token',
-    'github-auth-mode',
     'ci-workflow-base64',
     'generate-ci-workflow',
     'monitor-type',
@@ -179,7 +177,6 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'ssl-client-passphrase',
     'ssl-extra-ca-certs',
     'spec-id',
-    'releases-json',
     'team-id'
   ];
 
@@ -283,9 +280,6 @@ export async function runCli(
 
   const dependencies = createCliDependencies(inputs, resolved);
 
-  if (!dependencies.github) {
-    dependencies.core.info('GitHub variable persistence disabled for this run');
-  }
   if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
     dependencies.core.warning(
       'Skipping system environment association because postman-access-token is not configured'
