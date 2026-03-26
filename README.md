@@ -257,6 +257,18 @@ Folder and request **names are truncated to 120 characters** per path segment wh
 | `github-auth-mode` | `github_token_first` | GitHub auth mode for repo variable APIs. |
 | `ci-workflow-base64` | | Optional base64-encoded workflow content that overrides the built-in CI template. |
 
+### Contract smoke monitoring
+
+This repo includes `.github/workflows/contract-smoke.yml`, a scheduled live contract check for the Postman and Bifrost endpoints used by repo-sync.
+
+Configure these repository secrets before enabling the workflow:
+
+- `SMOKE_ORG_API_KEY`
+- `SMOKE_ORG_ACCESS_TOKEN`
+- `SMOKE_NON_ORG_API_KEY`
+
+The smoke workflow verifies `/me`, `/teams`, and Bifrost API key creation so upstream auth or response-shape changes are caught before they break repo-sync runs.
+
 ### Obtaining `postman-api-key`
 
 The `postman-api-key` is a Postman API key (PMAK) used for all standard Postman API operations — creating workspaces, uploading specs, generating collections, exporting artifacts, and managing environments.
