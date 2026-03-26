@@ -32,6 +32,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     artifactDir: 'postman',
     repoWriteMode: 'commit-and-push',
     currentRef: 'feature/repo-sync',
+    githubHeadRef: '',
+    githubRefName: 'feature/repo-sync',
     committerName: 'Postman CSE',
     committerEmail: 'help@postman.com',
     postmanApiKey: 'pmak-test',
@@ -51,6 +53,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     sslClientKey: '',
     sslClientPassphrase: '',
     sslExtraCaCerts: '',
+    teamId: '',
+    repository: 'postman-cs/repo-sync-demo',
     ...overrides
   };
 }
