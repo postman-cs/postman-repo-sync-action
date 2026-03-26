@@ -26,7 +26,8 @@
     "access": "public"
   },
   "overrides": {
-    "undici": "^6.24.0"
+    "undici": "^6.24.0",
+    "picomatch": ">=4.0.4"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
