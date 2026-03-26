@@ -24030,9 +24030,16 @@ function extractDescription(value) {
   }
   return void 0;
 }
+var MAX_PATH_SEGMENT_CHARS = 120;
 function sanitizePathSegment(value, fallback) {
-  const normalized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
-  return normalized || fallback;
+  let normalized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized.length > MAX_PATH_SEGMENT_CHARS) {
+    normalized = `${normalized.slice(0, MAX_PATH_SEGMENT_CHARS - 1)}\u2026`;
+  }
+  return normalized;
 }
 function buildUniqueRef(baseName, kind, usedRefs) {
   const fallback = kind === "folder" ? "Folder" : "Request";

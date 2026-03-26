@@ -205,6 +205,8 @@ If the action writes `.github/workflows/ci.yml`, provide a credential source tha
 
 Collections are exported in the Postman Collection v3 format, producing a multi-file YAML directory structure under `postman/collections/`. Each collection (Baseline, Smoke, Contract) gets its own directory containing `collection.yaml` and nested folder/request YAML files. The `.postman/resources.yaml` manifest maps each v3 collection directory to its Postman UID.
 
+Folder and request **names are truncated to 120 characters** per path segment when writing files (with an ellipsis). That avoids `ENAMETOOLONG` when Postman item names are very long (for example, copied from long OpenAPI operation summaries).
+
 ## Inputs
 
 | Input | Default | Notes |
