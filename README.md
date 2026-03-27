@@ -191,10 +191,6 @@ steps:
 
 When `repo-sync-status` is `success` but your PR is pending, the artifacts are safely staged awaiting approval.
 
-### Reference implementation
-
-See [GoodLeap's example workflow](https://github.com/postman-cs/goodleap-heatmap-onboarding/blob/main/.github/workflows/onboard-heatmap.yml) for a complete working reference using GitHub Actions with `commit-only` mode and automated PR creation.
-
 ## Usage
 
 ```yaml
