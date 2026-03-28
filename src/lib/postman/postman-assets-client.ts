@@ -7,7 +7,13 @@ type EnvironmentValue = {
   value: string;
 };
 
-type FetchResult = Record<string, any> | null;
+type FetchResult = Record<string, unknown> | null;
+type CollectionResponse = { collection?: unknown };
+type EnvironmentResponse = { environment?: unknown };
+type MonitorResponse = { monitor?: { uid?: unknown } };
+type MockResponse = {
+  mock?: { uid?: unknown; mockUrl?: unknown; config?: { serverResponseId?: unknown } };
+};
 
 export interface PostmanAssetsClientOptions {
   apiKey: string;
@@ -59,7 +65,7 @@ export class PostmanAssetsClient {
     }
 
     try {
-      return (await response.json()) as Record<string, any>;
+      return (await response.json()) as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -80,7 +86,7 @@ export class PostmanAssetsClient {
       })
     });
 
-    const uid = String(response?.environment?.uid || '').trim();
+    const uid = String((response as { environment?: { uid?: unknown } } | null)?.environment?.uid || '').trim();
     if (!uid) {
       throw new Error('Environment create did not return a UID');
     }
@@ -126,7 +132,7 @@ export class PostmanAssetsClient {
       })
     });
 
-    const uid = String(response?.monitor?.uid || '').trim();
+    const uid = String((response as MonitorResponse | null)?.monitor?.uid || '').trim();
     if (!uid) {
       throw new Error('Monitor create did not return a UID');
     }
@@ -163,7 +169,7 @@ export class PostmanAssetsClient {
       })
     });
 
-    const uid = String(response?.mock?.uid || '').trim();
+    const uid = String((response as MockResponse | null)?.mock?.uid || '').trim();
     if (!uid) {
       throw new Error('Mock create did not return a UID');
     }
@@ -171,18 +177,18 @@ export class PostmanAssetsClient {
     return {
       uid,
       url:
-        String(response?.mock?.mockUrl || '').trim() ||
-        String(response?.mock?.config?.serverResponseId || '').trim()
+        String((response as MockResponse | null)?.mock?.mockUrl || '').trim() ||
+        String((response as MockResponse | null)?.mock?.config?.serverResponseId || '').trim()
     };
   }
 
-  async getCollection(uid: string): Promise<any> {
-    const response = await this.request(`/collections/${uid}`);
+  async getCollection(uid: string): Promise<unknown> {
+    const response = await this.request(`/collections/${uid}`) as CollectionResponse | null;
     return response?.collection;
   }
 
-  async getEnvironment(uid: string): Promise<any> {
-    const response = await this.request(`/environments/${uid}`);
+  async getEnvironment(uid: string): Promise<unknown> {
+    const response = await this.request(`/environments/${uid}`) as EnvironmentResponse | null;
     return response?.environment;
   }
 
@@ -197,7 +203,7 @@ export class PostmanAssetsClient {
       if (user && typeof user === 'object' && 'teamId' in user && user.teamId) {
         return String(user.teamId);
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
     return undefined;
@@ -208,12 +214,21 @@ export class PostmanAssetsClient {
     const teams = data?.data ?? [];
     return Array.isArray(teams)
       ? teams
-          .filter((t: any) => t?.id && t?.name)
-          .map((t: any) => ({
+          .filter((t): t is Record<string, unknown> => {
+            return (
+              typeof t === 'object' &&
+              t !== null &&
+              'id' in t &&
+              t.id != null &&
+              'name' in t &&
+              String(t.name).trim().length > 0
+            );
+          })
+          .map((t) => ({
             id: Number(t.id),
             name: String(t.name),
-            handle: String(t.handle || ''),
-            ...(t.organizationId != null ? { organizationId: Number(t.organizationId) } : {})
+            handle: String(t.handle ?? ''),
+            ...((t.organizationId ?? null) != null ? { organizationId: Number(t.organizationId) } : {})
           }))
       : [];
   }
@@ -223,8 +238,10 @@ export class PostmanAssetsClient {
     const monitors = response?.monitors ?? [];
     return Array.isArray(monitors)
       ? monitors
-          .filter((m: any) => m?.uid)
-          .map((m: any) => ({
+          .filter((m): m is Record<string, unknown> => {
+            return typeof m === 'object' && m !== null && 'uid' in m;
+          })
+          .map((m) => ({
             uid: String(m.uid),
             name: String(m.name ?? ''),
             active: m.active !== false,
@@ -239,8 +256,10 @@ export class PostmanAssetsClient {
     const mocks = response?.mocks ?? [];
     return Array.isArray(mocks)
       ? mocks
-          .filter((m: any) => m?.uid)
-          .map((m: any) => ({
+          .filter((m): m is Record<string, unknown> => {
+            return typeof m === 'object' && m !== null && 'uid' in m;
+          })
+          .map((m) => ({
             uid: String(m.uid),
             name: String(m.name ?? ''),
             collection: String(m.collection ?? ''),

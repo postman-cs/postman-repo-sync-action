@@ -7,7 +7,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
-import { join, dirname, basename, extname } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 
@@ -665,7 +665,7 @@ function transformCollection(v2Collection) {
  */
 function sanitizeNullBytes(obj) {
   if (typeof obj === 'string') {
-    return obj.replace(/\u0000/g, '');
+    return obj.split('\0').join('');
   }
   if (Array.isArray(obj)) {
     return obj.map(sanitizeNullBytes);
@@ -780,11 +780,11 @@ async function generateExamples() {
     );
 
     if (v2Files.length === 0) {
-      console.log('⚠️  No v2 collection files found in examples/v2');
+      globalThis.console.log('⚠️  No v2 collection files found in examples/v2');
       return;
     }
 
-    console.log(`🔄 Converting ${v2Files.length} v2 collection(s) to v3...`);
+    globalThis.console.log(`🔄 Converting ${v2Files.length} v2 collection(s) to v3...`);
 
     for (const file of v2Files) {
       const filePath = join(v2Dir, file);
@@ -824,16 +824,16 @@ async function generateExamples() {
       yamlContent = convertScriptCodeArrayToBlockScalar(yamlContent);
 
       await writeFile(yamlPath, yamlContent, 'utf-8');
-      console.log(`  ✓ ${collectionName}`);
+      globalThis.console.log(`  ✓ ${collectionName}`);
     }
 
-    console.log(`✅ Generated ${v2Files.length} v3 collection(s)`);
+    globalThis.console.log(`✅ Generated ${v2Files.length} v3 collection(s)`);
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    globalThis.console.error('❌ Error:', error.message);
     if (error.stack) {
-      console.error(error.stack);
+      globalThis.console.error(error.stack);
     }
-    process.exit(1);
+    globalThis.process.exit(1);
   }
 }
 

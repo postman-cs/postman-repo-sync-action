@@ -39,6 +39,7 @@ export function validateCertMaterial(
   } catch (error) {
     throw new Error(
       `Invalid client certificate: ${error instanceof Error ? error.message : String(error)}`
+      , { cause: error }
     );
   }
 
@@ -52,6 +53,7 @@ export function validateCertMaterial(
   } catch (error) {
     throw new Error(
       `Invalid client key (wrong passphrase?): ${error instanceof Error ? error.message : String(error)}`
+      , { cause: error }
     );
   }
 

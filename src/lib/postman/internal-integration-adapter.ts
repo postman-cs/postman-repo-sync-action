@@ -173,7 +173,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       });
     }
 
-    const data = await response.json() as any;
+    const data = await response.json() as { apikey?: { key?: string } };
     if (!data?.apikey?.key) {
       throw new Error(`Failed to extract API key from Bifrost response: ${JSON.stringify(data)}`);
     }

@@ -865,7 +865,7 @@ async function exportArtifacts(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
     );
     const dirName = getCollectionDirectoryName('Baseline', assetProjectName);
-    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.baselineCollectionId;
   }
@@ -874,7 +874,7 @@ async function exportArtifacts(
       await dependencies.postman.getCollection(inputs.smokeCollectionId)
     );
     const dirName = getCollectionDirectoryName('Smoke', assetProjectName);
-    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.smokeCollectionId;
   }
@@ -883,7 +883,7 @@ async function exportArtifacts(
       await dependencies.postman.getCollection(inputs.contractCollectionId)
     );
     const dirName = getCollectionDirectoryName('Contract', assetProjectName);
-    await convertAndSplitCollection(col as any, `${collectionsDir}/${dirName}`);
+    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.contractCollectionId;
   }
@@ -1001,7 +1001,6 @@ export async function runRepoSync(
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
   const outputs = createOutputs(inputs);
-  let pushed = false;
   const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
@@ -1107,7 +1106,7 @@ export async function runRepoSync(
 
   if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
-    let effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : '';
+    const effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : '';
 
     if (monitorEnvUid && inputs.monitorType !== 'cli') {
       let resolvedMonitorId = '';
@@ -1172,9 +1171,7 @@ export async function runRepoSync(
   if (commit.resolvedCurrentRef) {
     outputs['resolved-current-ref'] = commit.resolvedCurrentRef;
   }
-  pushed = commit.pushed;
-
-  outputs['repo-sync-summary-json'] = createRepoSummary(outputs, envUids, pushed);
+  outputs['repo-sync-summary-json'] = createRepoSummary(outputs, envUids, commit.pushed);
 
   for (const [name, value] of Object.entries(outputs)) {
     dependencies.core.setOutput(name, value);
@@ -1206,8 +1203,13 @@ export async function resolvePostmanApiKeyAndTeamId(
           teamId = String(me.user.teamId);
         }
       }
-    } catch (error: any) {
-      if (error?.status === 401 || error?.status === 403) {
+    } catch (error: unknown) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'status' in error &&
+        (error.status === 401 || error.status === 403)
+      ) {
         actionCore.warning('Provided postman-api-key is invalid or expired.');
       } else {
         throw error;
@@ -1256,8 +1258,10 @@ export async function resolvePostmanApiKeyAndTeamId(
           if (ghCommand.exitCode !== 0) {
             actionCore.warning(`Failed to save POSTMAN_API_KEY secret: ${ghCommand.stderr}`);
           }
-        } catch (e: any) {
-          actionCore.warning(`Error saving POSTMAN_API_KEY secret: ${e.message}`);
+        } catch (error: unknown) {
+          actionCore.warning(
+            `Error saving POSTMAN_API_KEY secret: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
     } else if (options.persistGeneratedApiKeySecret ?? true) {
