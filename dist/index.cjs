@@ -24032,7 +24032,7 @@ function extractDescription(value) {
 }
 var MAX_PATH_SEGMENT_CHARS = 120;
 function sanitizePathSegment(value, fallback) {
-  let normalized = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  let normalized = value.replace(/[<>:"/\\|?*]/g, " ").split("").map((char) => char >= " " ? char : " ").join("").replace(/\s+/g, " ").trim();
   if (!normalized) {
     return fallback;
   }
@@ -25183,24 +25183,28 @@ var PostmanAssetsClient = class {
       if (user && typeof user === "object" && "teamId" in user && user.teamId) {
         return String(user.teamId);
       }
-    } catch (e) {
+    } catch {
     }
     return void 0;
   }
   async getTeams() {
     const data = await this.request("/teams");
     const teams = data?.data ?? [];
-    return Array.isArray(teams) ? teams.filter((t) => t?.id && t?.name).map((t) => ({
+    return Array.isArray(teams) ? teams.filter((t) => {
+      return typeof t === "object" && t !== null && "id" in t && t.id != null && "name" in t && String(t.name).trim().length > 0;
+    }).map((t) => ({
       id: Number(t.id),
       name: String(t.name),
-      handle: String(t.handle || ""),
-      ...t.organizationId != null ? { organizationId: Number(t.organizationId) } : {}
+      handle: String(t.handle ?? ""),
+      ...(t.organizationId ?? null) != null ? { organizationId: Number(t.organizationId) } : {}
     })) : [];
   }
   async listMonitors() {
     const response = await this.request("/monitors");
     const monitors = response?.monitors ?? [];
-    return Array.isArray(monitors) ? monitors.filter((m) => m?.uid).map((m) => ({
+    return Array.isArray(monitors) ? monitors.filter((m) => {
+      return typeof m === "object" && m !== null && "uid" in m;
+    }).map((m) => ({
       uid: String(m.uid),
       name: String(m.name ?? ""),
       active: m.active !== false,
@@ -25211,7 +25215,9 @@ var PostmanAssetsClient = class {
   async listMocks() {
     const response = await this.request("/mocks");
     const mocks = response?.mocks ?? [];
-    return Array.isArray(mocks) ? mocks.filter((m) => m?.uid).map((m) => ({
+    return Array.isArray(mocks) ? mocks.filter((m) => {
+      return typeof m === "object" && m !== null && "uid" in m;
+    }).map((m) => ({
       uid: String(m.uid),
       name: String(m.name ?? ""),
       collection: String(m.collection ?? ""),
@@ -25277,7 +25283,8 @@ function validateCertMaterial(certBase64, keyBase64, passphrase) {
     certificate = new import_node_crypto.X509Certificate(certBuffer);
   } catch (error) {
     throw new Error(
-      `Invalid client certificate: ${error instanceof Error ? error.message : String(error)}`
+      `Invalid client certificate: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
   }
   let privateKey;
@@ -25289,7 +25296,8 @@ function validateCertMaterial(certBase64, keyBase64, passphrase) {
     });
   } catch (error) {
     throw new Error(
-      `Invalid client key (wrong passphrase?): ${error instanceof Error ? error.message : String(error)}`
+      `Invalid client key (wrong passphrase?): ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
   }
   if (!certificate.checkPrivateKey(privateKey)) {
@@ -25969,7 +25977,6 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
 }
 async function runRepoSync(inputs, dependencies) {
   const outputs = createOutputs(inputs);
-  let pushed = false;
   const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
@@ -26054,7 +26061,7 @@ async function runRepoSync(inputs, dependencies) {
   }
   if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
     const monitorEnvUid = envUids.prod || envUids.dev || Object.values(envUids)[0];
-    let effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : "";
+    const effectiveCron = inputs.monitorCron && inputs.monitorCron.trim() ? inputs.monitorCron.trim() : "";
     if (monitorEnvUid && inputs.monitorType !== "cli") {
       let resolvedMonitorId = "";
       if (inputs.monitorId) {
@@ -26106,8 +26113,7 @@ async function runRepoSync(inputs, dependencies) {
   if (commit.resolvedCurrentRef) {
     outputs["resolved-current-ref"] = commit.resolvedCurrentRef;
   }
-  pushed = commit.pushed;
-  outputs["repo-sync-summary-json"] = createRepoSummary(outputs, envUids, pushed);
+  outputs["repo-sync-summary-json"] = createRepoSummary(outputs, envUids, commit.pushed);
   for (const [name, value] of Object.entries(outputs)) {
     dependencies.core.setOutput(name, value);
   }
@@ -26128,7 +26134,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
         }
       }
     } catch (error) {
-      if (error?.status === 401 || error?.status === 403) {
+      if (typeof error === "object" && error !== null && "status" in error && (error.status === 401 || error.status === 403)) {
         actionCore.warning("Provided postman-api-key is invalid or expired.");
       } else {
         throw error;
@@ -26175,8 +26181,10 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
           if (ghCommand.exitCode !== 0) {
             actionCore.warning(`Failed to save POSTMAN_API_KEY secret: ${ghCommand.stderr}`);
           }
-        } catch (e) {
-          actionCore.warning(`Error saving POSTMAN_API_KEY secret: ${e.message}`);
+        } catch (error) {
+          actionCore.warning(
+            `Error saving POSTMAN_API_KEY secret: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
     } else if (options.persistGeneratedApiKeySecret ?? true) {

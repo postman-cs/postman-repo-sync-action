@@ -239,7 +239,10 @@ export const MAX_PATH_SEGMENT_CHARS = 120;
 
 export function sanitizePathSegment(value: string, fallback: string): string {
   let normalized = value
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/[<>:"/\\|?*]/g, ' ')
+    .split('')
+    .map((char) => (char >= ' ' ? char : ' '))
+    .join('')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) {

@@ -18,6 +18,7 @@ import {
   readActionInputs,
   resolvePostmanApiKeyAndTeamId,
   runRepoSync,
+  type RepoSyncDependencies,
   type ResolvedInputs
 } from '../src/index.js';
 
@@ -270,7 +271,7 @@ describe('repo sync action', () => {
       postman,
       github,
       internalIntegration,
-      repoMutation: repoMutation as any
+      repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
     });
 
     expect(result).toMatchObject({
@@ -299,23 +300,23 @@ describe('repo sync action', () => {
 
     const baselineCollection = loadYaml(
       readFileSync('postman/collections/[Baseline] core-payments/collection.yaml', 'utf8')
-    ) as Record<string, any>;
+    ) as Record<string, unknown>;
     const folderYaml = loadYaml(
       readFileSync('postman/collections/[Baseline] core-payments/Orders/folder.yaml', 'utf8')
-    ) as Record<string, any>;
+    ) as Record<string, unknown>;
     const nestedRequestYaml = loadYaml(
       readFileSync(
         'postman/collections/[Baseline] core-payments/Orders/Create Order.request.yaml',
         'utf8'
       )
-    ) as Record<string, any>;
+    ) as Record<string, unknown>;
     const resourcesYaml = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as Record<
       string,
-      any
+      unknown
     >;
     const workflowsYaml = loadYaml(readFileSync('.postman/workflows.yaml', 'utf8')) as Record<
       string,
-      any
+      unknown
     >;
 
     expect(baselineCollection.type).toBe('collection');
@@ -418,7 +419,7 @@ describe('repo sync action', () => {
             pushed: false,
             resolvedCurrentRef: 'feature/repo-sync'
           })
-        } as any
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
     );
 
@@ -466,7 +467,7 @@ describe('repo sync action', () => {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
           connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
         },
-        repoMutation: repoMutation as any
+        repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
     );
 
@@ -521,7 +522,7 @@ describe('repo sync action', () => {
             pushed: false,
             resolvedCurrentRef: 'feature/repo-sync'
           })
-        } as any
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
     );
 
@@ -575,7 +576,7 @@ describe('repo sync action', () => {
             pushed: false,
             resolvedCurrentRef: 'feature/repo-sync'
           })
-        } as any
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
     );
 
@@ -593,7 +594,7 @@ describe('repo sync action', () => {
 });
 
 describe('monitor resolution paths', () => {
-  function makePostman(overrides: Record<string, any> = {}) {
+  function makePostman(overrides: Record<string, unknown> = {}) {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -620,28 +621,23 @@ describe('monitor resolution paths', () => {
     };
   }
 
-  function makeDeps(postman: any, github: any) {
-    return {
-      core: createCoreStub().core,
-      postman,
-      github,
-      internalIntegration: {
-        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
-      },
-      repoMutation: {
-        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
-      } as any
-    };
-  }
+  function makeDeps(postman: RepoSyncDependencies['postman'], github: NonNullable<RepoSyncDependencies['github']>): RepoSyncDependencies { return {
+    core: createCoreStub().core,
+    postman,
+    github,
+    internalIntegration: {
+      associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+    },
+    repoMutation: {
+      commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+    } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+  }; }
 
   it('reuses explicit monitor-id when it exists in Postman', async () => {
     const postman = makePostman({ monitorExists: vi.fn().mockResolvedValue(true) });
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'explicit-mon' }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'explicit-mon' }), makeDeps(postman, github));
     
     expect(postman.createMonitor).not.toHaveBeenCalled();
     expect(postman.monitorExists).toHaveBeenCalledWith('explicit-mon');
@@ -653,10 +649,7 @@ describe('monitor resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null)
     });
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'stale-mon' }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'stale-mon' }), makeDeps(postman, github));
     
     expect(postman.createMonitor).toHaveBeenCalled();
   });
@@ -666,10 +659,7 @@ describe('monitor resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue({ uid: 'discovered-mon', name: 'Smoke Monitor' })
     });
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMonitor).not.toHaveBeenCalled();
     expect(postman.findMonitorByCollection).toHaveBeenCalledWith('col-smoke');
@@ -678,10 +668,7 @@ describe('monitor resolution paths', () => {
   it('creates a new monitor when no existing asset is found', async () => {
     const postman = makePostman();
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMonitor).toHaveBeenCalledWith(
       'ws-123',
@@ -694,7 +681,7 @@ describe('monitor resolution paths', () => {
 });
 
 describe('mock resolution paths', () => {
-  function makePostman(overrides: Record<string, any> = {}) {
+  function makePostman(overrides: Record<string, unknown> = {}) {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -721,28 +708,23 @@ describe('mock resolution paths', () => {
     };
   }
 
-  function makeDeps(postman: any, github: any) {
-    return {
-      core: createCoreStub().core,
-      postman,
-      github,
-      internalIntegration: {
-        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
-      },
-      repoMutation: {
-        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
-      } as any
-    };
-  }
+  function makeDeps(postman: RepoSyncDependencies['postman'], github: NonNullable<RepoSyncDependencies['github']>): RepoSyncDependencies { return {
+    core: createCoreStub().core,
+    postman,
+    github,
+    internalIntegration: {
+      associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+    },
+    repoMutation: {
+      commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+    } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+  }; }
 
   it('reuses explicit mock-url from input', async () => {
     const postman = makePostman();
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false, mockUrl: 'https://explicit-mock.pstmn.io' }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, mockUrl: 'https://explicit-mock.pstmn.io' }), makeDeps(postman, github));
     
     expect(postman.createMock).not.toHaveBeenCalled();
   });
@@ -752,10 +734,7 @@ describe('mock resolution paths', () => {
       findMockByCollection: vi.fn().mockResolvedValue({ uid: 'discovered-mock', mockUrl: 'https://discovered-mock.pstmn.io' })
     });
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMock).not.toHaveBeenCalled();
     expect(postman.findMockByCollection).toHaveBeenCalledWith('col-baseline');
@@ -764,10 +743,7 @@ describe('mock resolution paths', () => {
   it('creates a new mock when no existing asset is found', async () => {
     const postman = makePostman({ findMockByCollection: vi.fn().mockResolvedValue(null) });
     const github = makeGithub();
-    const result = await runRepoSync(
-      createInputs({ environments: ['prod'], generateCiWorkflow: false }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMock).toHaveBeenCalledWith(
       'ws-123',
@@ -849,7 +825,7 @@ describe('org-mode auto-detection', () => {
     const result = await resolvePostmanApiKeyAndTeamId(
       inputs,
       actionCore,
-      execLike as any,
+      execLike,
       masker,
       { persistGeneratedApiKeySecret: true, env: {} }
     );
@@ -910,7 +886,7 @@ describe('org-mode auto-detection', () => {
     const result = await resolvePostmanApiKeyAndTeamId(
       inputs,
       actionCore,
-      localExecLike as any,
+      localExecLike,
       masker,
       { persistGeneratedApiKeySecret: true, env: {} }
     );
@@ -981,7 +957,7 @@ describe('org-mode auto-detection', () => {
     const result = await resolvePostmanApiKeyAndTeamId(
       inputs,
       actionCore,
-      execLike as any,
+      execLike,
       masker,
       { persistGeneratedApiKeySecret: true, env: {} }
     );
@@ -1007,7 +983,7 @@ describe('repo-variable fallback resolution', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  function makePostman(overrides: Record<string, any> = {}) {
+  function makePostman(overrides: Record<string, unknown> = {}) {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -1034,20 +1010,18 @@ describe('repo-variable fallback resolution', () => {
     };
   }
 
-  function makeDeps(postman: any, github: any) {
-    return {
-      core: createCoreStub().core,
-      postman,
-      github,
-      internalIntegration: {
-        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
-      },
-      repoMutation: {
-        commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
-      } as any
-    };
-  }
+  function makeDeps(postman: RepoSyncDependencies['postman'], github: NonNullable<RepoSyncDependencies['github']>): RepoSyncDependencies { return {
+    core: createCoreStub().core,
+    postman,
+    github,
+    internalIntegration: {
+      associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+    },
+    repoMutation: {
+      commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
+    } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+  }; }
 
   it('resolves workspace and collection ids from .postman/resources.yaml when inputs are empty', async () => {
     const postman = makePostman();
@@ -1066,17 +1040,14 @@ describe('repo-variable fallback resolution', () => {
         ''
       ].join('\n')
     );
-    const result = await runRepoSync(
-      createInputs({
-        environments: ['prod'],
-        generateCiWorkflow: false,
-        workspaceId: '',
-        baselineCollectionId: '',
-        smokeCollectionId: '',
-        contractCollectionId: ''
-      }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({
+      environments: ['prod'],
+      generateCiWorkflow: false,
+      workspaceId: '',
+      baselineCollectionId: '',
+      smokeCollectionId: '',
+      contractCollectionId: ''
+    }), makeDeps(postman, github));
 
     expect(postman.getCollection).toHaveBeenCalledWith('col-base-file');
     expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-file');
@@ -1100,18 +1071,15 @@ describe('repo-variable fallback resolution', () => {
         ''
       ].join('\n')
     );
-    const result = await runRepoSync(
-      createInputs({
-        environments: ['prod', 'stage'],
-        generateCiWorkflow: false,
-        workspaceId: 'ws-123',
-        baselineCollectionId: 'col-baseline',
-        smokeCollectionId: 'col-smoke',
-        contractCollectionId: 'col-contract',
-        environmentUids: {}
-      }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({
+      environments: ['prod', 'stage'],
+      generateCiWorkflow: false,
+      workspaceId: 'ws-123',
+      baselineCollectionId: 'col-baseline',
+      smokeCollectionId: 'col-smoke',
+      contractCollectionId: 'col-contract',
+      environmentUids: {}
+    }), makeDeps(postman, github));
 
     expect(postman.updateEnvironment).toHaveBeenCalledWith(
       'env-prod-file',
@@ -1140,17 +1108,14 @@ describe('repo-variable fallback resolution', () => {
       'POSTMAN_CORE_PAYMENTS_SMOKE_COLLECTION_UID': 'col-smoke-repo-all',
       'POSTMAN_CORE_PAYMENTS_CONTRACT_COLLECTION_UID': 'col-contract-repo-all'
     });
-    const result = await runRepoSync(
-      createInputs({
-        environments: ['prod'],
-        generateCiWorkflow: false,
-        workspaceId: '',
-        baselineCollectionId: '',
-        smokeCollectionId: '',
-        contractCollectionId: ''
-      }),
-      makeDeps(postman, github)
-    );
+    await runRepoSync(createInputs({
+      environments: ['prod'],
+      generateCiWorkflow: false,
+      workspaceId: '',
+      baselineCollectionId: '',
+      smokeCollectionId: '',
+      contractCollectionId: ''
+    }), makeDeps(postman, github));
 
     expect(postman.getCollection).not.toHaveBeenCalledWith('col-base-repo-all');
     expect(postman.getCollection).not.toHaveBeenCalledWith('col-smoke-repo-all');

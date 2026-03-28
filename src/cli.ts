@@ -39,10 +39,10 @@ export class ConsoleReporter implements ReporterCore {
     console.error(`warning: ${message}`);
   }
 
-  public setOutput(_name: string, _value: string): void {
+  public setOutput(): void {
   }
 
-  public setSecret(_secret: string): void {
+  public setSecret(): void {
   }
 }
 
@@ -122,7 +122,9 @@ export function createCliExec(secretMasker: (value: string) => string): ExecLike
             ? execError.code
             : Number.parseInt(String(execError.code ?? '1'), 10) || 1;
         if (!options?.ignoreReturnCode) {
-          throw new Error(`Command failed with exit code ${exitCode}: ${commandLabel}`);
+          throw new Error(`Command failed with exit code ${exitCode}: ${commandLabel}`, {
+            cause: error
+          });
         }
         return {
           exitCode,

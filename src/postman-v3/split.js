@@ -279,7 +279,7 @@ function convertContentToBlockScalar(yamlStr) {
       try {
         // Use JSON.parse to properly unescape all escape sequences
         unescaped = JSON.parse(`"${escapedContent}"`);
-      } catch (e) {
+      } catch {
         // Fallback to manual unescaping for common cases
         unescaped = escapedContent
           .replace(/\\n/g, '\n')
@@ -446,11 +446,11 @@ async function readCollection(collectionDir) {
   try {
     const content = await readFile(collectionJsonPath, 'utf-8');
     return JSON.parse(content);
-  } catch (e) {
+  } catch {
     try {
       const content = await readFile(collectionYamlPath, 'utf-8');
       return yaml.load(content);
-    } catch (e2) {
+    } catch {
       return null;
     }
   }
@@ -463,7 +463,7 @@ async function splitCollection(collectionDir) {
   const collection = await readCollection(collectionDir);
 
   if (!collection) {
-    console.log(
+    globalThis.console.log(
       `   ⚠️  No _collection.json or _collection.yaml found, skipping`
     );
     return;
@@ -500,9 +500,9 @@ async function splitExamples() {
     // Check if v3 directory exists
     try {
       await stat(v3ExamplesDir);
-    } catch (error) {
-      console.log('⚠️  examples/v3/ directory not found');
-      console.log('   Run "npm run examples:convert" first');
+    } catch {
+      globalThis.console.log('⚠️  examples/v3/ directory not found');
+      globalThis.console.log('   Run "npm run examples:convert" first');
       return;
     }
 
@@ -513,29 +513,34 @@ async function splitExamples() {
       .map((entry) => join(v3ExamplesDir, entry.name));
 
     if (collectionDirs.length === 0) {
-      console.log('⚠️  No collection directories found in examples/v3/');
+      globalThis.console.log('⚠️  No collection directories found in examples/v3/');
       return;
     }
 
-    console.log(`📁 Splitting ${collectionDirs.length} collection(s)...`);
+    globalThis.console.log(`📁 Splitting ${collectionDirs.length} collection(s)...`);
 
     for (const collectionDir of collectionDirs) {
       const collectionName = basename(collectionDir);
       try {
         await splitCollection(collectionDir);
-        console.log(`  ✓ ${collectionName}`);
+        globalThis.console.log(`  ✓ ${collectionName}`);
       } catch (error) {
-        console.log(`  ❌ ${collectionName}: ${error.message}`);
+        globalThis.console.log(
+          `  ❌ ${collectionName}: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
 
-    console.log(`✅ Split ${collectionDirs.length} collection(s)`);
+    globalThis.console.log(`✅ Split ${collectionDirs.length} collection(s)`);
   } catch (error) {
-    console.error('❌ Error:', error.message);
-    if (error.stack) {
-      console.error(error.stack);
+    globalThis.console.error(
+      '❌ Error:',
+      error instanceof Error ? error.message : String(error)
+    );
+    if (error instanceof Error && error.stack) {
+      globalThis.console.error(error.stack);
     }
-    process.exit(1);
+    globalThis.process.exit(1);
   }
 }
 
