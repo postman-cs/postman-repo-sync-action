@@ -92,7 +92,7 @@ describe('postman-repo-sync-action contract', () => {
     };
 
     expect(actionYaml.runs).toEqual({
-      using: 'node20',
+      using: 'node22',
       main: 'dist/index.cjs'
     });
 

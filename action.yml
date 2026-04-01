@@ -157,5 +157,5 @@ outputs:
   commit-sha:
     description: Commit SHA produced by repo-write-mode, if any.
 runs:
-  using: node20
+  using: node22
   main: dist/index.cjs
