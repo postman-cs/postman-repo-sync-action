@@ -295,7 +295,7 @@ When a local spec file and exported collections are both available, repo-sync wr
 | `monitor-type` | `cloud` | Type of monitor to create (`cloud` or `cli`). `cli` uses GitHub Actions cron. |
 | `smoke-collection-id` | | Smoke collection used for monitor creation. |
 | `contract-collection-id` | | Contract collection exported into the repo. |
-| `collection-sync-mode` | `refresh` | Collection lifecycle mode: `refresh`, `reuse`, or `version`. |
+| `collection-sync-mode` | `refresh` | Collection lifecycle mode: `refresh` or `version`. |
 | `spec-sync-mode` | `update` | Spec lifecycle mode: `update` or `version`. |
 | `release-label` | | Optional release label for versioned naming. Falls back to `github-ref-name` when omitted. |
 | `spec-path` | | Optional repo-root-relative path to the local spec file for `resources.yaml` and `workflows.yaml` metadata. |

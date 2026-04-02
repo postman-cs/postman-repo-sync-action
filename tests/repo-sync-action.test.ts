@@ -427,6 +427,68 @@ describe('repo sync action', () => {
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
   });
 
+  it('refresh reruns keep the same tracked collection ids in .postman/resources.yaml', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        collectionSyncMode: 'refresh',
+        baselineCollectionId: 'col-baseline-existing',
+        smokeCollectionId: 'col-smoke-existing',
+        contractCollectionId: 'col-contract-existing'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    const resourcesYaml = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as Record<
+      string,
+      any
+    >;
+
+    expect(resourcesYaml.cloudResources.collections).toEqual({
+      '../postman/collections/[Baseline] core-payments': 'col-baseline-existing',
+      '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
+      '../postman/collections/[Contract] core-payments': 'col-contract-existing'
+    });
+  });
+
   it('skips writing a CI workflow when generation is disabled', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),

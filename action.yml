@@ -30,7 +30,7 @@ inputs:
     description: Contract collection ID used for exported artifacts.
     required: false
   collection-sync-mode:
-    description: Collection sync lifecycle mode (refresh, reuse, or version).
+    description: Collection sync lifecycle mode (refresh or version).
     required: false
     default: refresh
   spec-sync-mode:

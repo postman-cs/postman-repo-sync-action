@@ -100,7 +100,7 @@ export const postmanRepoSyncActionContract: {
       required: false
     },
     'collection-sync-mode': {
-      description: 'Collection sync lifecycle mode (refresh, reuse, or version).',
+      description: 'Collection sync lifecycle mode (refresh or version).',
       required: false,
       default: 'refresh'
     },
