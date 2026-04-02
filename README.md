@@ -109,7 +109,7 @@ GitLab CI:
 
 ```yaml
 repo_sync:
-  image: node:22
+  image: node:24
   script:
     - npm install -g postman-repo-sync-action
     - postman-repo-sync --project-name core-payments --workspace-id ws-123 --baseline-collection-id col-baseline --smoke-collection-id col-smoke --contract-collection-id col-contract --postman-api-key "$POSTMAN_API_KEY" --result-json postman-repo-sync-result.json --dotenv-path postman-repo-sync.env --repo-write-mode commit-and-push
@@ -122,7 +122,7 @@ repo_sync:
 Bitbucket Pipelines:
 
 ```yaml
-image: node:22
+image: node:24
 
 pipelines:
   default:
