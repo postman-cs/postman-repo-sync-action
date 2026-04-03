@@ -38,7 +38,7 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
-  collectionSyncMode: 'reuse' | 'refresh' | 'version';
+  collectionSyncMode: 'refresh' | 'version';
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
   environments: string[];
@@ -198,8 +198,8 @@ function normalizeRepoWriteMode(value: string): 'none' | 'commit-only' | 'commit
   return 'commit-and-push';
 }
 
-function normalizeCollectionSyncMode(value: string): 'reuse' | 'refresh' | 'version' {
-  if (value === 'reuse' || value === 'refresh' || value === 'version') {
+function normalizeCollectionSyncMode(value: string): 'refresh' | 'version' {
+  if (value === 'refresh' || value === 'version') {
     return value;
   }
   return 'refresh';

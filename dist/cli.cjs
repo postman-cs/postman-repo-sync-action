@@ -25356,7 +25356,7 @@ function normalizeRepoWriteMode(value) {
   return "commit-and-push";
 }
 function normalizeCollectionSyncMode(value) {
-  if (value === "reuse" || value === "refresh" || value === "version") {
+  if (value === "refresh" || value === "version") {
     return value;
   }
   return "refresh";
