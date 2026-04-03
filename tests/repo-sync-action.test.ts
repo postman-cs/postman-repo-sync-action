@@ -22,6 +22,12 @@ import {
   type ResolvedInputs
 } from '../src/index.js';
 
+type ResourcesYamlShape = {
+  cloudResources?: {
+    collections?: Record<string, string>;
+  };
+};
+
 function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
   return {
     projectName: 'core-payments',
@@ -477,12 +483,11 @@ describe('repo sync action', () => {
       }
     );
 
-    const resourcesYaml = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as Record<
-      string,
-      any
-    >;
+    const resourcesYaml = loadYaml(
+      readFileSync('.postman/resources.yaml', 'utf8')
+    ) as ResourcesYamlShape;
 
-    expect(resourcesYaml.cloudResources.collections).toEqual({
+    expect(resourcesYaml.cloudResources?.collections).toEqual({
       '../postman/collections/[Baseline] core-payments': 'col-baseline-existing',
       '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
       '../postman/collections/[Contract] core-payments': 'col-contract-existing'
