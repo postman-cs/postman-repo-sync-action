@@ -25594,7 +25594,7 @@ function readActionInputs(actionCore) {
     }
     validateCertMaterial(sslClientCert, sslClientKey, sslClientPassphrase || void 0);
   }
-  return resolveInputs({
+  const resolved = resolveInputs({
     ...process.env,
     INPUT_PROJECT_NAME: projectName,
     INPUT_WORKSPACE_ID: readInput(actionCore, "workspace-id"),
@@ -25640,6 +25640,13 @@ function readActionInputs(actionCore) {
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
+  actionCore.info(
+    `[debug] readActionInputs: workflow-provided spec-id="${readInput(actionCore, "spec-id")}", spec-path="${readInput(actionCore, "spec-path")}"`
+  );
+  actionCore.info(
+    `[debug] readActionInputs: resolved specId="${resolved.specId}", resolved specPath="${resolved.specPath}"`
+  );
+  return resolved;
 }
 function buildGhCliEnv(env, token) {
   const allowList = [
@@ -25866,6 +25873,25 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
   const manifestCollections = {};
   const discoveredSpecs = scanLocalSpecReferences();
   const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
+  dependencies.core.info(
+    `[debug] exportArtifacts: inputs.specId="${inputs.specId}", inputs.specPath="${inputs.specPath}"`
+  );
+  dependencies.core.info(
+    `[debug] exportArtifacts: discoveredSpecs=${JSON.stringify(
+      discoveredSpecs.map((spec) => ({
+        repoRelativePath: spec.repoRelativePath,
+        configRelativePath: spec.configRelativePath
+      }))
+    )}`
+  );
+  dependencies.core.info(
+    `[debug] exportArtifacts: mappedSpec=${JSON.stringify(
+      mappedSpec ? {
+        repoRelativePath: mappedSpec.repoRelativePath,
+        configRelativePath: mappedSpec.configRelativePath
+      } : null
+    )}`
+  );
   if (inputs.baselineCollectionId) {
     const col = stripVolatileFields(
       await dependencies.postman.getCollection(inputs.baselineCollectionId)
@@ -25906,6 +25932,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
     mappedSpec?.configRelativePath,
     inputs.specId || void 0
   ));
+  dependencies.core.info(
+    `[debug] exportArtifacts: resources.yaml after write
+${(0, import_node_fs.readFileSync)(".postman/resources.yaml", "utf8")}`
+  );
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
     (0, import_node_fs.writeFileSync)(
       ".postman/workflows.yaml",
@@ -25913,6 +25943,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
         mappedSpec.configRelativePath,
         Object.keys(manifestCollections)
       )
+    );
+    dependencies.core.info(
+      `[debug] exportArtifacts: workflows.yaml after write
+${(0, import_node_fs.readFileSync)(".postman/workflows.yaml", "utf8")}`
     );
   }
 }
