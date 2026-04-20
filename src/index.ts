@@ -123,6 +123,7 @@ export interface RepoSyncDependencies {
     | 'mockExists'
     | 'findMonitorByCollection'
     | 'findMockByCollection'
+    | 'runMonitor'
   >;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
@@ -1137,10 +1138,21 @@ export async function runRepoSync(
           monitorEnvUid,
           effectiveCron || undefined
         );
-        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured)'}`);
+        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured; will trigger a one-time run)'}`);
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
+
+      if (!effectiveCron && resolvedMonitorId) {
+        try {
+          await dependencies.postman.runMonitor(resolvedMonitorId);
+          dependencies.core.info(`Triggered one-time run for monitor: ${resolvedMonitorId}`);
+        } catch (error) {
+          dependencies.core.warning(
+            `Failed to trigger one-time run for monitor ${resolvedMonitorId}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
     }
   }
 

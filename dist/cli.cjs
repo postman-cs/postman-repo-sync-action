@@ -25238,6 +25238,9 @@ var PostmanAssetsClient = class {
       return false;
     }
   }
+  async runMonitor(uid) {
+    await this.request(`/monitors/${uid}/run`, { method: "POST" });
+  }
   async mockExists(uid) {
     try {
       await this.request(`/mocks/${uid}`);
@@ -26093,9 +26096,19 @@ async function runRepoSync(inputs, dependencies) {
           monitorEnvUid,
           effectiveCron || void 0
         );
-        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? "" : " (disabled \u2014 no cron configured)"}`);
+        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? "" : " (disabled \u2014 no cron configured; will trigger a one-time run)"}`);
       }
       outputs["monitor-id"] = resolvedMonitorId;
+      if (!effectiveCron && resolvedMonitorId) {
+        try {
+          await dependencies.postman.runMonitor(resolvedMonitorId);
+          dependencies.core.info(`Triggered one-time run for monitor: ${resolvedMonitorId}`);
+        } catch (error) {
+          dependencies.core.warning(
+            `Failed to trigger one-time run for monitor ${resolvedMonitorId}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
     }
   }
   if (inputs.workspaceLinkEnabled && inputs.workspaceId && inputs.repoUrl && dependencies.internalIntegration) {
