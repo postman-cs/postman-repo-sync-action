@@ -528,6 +528,8 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_SPEC_ID: readInput(actionCore, 'spec-id'),
+    INPUT_SPEC_PATH: readInput(actionCore, 'spec-path'),
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
     INPUT_SPEC_SYNC_MODE: readInput(actionCore, 'spec-sync-mode') || 'update',
     INPUT_RELEASE_LABEL: readInput(actionCore, 'release-label'),
