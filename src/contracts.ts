@@ -122,7 +122,7 @@ export const postmanRepoSyncActionContract: {
       required: false
     },
     'monitor-cron': {
-      description: "Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created in a disabled state.",
+      description: "Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run).",
       required: false,
       default: ''
     },

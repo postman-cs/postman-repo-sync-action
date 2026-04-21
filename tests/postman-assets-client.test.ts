@@ -189,6 +189,16 @@ describe('discovery and validation methods', () => {
     expect(uid).toBe('mon-cron');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it('runMonitor triggers a one-time run via POST /monitors/:uid/run', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ monitor: { uid: 'mon-1' } }));
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    await client.runMonitor('mon-1');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const call = fetchImpl.mock.calls[0];
+    expect(call?.[0]).toContain('/monitors/mon-1/run');
+    expect(call?.[1]?.method).toBe('POST');
+  });
 });
 
 describe('getTeams', () => {

@@ -278,6 +278,10 @@ export class PostmanAssetsClient {
     }
   }
 
+  async runMonitor(uid: string): Promise<void> {
+    await this.request(`/monitors/${uid}/run`, { method: 'POST' });
+  }
+
   async mockExists(uid: string): Promise<boolean> {
     try {
       await this.request(`/mocks/${uid}`);

@@ -245,7 +245,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const github = {
       getRepositoryVariable: vi.fn().mockResolvedValue(''),
@@ -398,7 +399,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const github = {
       getRepositoryVariable: vi
@@ -450,7 +452,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -507,7 +510,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const repoMutation = {
       commitAndPush: vi.fn().mockResolvedValue({
@@ -564,7 +568,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -616,7 +621,8 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
-      findMockByCollection: vi.fn().mockResolvedValue(null)
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -675,6 +681,7 @@ describe('monitor resolution paths', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }
@@ -745,6 +752,54 @@ describe('monitor resolution paths', () => {
       undefined
     );
   });
+
+  it('triggers a one-time monitor run when monitor-cron is empty', async () => {
+    const postman = makePostman();
+    const github = makeGithub();
+    await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorCron: '' }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.runMonitor).toHaveBeenCalledTimes(1);
+    expect(postman.runMonitor).toHaveBeenCalledWith('mon-new');
+  });
+
+  it('does not trigger a one-time monitor run when monitor-cron is provided', async () => {
+    const postman = makePostman();
+    const github = makeGithub();
+    await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorCron: '0 */6 * * *' }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+  });
+
+  it('triggers a one-time run on a reused explicit monitor when cron is empty', async () => {
+    const postman = makePostman({ monitorExists: vi.fn().mockResolvedValue(true) });
+    const github = makeGithub();
+    await runRepoSync(
+      createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'explicit-mon', monitorCron: '' }),
+      makeDeps(postman, github)
+    );
+
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.runMonitor).toHaveBeenCalledWith('explicit-mon');
+  });
+
+  it('swallows runMonitor failures with a warning', async () => {
+    const postman = makePostman({
+      runMonitor: vi.fn().mockRejectedValue(new Error('boom'))
+    });
+    const github = makeGithub();
+    await expect(
+      runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorCron: '' }),
+        makeDeps(postman, github)
+      )
+    ).resolves.toBeDefined();
+  });
 });
 
 describe('mock resolution paths', () => {
@@ -762,6 +817,7 @@ describe('mock resolution paths', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }
@@ -1064,6 +1120,7 @@ describe('repo-variable fallback resolution', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }
