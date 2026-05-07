@@ -13,6 +13,7 @@ src/
       postman-assets-client.ts     # Postman API client (envs, mocks, monitors, collection export)
       internal-integration-adapter.ts  # Bifrost adapter (workspace linking, system env association)
     github/
+      github-api-client.ts         # Repo variable persistence
       repo-mutation.ts             # Git commit/push logic, ref resolution
     repo/
       context.ts                   # CI provider auto-detection (GitHub, GitLab, Bitbucket, Azure)
