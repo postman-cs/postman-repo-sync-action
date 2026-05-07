@@ -79,4 +79,90 @@ describe('renderCiWorkflowTemplate', () => {
     expect(stepNames).toContain('Run Smoke Tests');
     expect(stepNames).toContain('Run Contract Tests');
   });
+
+  it('routes install URL via env var, not shell interpolation', () => {
+    const ciWorkflow = renderCiWorkflowTemplate();
+    const parsed = parse(ciWorkflow);
+
+    const installStep = parsed.jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Install Postman CLI'
+    );
+
+    expect(installStep).toBeDefined();
+    expect(installStep.env).toHaveProperty('POSTMAN_CLI_INSTALL_URL');
+    expect(installStep.run).toContain('$POSTMAN_CLI_INSTALL_URL');
+    expect(installStep.run).not.toContain('${');
+    expect(installStep.run).not.toContain('curl -o-');
+    expect(installStep.run).toContain('curl -fsSL');
+  });
+
+  it('rejects javascript: pseudo-protocol', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'javascript:alert(1)'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects http:// (non-https)', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'http://dl-cli.pstmn.io/install/unix.sh'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects URLs with shell metacharacters: semicolon', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'https://example.com/install.sh; rm -rf /'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects URLs with shell metacharacters: double quotes', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'https://example.com/install.sh" && rm -rf /'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects URLs with shell metacharacters: backticks', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'https://example.com/install.sh` echo pwned`'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects URLs with command substitution: $()', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'https://example.com/install.sh$(whoami)'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('rejects URLs with pipe characters', () => {
+    expect(() =>
+      renderCiWorkflowTemplate({
+        postmanCliInstallUrl: 'https://example.com/install.sh | cat'
+      })
+    ).toThrow(/must be an https URL with safe characters/);
+  });
+
+  it('accepts valid https URLs with query parameters', () => {
+    const url = 'https://cdn.example.com/path/install.sh?version=1.0&platform=linux';
+    const ciWorkflow = renderCiWorkflowTemplate({
+      postmanCliInstallUrl: url
+    });
+
+    const parsed = parse(ciWorkflow);
+    const installStep = parsed.jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Install Postman CLI'
+    );
+
+    expect(installStep.env.POSTMAN_CLI_INSTALL_URL).toBe(url);
+  });
 });
