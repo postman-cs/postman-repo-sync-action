@@ -55,9 +55,7 @@ describe('postman-repo-sync-action contract', () => {
       'ssl-extra-ca-certs',
       'spec-id',
       'spec-path',
-      'postman-api-base',
-      'postman-bifrost-base',
-      'postman-cli-install-url'
+      'postman-stack'
     ]);
 
     expect(Object.keys(postmanRepoSyncActionContract.outputs)).toEqual([
@@ -107,6 +105,8 @@ describe('postman-repo-sync-action contract', () => {
     expect(actionYaml.inputs['environment-sync-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['artifact-dir']?.default).toBe('postman');
     expect(actionYaml.inputs['repo-write-mode']?.default).toBe('commit-and-push');
+    expect(actionYaml.inputs['postman-stack']?.default).toBe('prod');
+    expect(postmanRepoSyncActionContract.inputs['postman-stack'].allowedValues).toEqual(['prod', 'beta']);
   });
 
   it('resolves push targets from current-ref semantics instead of hardcoding main', () => {

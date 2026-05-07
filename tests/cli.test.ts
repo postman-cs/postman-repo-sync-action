@@ -16,6 +16,8 @@ describe('cli', () => {
         '--workspace-id=ws-123',
         '--repo-url',
         'https://github.com/postman-cs/repo-sync-demo',
+        '--postman-stack',
+        'beta',
         '--team-id',
         'team-001',
         '--result-json',
@@ -29,6 +31,7 @@ describe('cli', () => {
     expect(config.inputEnv.INPUT_PROJECT_NAME).toBe('core-payments');
     expect(config.inputEnv.INPUT_WORKSPACE_ID).toBe('ws-123');
     expect(config.inputEnv.INPUT_REPO_URL).toBe('https://github.com/postman-cs/repo-sync-demo');
+    expect(config.inputEnv.INPUT_POSTMAN_STACK).toBe('beta');
     expect(config.inputEnv.INPUT_TEAM_ID).toBe('team-001');
     expect(config.resultJsonPath).toBe('outputs/result.json');
     expect(config.dotenvPath).toBe('.env.repo-sync');
@@ -70,5 +73,20 @@ describe('cli', () => {
     expect(inputs.githubHeadRef).toBe('');
     expect(inputs.githubRefName).toBe('feature/non-github-ref');
     expect(inputs.repository).toBe('acme/payments-api');
+  });
+
+  it('selects beta endpoints from postman-stack', () => {
+    const inputs = resolveInputs({
+      INPUT_POSTMAN_STACK: 'beta',
+      INPUT_POSTMAN_API_BASE: 'https://override.example.com',
+      INPUT_POSTMAN_BIFROST_BASE: 'https://override.example.com',
+      INPUT_POSTMAN_CLI_INSTALL_URL: 'https://override.example.com/install.sh'
+    });
+
+    expect(inputs.postmanStack).toBe('beta');
+    expect(inputs.postmanApiBase).toBe('https://api.getpostman-beta.com');
+    expect(inputs.postmanBifrostBase).toBe('https://bifrost-https-v4.gw.postman-beta.com');
+    expect(inputs.postmanCliInstallUrl).toBe('https://dl-cli.pstmn-beta.io/install/unix.sh');
+    expect(() => resolveInputs({ INPUT_POSTMAN_STACK: 'stage' })).toThrow(/Unsupported postman-stack/);
   });
 });

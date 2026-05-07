@@ -24497,8 +24497,32 @@ async function convertAndSplitCollection(v2Collection, outputDir) {
   await fs.writeFile(path.join(outputDir, "collection.yaml"), stringifyYaml(descriptor), "utf8");
 }
 
+// src/lib/postman/base-urls.ts
+var POSTMAN_ENDPOINT_PROFILES = {
+  prod: {
+    apiBaseUrl: "https://api.getpostman.com",
+    bifrostBaseUrl: "https://bifrost-premium-https-v4.gw.postman.com",
+    cliInstallUrl: "https://dl-cli.pstmn.io/install/unix.sh"
+  },
+  beta: {
+    apiBaseUrl: "https://api.getpostman-beta.com",
+    bifrostBaseUrl: "https://bifrost-https-v4.gw.postman-beta.com",
+    cliInstallUrl: "https://dl-cli.pstmn-beta.io/install/unix.sh"
+  }
+};
+function parsePostmanStack(value) {
+  const normalized = String(value || "prod").trim().toLowerCase();
+  if (normalized === "prod" || normalized === "beta") {
+    return normalized;
+  }
+  throw new Error(`Unsupported postman-stack "${value}". Supported values: prod, beta`);
+}
+function resolvePostmanEndpointProfile(stack) {
+  return POSTMAN_ENDPOINT_PROFILES[stack];
+}
+
 // src/lib/ci-workflow-template.ts
-var DEFAULT_POSTMAN_CLI_INSTALL_URL = "https://dl-cli.pstmn.io/install/unix.sh";
+var DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
 function validateHttpsInstallUrl(url) {
   const safeUrlPattern = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~/?=&%-]+$/;
   if (!safeUrlPattern.test(url)) {
@@ -24946,7 +24970,7 @@ var BifrostInternalIntegrationAdapter = class {
   constructor(options) {
     this.accessToken = String(options.accessToken || "").trim();
     this.bifrostBaseUrl = String(
-      options.bifrostBaseUrl || "https://bifrost-premium-https-v4.gw.postman.com"
+      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.orgMode = options.orgMode ?? false;
@@ -25077,18 +25101,25 @@ function createInternalIntegrationAdapter(options) {
 var PostmanAssetsClient = class {
   apiKey;
   baseUrl;
+  bifrostBaseUrl;
   fetchImpl;
   constructor(options) {
     this.apiKey = String(options.apiKey || "").trim();
-    this.baseUrl = String(options.baseUrl || "https://api.getpostman.com").replace(
+    this.baseUrl = String(options.baseUrl || POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl).replace(
       /\/+$/,
       ""
     );
+    this.bifrostBaseUrl = String(
+      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
+    ).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
   getBaseUrl() {
     return this.baseUrl;
+  }
+  getBifrostBaseUrl() {
+    return this.bifrostBaseUrl;
   }
   async request(path4, init = {}) {
     const url = path4.startsWith("http") ? path4 : `${this.baseUrl}${path4}`;
@@ -25425,6 +25456,8 @@ function resolveInputs(env = process.env) {
   const systemEnvMap = parseJsonMap(getInput("system-env-map-json", env) || "{}");
   const environmentUids = parseJsonMap(getInput("environment-uids-json", env) || "{}");
   const envRuntimeUrls = parseJsonMap(getInput("env-runtime-urls-json", env) || "{}");
+  const postmanStack = parsePostmanStack(getInput("postman-stack", env));
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack);
   return {
     projectName: getInput("project-name", env),
     workspaceId: getInput("workspace-id", env),
@@ -25469,9 +25502,10 @@ function resolveInputs(env = process.env) {
     sslExtraCaCerts: getInput("ssl-extra-ca-certs", env),
     teamId: getInput("team-id", env) || normalizeInputValue(env.POSTMAN_TEAM_ID),
     repository: getInput("repository", env) || normalizeInputValue(env.GITHUB_REPOSITORY) || normalizeInputValue(repoContext.repoSlug),
-    postmanApiBase: getInput("postman-api-base", env) || "https://api.getpostman.com",
-    postmanBifrostBase: getInput("postman-bifrost-base", env) || "https://bifrost-premium-https-v4.gw.postman.com",
-    postmanCliInstallUrl: getInput("postman-cli-install-url", env) || "https://dl-cli.pstmn.io/install/unix.sh"
+    postmanStack,
+    postmanApiBase: endpointProfile.apiBaseUrl,
+    postmanBifrostBase: endpointProfile.bifrostBaseUrl,
+    postmanCliInstallUrl: endpointProfile.cliInstallUrl
   };
 }
 function buildEnvironmentValues(envName, baseUrl) {
@@ -25677,9 +25711,7 @@ function readActionInputs(actionCore) {
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, "team-id") || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, "repository") || process.env.GITHUB_REPOSITORY,
-    INPUT_POSTMAN_API_BASE: readInput(actionCore, "postman-api-base") || "https://api.getpostman.com",
-    INPUT_POSTMAN_BIFROST_BASE: readInput(actionCore, "postman-bifrost-base") || "https://bifrost-premium-https-v4.gw.postman.com",
-    INPUT_POSTMAN_CLI_INSTALL_URL: readInput(actionCore, "postman-cli-install-url") || "https://dl-cli.pstmn.io/install/unix.sh",
+    INPUT_POSTMAN_STACK: readInput(actionCore, "postman-stack") || "prod",
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
@@ -26257,7 +26289,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       actionCore.info("Skipping generated POSTMAN_API_KEY GitHub secret persistence for this run.");
     }
   }
-  if (!inputs.orgMode && teamId) {
+  if (!inputs.orgMode && apiKey) {
     try {
       const client = new PostmanAssetsClient({
         apiKey,
@@ -26300,6 +26332,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   const postman = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
     baseUrl: inputs.postmanApiBase,
+    bifrostBaseUrl: inputs.postmanBifrostBase,
     secretMasker: masker
   });
   const repoMutation = repository && (inputs.repoWriteMode === "commit-only" || inputs.repoWriteMode === "commit-and-push") ? new RepoMutationService({
@@ -26518,9 +26551,7 @@ function parseCliArgs(argv, env = process.env) {
     "spec-id",
     "spec-path",
     "team-id",
-    "postman-api-base",
-    "postman-bifrost-base",
-    "postman-cli-install-url"
+    "postman-stack"
   ];
   const inputEnv = { ...env };
   for (const name of inputNames) {

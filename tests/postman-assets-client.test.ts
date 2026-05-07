@@ -297,6 +297,15 @@ describe('getMe', () => {
     });
   });
 
+  it('honors custom bifrostBaseUrl for beta stack wiring', () => {
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-beta',
+      bifrostBaseUrl: 'https://bifrost-https-v4.gw.postman-beta.com/'
+    });
+
+    expect(client.getBifrostBaseUrl()).toBe('https://bifrost-https-v4.gw.postman-beta.com');
+  });
+
   it('returns null when response has no body', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } })
