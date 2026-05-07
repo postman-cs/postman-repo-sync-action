@@ -1,4 +1,15 @@
-export const CI_WORKFLOW_TEMPLATE = [
+export const DEFAULT_POSTMAN_CLI_INSTALL_URL = 'https://dl-cli.pstmn.io/install/unix.sh';
+
+export function renderCiWorkflowTemplate(
+  options: { postmanCliInstallUrl?: string } = {}
+): string {
+  const installUrl =
+    String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  return buildCiWorkflowLines(installUrl).join('\\n');
+}
+
+function buildCiWorkflowLines(installUrl: string): string[] {
+  return [
   'name: CI/CD Pipeline',
   'on:',
   '  push:',
@@ -13,7 +24,7 @@ export const CI_WORKFLOW_TEMPLATE = [
   '    steps:',
   '      - uses: actions/checkout@v4',
   '      - name: Install Postman CLI',
-  '        run: curl -o- "https://dl-cli.pstmn.io/install/unix.sh" | sh',
+  `        run: curl -o- "${installUrl}" | sh`,
   '      - name: Login to Postman CLI',
   '        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}',
   '      - name: Resolve Postman Resource IDs',
@@ -90,4 +101,7 @@ export const CI_WORKFLOW_TEMPLATE = [
   '          fi',
   '          "${CMD[@]}"',
   ''
-].join('\\n');
+  ];
+}
+
+export const CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();

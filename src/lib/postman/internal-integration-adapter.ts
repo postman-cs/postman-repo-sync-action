@@ -9,6 +9,7 @@ export interface GovernanceAssociation {
 export interface InternalIntegrationAdapterOptions {
   accessToken: string;
   backend: string;
+  bifrostBaseUrl?: string;
   fetchImpl?: typeof fetch;
   orgMode?: boolean;
   secretMasker?: SecretMasker;
@@ -32,6 +33,7 @@ export interface InternalIntegrationAdapter {
 
 class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly accessToken: string;
+  private readonly bifrostBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly orgMode: boolean;
   private readonly teamId: string;
@@ -39,6 +41,9 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
 
   constructor(options: InternalIntegrationAdapterOptions) {
     this.accessToken = String(options.accessToken || '').trim();
+    this.bifrostBaseUrl = String(
+      options.bifrostBaseUrl || 'https://bifrost-premium-https-v4.gw.postman.com'
+    ).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.orgMode = options.orgMode ?? false;
     this.teamId = String(options.teamId || '').trim();
@@ -104,7 +109,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     workspaceId: string,
     repoUrl: string
   ): Promise<void> {
-    const url = 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy';
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const payload = {
       service: 'workspaces',
       method: 'POST',
@@ -148,7 +153,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   }
 
   async createApiKey(name: string): Promise<string> {
-    const url = 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy';
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const headers = this.bifrostHeaders();
 
     const payload = {

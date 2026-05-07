@@ -24493,99 +24493,107 @@ async function convertAndSplitCollection(v2Collection, outputDir) {
 }
 
 // src/lib/ci-workflow-template.ts
-var CI_WORKFLOW_TEMPLATE = [
-  "name: CI/CD Pipeline",
-  "on:",
-  "  push:",
-  "    branches: [main]",
-  "  pull_request:",
-  "    branches: [main]",
-  "  schedule:",
-  '    - cron: "0 */6 * * *"',
-  "jobs:",
-  "  test:",
-  "    runs-on: ubuntu-latest",
-  "    steps:",
-  "      - uses: actions/checkout@v4",
-  "      - name: Install Postman CLI",
-  '        run: curl -o- "https://dl-cli.pstmn.io/install/unix.sh" | sh',
-  "      - name: Login to Postman CLI",
-  "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
-  "      - name: Resolve Postman Resource IDs",
-  "        run: |",
-  "          ruby <<'RUBY'",
-  "          require 'yaml'",
-  "          config = YAML.load_file('.postman/resources.yaml') || {}",
-  "          cloud = config.fetch('cloudResources', {})",
-  "          collections = cloud.fetch('collections', {})",
-  "          environments = cloud.fetch('environments', {})",
-  "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
-  "          contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
-  "          environment = environments.find { |path, _| path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
-  "          missing = []",
-  "          missing << 'smoke collection' unless smoke",
-  "          missing << 'contract collection' unless contract",
-  "          missing << 'environment' unless environment",
-  `          abort("Missing Postman resource IDs in .postman/resources.yaml: #{missing.join(', ')}") unless missing.empty?`,
-  "          File.open(ENV.fetch('GITHUB_ENV'), 'a') do |file|",
-  '            file.puts("POSTMAN_SMOKE_COLLECTION_UID=#{smoke}")',
-  '            file.puts("POSTMAN_CONTRACT_COLLECTION_UID=#{contract}")',
-  '            file.puts("POSTMAN_ENVIRONMENT_UID=#{environment}")',
-  "          end",
-  "          RUBY",
-  "      - name: Decode SSL certificates",
-  "        if: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}",
-  "        env:",
-  "          POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}",
-  "          POSTMAN_SSL_CLIENT_KEY_B64: ${{ secrets.POSTMAN_SSL_CLIENT_KEY_B64 }}",
-  "          POSTMAN_SSL_EXTRA_CA_CERTS_B64: ${{ secrets.POSTMAN_SSL_EXTRA_CA_CERTS_B64 }}",
-  "        run: |",
-  '          mkdir -p "$RUNNER_TEMP/postman-ssl"',
-  '          printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.crt"',
-  '          printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.key"',
-  '          if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
-  '            printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/ca.crt"',
-  "          fi",
-  "      - name: Run Smoke Tests",
-  "        env:",
-  "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
-  "        run: |",
-  '          CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
-  '            -e "$POSTMAN_ENVIRONMENT_UID"',
-  "            --report-events",
-  `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
-  '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
-  '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
-  '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
-  '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
-  '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
-  "            fi",
-  '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
-  '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
-  "            fi",
-  "          fi",
-  '          "${CMD[@]}"',
-  "      - name: Run Contract Tests",
-  "        env:",
-  "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
-  "        run: |",
-  '          CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
-  '            -e "$POSTMAN_ENVIRONMENT_UID"',
-  "            --report-events",
-  `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
-  '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
-  '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
-  '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
-  '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
-  '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
-  "            fi",
-  '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
-  '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
-  "            fi",
-  "          fi",
-  '          "${CMD[@]}"',
-  ""
-].join("\\n");
+var DEFAULT_POSTMAN_CLI_INSTALL_URL = "https://dl-cli.pstmn.io/install/unix.sh";
+function renderCiWorkflowTemplate(options = {}) {
+  const installUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  return buildCiWorkflowLines(installUrl).join("\\n");
+}
+function buildCiWorkflowLines(installUrl) {
+  return [
+    "name: CI/CD Pipeline",
+    "on:",
+    "  push:",
+    "    branches: [main]",
+    "  pull_request:",
+    "    branches: [main]",
+    "  schedule:",
+    '    - cron: "0 */6 * * *"',
+    "jobs:",
+    "  test:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - uses: actions/checkout@v4",
+    "      - name: Install Postman CLI",
+    `        run: curl -o- "${installUrl}" | sh`,
+    "      - name: Login to Postman CLI",
+    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
+    "      - name: Resolve Postman Resource IDs",
+    "        run: |",
+    "          ruby <<'RUBY'",
+    "          require 'yaml'",
+    "          config = YAML.load_file('.postman/resources.yaml') || {}",
+    "          cloud = config.fetch('cloudResources', {})",
+    "          collections = cloud.fetch('collections', {})",
+    "          environments = cloud.fetch('environments', {})",
+    "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
+    "          contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
+    "          environment = environments.find { |path, _| path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
+    "          missing = []",
+    "          missing << 'smoke collection' unless smoke",
+    "          missing << 'contract collection' unless contract",
+    "          missing << 'environment' unless environment",
+    `          abort("Missing Postman resource IDs in .postman/resources.yaml: #{missing.join(', ')}") unless missing.empty?`,
+    "          File.open(ENV.fetch('GITHUB_ENV'), 'a') do |file|",
+    '            file.puts("POSTMAN_SMOKE_COLLECTION_UID=#{smoke}")',
+    '            file.puts("POSTMAN_CONTRACT_COLLECTION_UID=#{contract}")',
+    '            file.puts("POSTMAN_ENVIRONMENT_UID=#{environment}")',
+    "          end",
+    "          RUBY",
+    "      - name: Decode SSL certificates",
+    "        if: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}",
+    "        env:",
+    "          POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}",
+    "          POSTMAN_SSL_CLIENT_KEY_B64: ${{ secrets.POSTMAN_SSL_CLIENT_KEY_B64 }}",
+    "          POSTMAN_SSL_EXTRA_CA_CERTS_B64: ${{ secrets.POSTMAN_SSL_EXTRA_CA_CERTS_B64 }}",
+    "        run: |",
+    '          mkdir -p "$RUNNER_TEMP/postman-ssl"',
+    '          printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.crt"',
+    '          printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/client.key"',
+    '          if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
+    '            printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$RUNNER_TEMP/postman-ssl/ca.crt"',
+    "          fi",
+    "      - name: Run Smoke Tests",
+    "        env:",
+    "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+    "        run: |",
+    '          CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
+    '            -e "$POSTMAN_ENVIRONMENT_UID"',
+    "            --report-events",
+    `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+    '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
+    '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
+    '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
+    '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "            fi",
+    '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
+    '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
+    "            fi",
+    "          fi",
+    '          "${CMD[@]}"',
+    "      - name: Run Contract Tests",
+    "        env:",
+    "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+    "        run: |",
+    '          CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
+    '            -e "$POSTMAN_ENVIRONMENT_UID"',
+    "            --report-events",
+    `            --env-var "\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+    '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
+    '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
+    '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
+    '            if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '              CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "            fi",
+    '            if [ -f "$RUNNER_TEMP/postman-ssl/ca.crt" ]; then',
+    '              CMD+=(--ssl-extra-ca-certs "$RUNNER_TEMP/postman-ssl/ca.crt")',
+    "            fi",
+    "          fi",
+    '          "${CMD[@]}"',
+    ""
+  ];
+}
+var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
 
 // src/lib/secrets.ts
 var REDACTED = "[REDACTED]";
@@ -24913,12 +24921,16 @@ var HttpError = class _HttpError extends Error {
 // src/lib/postman/internal-integration-adapter.ts
 var BifrostInternalIntegrationAdapter = class {
   accessToken;
+  bifrostBaseUrl;
   fetchImpl;
   orgMode;
   teamId;
   workerBaseUrl;
   constructor(options) {
     this.accessToken = String(options.accessToken || "").trim();
+    this.bifrostBaseUrl = String(
+      options.bifrostBaseUrl || "https://bifrost-premium-https-v4.gw.postman.com"
+    ).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.orgMode = options.orgMode ?? false;
     this.teamId = String(options.teamId || "").trim();
@@ -24972,7 +24984,7 @@ var BifrostInternalIntegrationAdapter = class {
     }
   }
   async connectWorkspaceToRepository(workspaceId, repoUrl) {
-    const url = "https://bifrost-premium-https-v4.gw.postman.com/ws/proxy";
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const payload = {
       service: "workspaces",
       method: "POST",
@@ -25006,7 +25018,7 @@ var BifrostInternalIntegrationAdapter = class {
     }
   }
   async createApiKey(name) {
-    const url = "https://bifrost-premium-https-v4.gw.postman.com/ws/proxy";
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const headers = this.bifrostHeaders();
     const payload = {
       service: "identity",
@@ -25057,6 +25069,9 @@ var PostmanAssetsClient = class {
     );
     this.fetchImpl = options.fetchImpl ?? fetch;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
+  }
+  getBaseUrl() {
+    return this.baseUrl;
   }
   async request(path3, init = {}) {
     const url = path3.startsWith("http") ? path3 : `${this.baseUrl}${path3}`;
@@ -25436,7 +25451,10 @@ function resolveInputs(env = process.env) {
     sslClientPassphrase: getInput("ssl-client-passphrase", env),
     sslExtraCaCerts: getInput("ssl-extra-ca-certs", env),
     teamId: getInput("team-id", env) || normalizeInputValue(env.POSTMAN_TEAM_ID),
-    repository: getInput("repository", env) || normalizeInputValue(env.GITHUB_REPOSITORY) || normalizeInputValue(repoContext.repoSlug)
+    repository: getInput("repository", env) || normalizeInputValue(env.GITHUB_REPOSITORY) || normalizeInputValue(repoContext.repoSlug),
+    postmanApiBase: getInput("postman-api-base", env) || "https://api.getpostman.com",
+    postmanBifrostBase: getInput("postman-bifrost-base", env) || "https://bifrost-premium-https-v4.gw.postman.com",
+    postmanCliInstallUrl: getInput("postman-cli-install-url", env) || "https://dl-cli.pstmn.io/install/unix.sh"
   };
 }
 function buildEnvironmentValues(envName, baseUrl) {
@@ -25642,6 +25660,9 @@ function readActionInputs(actionCore) {
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, "team-id") || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, "repository") || process.env.GITHUB_REPOSITORY,
+    INPUT_POSTMAN_API_BASE: readInput(actionCore, "postman-api-base") || "https://api.getpostman.com",
+    INPUT_POSTMAN_BIFROST_BASE: readInput(actionCore, "postman-bifrost-base") || "https://bifrost-premium-https-v4.gw.postman.com",
+    INPUT_POSTMAN_CLI_INSTALL_URL: readInput(actionCore, "postman-cli-install-url") || "https://dl-cli.pstmn.io/install/unix.sh",
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
@@ -25925,7 +25946,9 @@ function renderCiWorkflow(inputs) {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
-  return CI_WORKFLOW_TEMPLATE;
+  return renderCiWorkflowTemplate({
+    postmanCliInstallUrl: inputs.postmanCliInstallUrl
+  });
 }
 function createRepoSummary(outputs, envUids, pushed) {
   return JSON.stringify({
@@ -26139,7 +26162,11 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
   let teamId = inputs.teamId;
   let keyValid = false;
   if (apiKey) {
-    const tempClient = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+    const tempClient = new PostmanAssetsClient({
+      apiKey,
+      baseUrl: inputs.postmanApiBase,
+      secretMasker: masker
+    });
     try {
       const me = await tempClient.getMe();
       if (me && me.user) {
@@ -26164,6 +26191,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
     const internalIntegration = createInternalIntegrationAdapter({
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
+      bifrostBaseUrl: inputs.postmanBifrostBase,
       orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
@@ -26172,7 +26200,11 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
     apiKey = await internalIntegration.createApiKey(keyName);
     actionCore.setSecret(apiKey);
     if (!teamId) {
-      const tempClient = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+      const tempClient = new PostmanAssetsClient({
+        apiKey,
+        baseUrl: inputs.postmanApiBase,
+        secretMasker: masker
+      });
       const autoTeamId = await tempClient.getAutoDerivedTeamId();
       if (autoTeamId) teamId = autoTeamId;
     }
@@ -26210,7 +26242,11 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
   }
   if (!inputs.orgMode && teamId) {
     try {
-      const client = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+      const client = new PostmanAssetsClient({
+        apiKey,
+        baseUrl: inputs.postmanApiBase,
+        secretMasker: masker
+      });
       const teams = await client.getTeams();
       if (teams.length > 1 && teams.every((t) => t.organizationId == null)) {
         actionCore.warning(
@@ -26242,6 +26278,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   ]);
   const postman = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
+    baseUrl: inputs.postmanApiBase,
     secretMasker: masker
   });
   const repoMutation = repository && (inputs.repoWriteMode === "commit-only" || inputs.repoWriteMode === "commit-and-push") ? new RepoMutationService({
@@ -26261,6 +26298,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   const internalIntegration = inputs.postmanAccessToken ? createInternalIntegrationAdapter({
     accessToken: inputs.postmanAccessToken,
     backend: inputs.integrationBackend,
+    bifrostBaseUrl: inputs.postmanBifrostBase,
     orgMode: inputs.orgMode,
     teamId: resolved.teamId,
     secretMasker: masker
