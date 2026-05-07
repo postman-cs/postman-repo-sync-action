@@ -24499,8 +24499,18 @@ async function convertAndSplitCollection(v2Collection, outputDir) {
 
 // src/lib/ci-workflow-template.ts
 var DEFAULT_POSTMAN_CLI_INSTALL_URL = "https://dl-cli.pstmn.io/install/unix.sh";
+function validateHttpsInstallUrl(url) {
+  const safeUrlPattern = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~/?=&%-]+$/;
+  if (!safeUrlPattern.test(url)) {
+    throw new Error(
+      `postman-cli-install-url must be an https URL with safe characters; got: ${url}`
+    );
+  }
+  return url;
+}
 function renderCiWorkflowTemplate(options = {}) {
-  const installUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  const installUrl = validateHttpsInstallUrl(rawUrl);
   return buildCiWorkflowLines(installUrl).join("\n");
 }
 function buildCiWorkflowLines(installUrl) {
@@ -24519,7 +24529,9 @@ function buildCiWorkflowLines(installUrl) {
     "    steps:",
     "      - uses: actions/checkout@v4",
     "      - name: Install Postman CLI",
-    `        run: curl -o- "${installUrl}" | sh`,
+    "        env:",
+    `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
+    '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
     "      - name: Login to Postman CLI",
     "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
     "      - name: Resolve Postman Resource IDs",
