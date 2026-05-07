@@ -24501,7 +24501,7 @@ async function convertAndSplitCollection(v2Collection, outputDir) {
 var DEFAULT_POSTMAN_CLI_INSTALL_URL = "https://dl-cli.pstmn.io/install/unix.sh";
 function renderCiWorkflowTemplate(options = {}) {
   const installUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
-  return buildCiWorkflowLines(installUrl).join("\\n");
+  return buildCiWorkflowLines(installUrl).join("\n");
 }
 function buildCiWorkflowLines(installUrl) {
   return [

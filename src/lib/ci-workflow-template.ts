@@ -5,7 +5,7 @@ export function renderCiWorkflowTemplate(
 ): string {
   const installUrl =
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
-  return buildCiWorkflowLines(installUrl).join('\\n');
+  return buildCiWorkflowLines(installUrl).join('\n');
 }
 
 function buildCiWorkflowLines(installUrl: string): string[] {
