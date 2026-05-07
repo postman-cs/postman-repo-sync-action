@@ -1,5 +1,6 @@
 import { HttpError } from '../http-error.js';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
+import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 
 type EnvironmentValue = {
   key: string;
@@ -18,6 +19,7 @@ type MockResponse = {
 export interface PostmanAssetsClientOptions {
   apiKey: string;
   baseUrl?: string;
+  bifrostBaseUrl?: string;
   fetchImpl?: typeof fetch;
   secretMasker?: SecretMasker;
 }
@@ -25,20 +27,28 @@ export interface PostmanAssetsClientOptions {
 export class PostmanAssetsClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly bifrostBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: PostmanAssetsClientOptions) {
     this.apiKey = String(options.apiKey || '').trim();
-    this.baseUrl = String(options.baseUrl || 'https://api.getpostman.com').replace(
+    this.baseUrl = String(options.baseUrl || POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl).replace(
       /\/+$/,
       ''
     );
+    this.bifrostBaseUrl = String(
+      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
+    ).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
 
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  getBifrostBaseUrl(): string {
+    return this.bifrostBaseUrl;
   }
 
   private async request(

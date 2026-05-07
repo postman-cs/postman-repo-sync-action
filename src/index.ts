@@ -20,6 +20,11 @@ import {
   createInternalIntegrationAdapter,
   type InternalIntegrationAdapter
 } from './lib/postman/internal-integration-adapter.js';
+import {
+  parsePostmanStack,
+  resolvePostmanEndpointProfile,
+  type PostmanStack
+} from './lib/postman/base-urls.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { createSecretMasker, type SecretMasker } from './lib/secrets.js';
 import { validateCertMaterial } from './lib/ssl-validation.js';
@@ -76,6 +81,7 @@ export interface ResolvedInputs {
   specPath: string;
   teamId: string;
   repository: string;
+  postmanStack: PostmanStack;
   postmanApiBase: string;
   postmanBifrostBase: string;
   postmanCliInstallUrl: string;
@@ -257,6 +263,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   const systemEnvMap = parseJsonMap(getInput('system-env-map-json', env) || '{}');
   const environmentUids = parseJsonMap(getInput('environment-uids-json', env) || '{}');
   const envRuntimeUrls = parseJsonMap(getInput('env-runtime-urls-json', env) || '{}');
+  const postmanStack = parsePostmanStack(getInput('postman-stack', env));
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack);
 
   return {
     projectName: getInput('project-name', env),
@@ -308,14 +316,10 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
       getInput('repository', env) ||
       normalizeInputValue(env.GITHUB_REPOSITORY) ||
       normalizeInputValue(repoContext.repoSlug),
-    postmanApiBase:
-      getInput('postman-api-base', env) || 'https://api.getpostman.com',
-    postmanBifrostBase:
-      getInput('postman-bifrost-base', env) ||
-      'https://bifrost-premium-https-v4.gw.postman.com',
-    postmanCliInstallUrl:
-      getInput('postman-cli-install-url', env) ||
-      'https://dl-cli.pstmn.io/install/unix.sh'
+    postmanStack,
+    postmanApiBase: endpointProfile.apiBaseUrl,
+    postmanBifrostBase: endpointProfile.bifrostBaseUrl,
+    postmanCliInstallUrl: endpointProfile.cliInstallUrl
   };
 }
 
@@ -578,14 +582,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, 'team-id') || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, 'repository') || process.env.GITHUB_REPOSITORY,
-    INPUT_POSTMAN_API_BASE:
-      readInput(actionCore, 'postman-api-base') || 'https://api.getpostman.com',
-    INPUT_POSTMAN_BIFROST_BASE:
-      readInput(actionCore, 'postman-bifrost-base') ||
-      'https://bifrost-premium-https-v4.gw.postman.com',
-    INPUT_POSTMAN_CLI_INSTALL_URL:
-      readInput(actionCore, 'postman-cli-install-url') ||
-      'https://dl-cli.pstmn.io/install/unix.sh',
+    INPUT_POSTMAN_STACK: readInput(actionCore, 'postman-stack') || 'prod',
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
@@ -1316,8 +1313,8 @@ export async function resolvePostmanApiKeyAndTeamId(
   }
 
 
-  // Auto-detect org-mode when not explicitly set
-  if (!inputs.orgMode && teamId) {
+  // Auto-detect org-mode when not explicitly set.
+  if (!inputs.orgMode && apiKey) {
     try {
       const client = new PostmanAssetsClient({
         apiKey,
@@ -1380,6 +1377,7 @@ export function createRepoSyncDependencies(
   const postman = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
     baseUrl: inputs.postmanApiBase,
+    bifrostBaseUrl: inputs.postmanBifrostBase,
     secretMasker: masker
   });
 

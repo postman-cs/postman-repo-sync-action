@@ -1,4 +1,6 @@
-export const DEFAULT_POSTMAN_CLI_INSTALL_URL = 'https://dl-cli.pstmn.io/install/unix.sh';
+import { POSTMAN_ENDPOINT_PROFILES } from './postman/base-urls.js';
+
+export const DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
 
 function validateHttpsInstallUrl(url: string): string {
   const safeUrlPattern = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~/?=&%-]+$/;

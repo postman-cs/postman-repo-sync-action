@@ -2,6 +2,7 @@ export type ActionInputDefinition = {
   description: string;
   required: boolean;
   default?: string;
+  allowedValues?: string[];
 };
 
 export type ActionOutputDefinition = {
@@ -238,20 +239,11 @@ export const postmanRepoSyncActionContract: {
       description: 'Optional repo-root-relative path to the local spec file for resources/workflows metadata.',
       required: false
     },
-    'postman-api-base': {
-      description: 'Base URL for the public Postman API (override for beta/staging stacks).',
+    'postman-stack': {
+      description: 'Postman stack profile.',
       required: false,
-      default: 'https://api.getpostman.com'
-    },
-    'postman-bifrost-base': {
-      description: 'Base URL for the Bifrost gateway used by internal integration calls (override for beta/staging stacks).',
-      required: false,
-      default: 'https://bifrost-premium-https-v4.gw.postman.com'
-    },
-    'postman-cli-install-url': {
-      description: 'Installer URL for the Postman CLI written into the generated CI workflow (override for beta/staging stacks).',
-      required: false,
-      default: 'https://dl-cli.pstmn.io/install/unix.sh'
+      default: 'prod',
+      allowedValues: ['prod', 'beta']
     }
   },
   outputs: {

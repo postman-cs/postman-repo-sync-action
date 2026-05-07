@@ -76,6 +76,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     specPath: '',
     teamId: '',
     repository: 'postman-cs/repo-sync-demo',
+    postmanStack: 'prod',
     postmanApiBase: 'https://api.getpostman.com',
     postmanBifrostBase: 'https://bifrost-premium-https-v4.gw.postman.com',
     postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
@@ -1086,6 +1087,62 @@ describe('org-mode auto-detection', () => {
     expect(inputs.orgMode).toBe(true);
     expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
     expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('987442'));
+  });
+
+  it('sets orgMode=true from teams even when /me does not provide a teamId', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const mockFetch = vi.fn<typeof fetch>();
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+
+    globalThis.fetch = mockFetch;
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
+
+      if (urlStr.includes('/me')) {
+        return jsonResponse({ user: { id: 'u1', name: 'Test' } });
+      }
+
+      if (urlStr.includes('/teams')) {
+        return jsonResponse({
+          data: [
+            { id: 83498, name: 'jared-service-account-test', handle: 'jaredserviceaccounttest', organizationId: 987442 }
+          ]
+        });
+      }
+
+      return new Response('', { status: 404 });
+    });
+
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
+
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-valid-without-team',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: '',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: false, env: {} }
+    );
+
+    expect(result.teamId).toBe('');
+    expect(inputs.orgMode).toBe(true);
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
   });
 
   it('leaves orgMode=false when the single team has a null organizationId (non-org account)', async () => {

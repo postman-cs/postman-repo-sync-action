@@ -1,5 +1,6 @@
 import { HttpError } from '../http-error.js';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
+import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 
 export interface GovernanceAssociation {
   envUid: string;
@@ -42,7 +43,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   constructor(options: InternalIntegrationAdapterOptions) {
     this.accessToken = String(options.accessToken || '').trim();
     this.bifrostBaseUrl = String(
-      options.bifrostBaseUrl || 'https://bifrost-premium-https-v4.gw.postman.com'
+      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.orgMode = options.orgMode ?? false;

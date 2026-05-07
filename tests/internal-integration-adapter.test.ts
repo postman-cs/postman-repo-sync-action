@@ -48,7 +48,7 @@ describe('internal integration adapter', () => {
       backend: 'bifrost',
       accessToken: 'token-beta',
       teamId: '99999999',
-      bifrostBaseUrl: 'https://bifrost-premium-https-v4.gw.postman-beta.com/',
+      bifrostBaseUrl: 'https://bifrost-https-v4.gw.postman-beta.com/',
       fetchImpl
     });
 
@@ -60,12 +60,12 @@ describe('internal integration adapter', () => {
 
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
-      'https://bifrost-premium-https-v4.gw.postman-beta.com/ws/proxy',
+      'https://bifrost-https-v4.gw.postman-beta.com/ws/proxy',
       expect.objectContaining({ method: 'POST' })
     );
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
-      'https://bifrost-premium-https-v4.gw.postman-beta.com/ws/proxy',
+      'https://bifrost-https-v4.gw.postman-beta.com/ws/proxy',
       expect.objectContaining({ method: 'POST' })
     );
   });
