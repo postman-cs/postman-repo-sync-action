@@ -76,6 +76,9 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     specPath: '',
     teamId: '',
     repository: 'postman-cs/repo-sync-demo',
+    postmanApiBase: 'https://api.getpostman.com',
+    postmanBifrostBase: 'https://bifrost-premium-https-v4.gw.postman.com',
+    postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
     ...overrides
   };
 }

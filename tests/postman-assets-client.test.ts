@@ -12,6 +12,38 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('PostmanAssetsClient', () => {
+  it('defaults baseUrl to the Postman prod API and routes requests through it', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ environment: { uid: 'env-prod' } })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+
+    expect(client.getBaseUrl()).toBe('https://api.getpostman.com');
+    await client.createEnvironment('ws-1', 'n', []);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.getpostman.com/environments?workspace=ws-1',
+      expect.any(Object)
+    );
+  });
+
+  it('honors custom baseUrl override for beta stacks', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ environment: { uid: 'env-beta' } })
+    );
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-beta',
+      baseUrl: 'https://api.getpostman-beta.com/',
+      fetchImpl
+    });
+
+    expect(client.getBaseUrl()).toBe('https://api.getpostman-beta.com');
+    await client.createEnvironment('ws-beta', 'n', []);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.getpostman-beta.com/environments?workspace=ws-beta',
+      expect.any(Object)
+    );
+  });
+
   it('creates environments', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({

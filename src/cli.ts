@@ -180,7 +180,10 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'ssl-extra-ca-certs',
     'spec-id',
     'spec-path',
-    'team-id'
+    'team-id',
+    'postman-api-base',
+    'postman-bifrost-base',
+    'postman-cli-install-url'
   ];
 
   const inputEnv: NodeJS.ProcessEnv = { ...env };

@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 import { convertAndSplitCollection } from './postman-v3/converter.js';
-import { CI_WORKFLOW_TEMPLATE } from './lib/ci-workflow-template.js';
+import { renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext } from './lib/repo/context.js';
 import {
@@ -76,6 +76,9 @@ export interface ResolvedInputs {
   specPath: string;
   teamId: string;
   repository: string;
+  postmanApiBase: string;
+  postmanBifrostBase: string;
+  postmanCliInstallUrl: string;
 }
 
 interface RepoSyncOutputs {
@@ -304,7 +307,15 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     repository:
       getInput('repository', env) ||
       normalizeInputValue(env.GITHUB_REPOSITORY) ||
-      normalizeInputValue(repoContext.repoSlug)
+      normalizeInputValue(repoContext.repoSlug),
+    postmanApiBase:
+      getInput('postman-api-base', env) || 'https://api.getpostman.com',
+    postmanBifrostBase:
+      getInput('postman-bifrost-base', env) ||
+      'https://bifrost-premium-https-v4.gw.postman.com',
+    postmanCliInstallUrl:
+      getInput('postman-cli-install-url', env) ||
+      'https://dl-cli.pstmn.io/install/unix.sh'
   };
 }
 
@@ -567,6 +578,14 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, 'team-id') || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, 'repository') || process.env.GITHUB_REPOSITORY,
+    INPUT_POSTMAN_API_BASE:
+      readInput(actionCore, 'postman-api-base') || 'https://api.getpostman.com',
+    INPUT_POSTMAN_BIFROST_BASE:
+      readInput(actionCore, 'postman-bifrost-base') ||
+      'https://bifrost-premium-https-v4.gw.postman.com',
+    INPUT_POSTMAN_CLI_INSTALL_URL:
+      readInput(actionCore, 'postman-cli-install-url') ||
+      'https://dl-cli.pstmn.io/install/unix.sh',
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
@@ -924,7 +943,9 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, 'base64').toString('utf8');
   }
-  return CI_WORKFLOW_TEMPLATE;
+  return renderCiWorkflowTemplate({
+    postmanCliInstallUrl: inputs.postmanCliInstallUrl
+  });
 }
 
 function createRepoSummary(
@@ -1208,7 +1229,11 @@ export async function resolvePostmanApiKeyAndTeamId(
   let keyValid = false;
 
   if (apiKey) {
-    const tempClient = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+    const tempClient = new PostmanAssetsClient({
+      apiKey,
+      baseUrl: inputs.postmanApiBase,
+      secretMasker: masker
+    });
     try {
       const me = await tempClient.getMe();
       if (me && me.user) {
@@ -1241,6 +1266,7 @@ export async function resolvePostmanApiKeyAndTeamId(
     const internalIntegration = createInternalIntegrationAdapter({
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
+      bifrostBaseUrl: inputs.postmanBifrostBase,
       orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
@@ -1251,7 +1277,11 @@ export async function resolvePostmanApiKeyAndTeamId(
     actionCore.setSecret(apiKey);
 
     if (!teamId) {
-       const tempClient = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+       const tempClient = new PostmanAssetsClient({
+         apiKey,
+         baseUrl: inputs.postmanApiBase,
+         secretMasker: masker
+       });
        const autoTeamId = await tempClient.getAutoDerivedTeamId();
        if (autoTeamId) teamId = autoTeamId;
     }
@@ -1289,7 +1319,11 @@ export async function resolvePostmanApiKeyAndTeamId(
   // Auto-detect org-mode when not explicitly set
   if (!inputs.orgMode && teamId) {
     try {
-      const client = new PostmanAssetsClient({ apiKey, secretMasker: masker });
+      const client = new PostmanAssetsClient({
+        apiKey,
+        baseUrl: inputs.postmanApiBase,
+        secretMasker: masker
+      });
       const teams = await client.getTeams();
       if (teams.length > 1 && teams.every(t => t.organizationId == null)) {
         actionCore.warning(
@@ -1334,6 +1368,7 @@ export function createRepoSyncDependencies(
 
   const postman = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
+    baseUrl: inputs.postmanApiBase,
     secretMasker: masker
   });
 
@@ -1360,6 +1395,7 @@ export function createRepoSyncDependencies(
     ? createInternalIntegrationAdapter({
         accessToken: inputs.postmanAccessToken,
         backend: inputs.integrationBackend,
+        bifrostBaseUrl: inputs.postmanBifrostBase,
         orgMode: inputs.orgMode,
         teamId: resolved.teamId,
         secretMasker: masker

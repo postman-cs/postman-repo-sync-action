@@ -37,6 +37,10 @@ export class PostmanAssetsClient {
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   private async request(
     path: string,
     init: RequestInit = {}

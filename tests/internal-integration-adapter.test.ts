@@ -38,6 +38,38 @@ describe('internal integration adapter', () => {
     );
   });
 
+  it('honors custom bifrostBaseUrl override for beta stacks', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ok: true }))
+      .mockResolvedValueOnce(jsonResponse({ apikey: { key: 'pmak-beta-generated' } }));
+
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-beta',
+      teamId: '99999999',
+      bifrostBaseUrl: 'https://bifrost-premium-https-v4.gw.postman-beta.com/',
+      fetchImpl
+    });
+
+    await adapter.connectWorkspaceToRepository(
+      'ws-beta',
+      'https://github.com/postman-cs/repo-sync-demo'
+    );
+    await adapter.createApiKey('beta-key');
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      'https://bifrost-premium-https-v4.gw.postman-beta.com/ws/proxy',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      'https://bifrost-premium-https-v4.gw.postman-beta.com/ws/proxy',
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
   it('sanitizes token content in internal failures', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('token-123 worker failure', {
