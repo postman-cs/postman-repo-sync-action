@@ -1022,45 +1022,39 @@ describe('org-mode auto-detection', () => {
     expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
   });
 
-  it('does not set orgMode when teams have no shared organizationId', async () => {
-    globalThis.fetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response('', { status: 401 })
-    );
-
+  it('sets orgMode=true when a service-account PMAK returns exactly one sub-team carrying organizationId', async () => {
+    // Real-world service-account key case: GET /teams returns a single team,
+    // but that team's organizationId is non-null because the parent account is
+    // org-mode. Previously orgMode only flipped when teams.length > 1, so these
+    // keys issued Bifrost calls without x-entity-team-id and silently failed.
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
       warning: vi.fn()
     };
-
+    const mockFetch = vi.fn<typeof fetch>();
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
-
     const createdApiKey = 'pmak-generated-3';
 
-    let fetchCallCount = 0;
-    globalThis.fetch = vi.fn<typeof fetch>().mockImplementation(async (url) => {
-      const urlStr = String(url);
-      fetchCallCount++;
+    globalThis.fetch = mockFetch;
 
-      if (fetchCallCount === 1 && urlStr.includes('/me')) {
-        return new Response('', { status: 401 });
-      }
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
 
       if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
         return jsonResponse({ apikey: { key: createdApiKey } });
       }
 
       if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 88801 } });
+        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 83498 } });
       }
 
       if (urlStr.includes('/teams')) {
         return jsonResponse({
           data: [
-            { id: 88801, name: 'Team A', handle: 'team-a', organizationId: 88800 },
-            { id: 88802, name: 'Team B', handle: 'team-b', organizationId: 99900 }
+            { id: 83498, name: 'jared-service-account-test', handle: 'jaredserviceaccounttest', organizationId: 987442 }
           ]
         });
       }
@@ -1088,7 +1082,71 @@ describe('org-mode auto-detection', () => {
       { persistGeneratedApiKeySecret: true, env: {} }
     );
 
-    expect(result.teamId).toBe('88801');
+    expect(result.teamId).toBe('83498');
+    expect(inputs.orgMode).toBe(true);
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('987442'));
+  });
+
+  it('leaves orgMode=false when the single team has a null organizationId (non-org account)', async () => {
+    // Negative case: a solo team whose organizationId is null is authoritatively
+    // not org-mode. Auto-detection must not flip orgMode on for these accounts.
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const mockFetch = vi.fn<typeof fetch>();
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+    const createdApiKey = 'pmak-generated-4';
+
+    globalThis.fetch = mockFetch;
+
+    mockFetch.mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
+
+      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
+        return jsonResponse({ apikey: { key: createdApiKey } });
+      }
+
+      if (urlStr.includes('/me')) {
+        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 12345 } });
+      }
+
+      if (urlStr.includes('/teams')) {
+        return jsonResponse({
+          data: [
+            { id: 12345, name: 'solo-team', handle: 'soloteam', organizationId: null }
+          ]
+        });
+      }
+
+      return new Response('', { status: 404 });
+    });
+
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
+
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.teamId).toBe('12345');
     expect(inputs.orgMode).toBe(false);
     expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
   });

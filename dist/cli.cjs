@@ -26258,11 +26258,15 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
           "GET /teams returned multiple teams but none include organizationId. Org-mode auto-detection may be degraded due to an upstream API change. Set org-mode and team-id explicitly if Bifrost calls fail."
         );
       }
-      const orgIds = new Set(teams.filter((t) => t.organizationId != null).map((t) => t.organizationId));
-      const meTeamId = parseInt(teamId, 10);
-      if (teams.length > 1 && orgIds.size === 1 && orgIds.has(meTeamId)) {
+      if (teams.some((t) => t.organizationId != null)) {
         inputs.orgMode = true;
-        actionCore.info(`Org-mode auto-detected (${teams.length} sub-teams under org ${meTeamId}). x-entity-team-id will be included in Bifrost calls.`);
+        const orgIds = new Set(
+          teams.filter((t) => t.organizationId != null).map((t) => t.organizationId)
+        );
+        const orgDescriptor = orgIds.size === 1 ? `org ${[...orgIds][0]}` : `orgs ${[...orgIds].join(", ")}`;
+        actionCore.info(
+          `Org-mode auto-detected (${teams.length} sub-team${teams.length === 1 ? "" : "s"} under ${orgDescriptor}). x-entity-team-id will be included in Bifrost calls.`
+        );
       }
     } catch {
     }

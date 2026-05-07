@@ -1332,11 +1332,22 @@ export async function resolvePostmanApiKeyAndTeamId(
           'Set org-mode and team-id explicitly if Bifrost calls fail.'
         );
       }
-      const orgIds = new Set(teams.filter(t => t.organizationId != null).map(t => t.organizationId));
-      const meTeamId = parseInt(teamId, 10);
-      if (teams.length > 1 && orgIds.size === 1 && orgIds.has(meTeamId)) {
+      // Org-mode is a property of the account, not of the key's scope. Any team
+      // carrying a non-null organizationId means the parent account is org-mode,
+      // even if the PMAK is scoped to a single sub-team (typical for service
+      // accounts). Bifrost calls for those keys still require x-entity-team-id.
+      if (teams.some(t => t.organizationId != null)) {
         inputs.orgMode = true;
-        actionCore.info(`Org-mode auto-detected (${teams.length} sub-teams under org ${meTeamId}). x-entity-team-id will be included in Bifrost calls.`);
+        const orgIds = new Set(
+          teams.filter(t => t.organizationId != null).map(t => t.organizationId)
+        );
+        const orgDescriptor =
+          orgIds.size === 1
+            ? `org ${[...orgIds][0]}`
+            : `orgs ${[...orgIds].join(', ')}`;
+        actionCore.info(
+          `Org-mode auto-detected (${teams.length} sub-team${teams.length === 1 ? '' : 's'} under ${orgDescriptor}). x-entity-team-id will be included in Bifrost calls.`
+        );
       }
     } catch {
       // Non-fatal: if detection fails, orgMode stays false (header omitted) which is safe
