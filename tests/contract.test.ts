@@ -70,18 +70,14 @@ describe('postman-repo-sync-action contract', () => {
     ]);
   });
 
-  it('documents retained and removed finalize behavior plus current-ref push semantics', () => {
+  it('documents current behavior and current-ref push semantics', () => {
     const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
 
-    expect(readme).toContain('push them back to the current checked out ref');
-
-    for (const retainedBehavior of postmanRepoSyncActionContract.behavior.retainedFromFinalize) {
-      expect(readme).toContain(retainedBehavior);
-    }
-
-    for (const removedBehavior of postmanRepoSyncActionContract.behavior.removedFromFinalize) {
-      expect(readme).toContain(removedBehavior);
-    }
+    expect(readme).toContain('Commit generated files and push them back to the current checked out ref.');
+    expect(readme).toContain('Postman Collection v3 multi-file YAML exports under `postman/collections/`');
+    expect(readme).toContain('`.postman/resources.yaml` with local-to-cloud resource mappings.');
+    expect(readme).toContain('For existing repositories that already own their CI workflow, disable workflow generation');
+    expect(readme).toContain('Use this for customer-managed PR workflows.');
   });
 
   it('keeps action metadata aligned with the contract surface', () => {
