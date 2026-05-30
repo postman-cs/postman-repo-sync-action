@@ -51,7 +51,7 @@ export const postmanRepoSyncActionContract: {
 } = {
   name: 'postman-repo-sync-action',
   description:
-    'Public open-alpha contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
+    'Public customer preview contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
   defaults: {
     integrationBackend: 'bifrost',
     artifactDir: 'postman',
@@ -248,7 +248,7 @@ export const postmanRepoSyncActionContract: {
   },
   outputs: {
     'integration-backend': {
-      description: 'Resolved integration backend for the open-alpha run.'
+      description: 'Resolved integration backend for the customer preview run.'
     },
     'resolved-current-ref': {
       description: 'Resolved push target based on current-ref semantics.'

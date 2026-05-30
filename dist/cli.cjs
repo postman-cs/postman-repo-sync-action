@@ -18684,6 +18684,7 @@ __export(cli_exports, {
 });
 module.exports = __toCommonJS(cli_exports);
 var import_node_child_process = require("node:child_process");
+var import_node_fs2 = require("node:fs");
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"), 1);
 var import_node_util = require("node:util");
@@ -24085,7 +24086,17 @@ async function runCli(argv = process.argv.slice(2), runtime = {}) {
 }
 var currentModulePath = typeof __filename === "string" ? __filename : "";
 var entrypoint = process.argv[1];
-if (entrypoint && currentModulePath === entrypoint) {
+function isEntrypoint(currentPath, entrypointPath) {
+  if (!currentPath || !entrypointPath) {
+    return false;
+  }
+  try {
+    return (0, import_node_fs2.realpathSync)(currentPath) === (0, import_node_fs2.realpathSync)(entrypointPath);
+  } catch {
+    return import_node_path.default.resolve(currentPath) === import_node_path.default.resolve(entrypointPath);
+  }
+}
+if (isEntrypoint(currentModulePath, entrypoint)) {
   runCli().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}

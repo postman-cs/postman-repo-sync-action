@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -307,7 +308,18 @@ export async function runCli(
 const currentModulePath = typeof __filename === 'string' ? __filename : '';
 const entrypoint = process.argv[1];
 
-if (entrypoint && currentModulePath === entrypoint) {
+function isEntrypoint(currentPath: string, entrypointPath: string | undefined): boolean {
+  if (!currentPath || !entrypointPath) {
+    return false;
+  }
+  try {
+    return realpathSync(currentPath) === realpathSync(entrypointPath);
+  } catch {
+    return path.resolve(currentPath) === path.resolve(entrypointPath);
+  }
+}
+
+if (isEntrypoint(currentModulePath, entrypoint)) {
   runCli().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);
