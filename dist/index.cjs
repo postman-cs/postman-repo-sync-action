@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // node_modules/tunnel/lib/tunnel.js
 var require_tunnel = __commonJS({
@@ -18670,6 +18671,20 @@ var require_undici = __commonJS({
   }
 });
 
+// src/index.ts
+var index_exports = {};
+__export(index_exports, {
+  assertPathWithinCwd: () => assertPathWithinCwd,
+  createRepoSyncDependencies: () => createRepoSyncDependencies,
+  getInput: () => getInput2,
+  readActionInputs: () => readActionInputs,
+  resolveInputs: () => resolveInputs,
+  resolvePostmanApiKeyAndTeamId: () => resolvePostmanApiKeyAndTeamId,
+  runAction: () => runAction,
+  runRepoSync: () => runRepoSync
+});
+module.exports = __toCommonJS(index_exports);
+
 // node_modules/@actions/core/lib/core.js
 var core_exports = {};
 __export(core_exports, {
@@ -25957,10 +25972,16 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
   await persistSslSecrets(inputs, actionCore, actionExec, repository);
   return runRepoSync(inputs, dependencies);
 }
-
-// src/main.ts
-runAction().catch((error2) => {
-  setFailed(error2 instanceof Error ? error2.message : String(error2));
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  assertPathWithinCwd,
+  createRepoSyncDependencies,
+  getInput,
+  readActionInputs,
+  resolveInputs,
+  resolvePostmanApiKeyAndTeamId,
+  runAction,
+  runRepoSync
 });
 /*! Bundled license information:
 

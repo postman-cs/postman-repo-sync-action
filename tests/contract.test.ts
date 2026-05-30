@@ -10,9 +10,15 @@ import {
 } from '../src/contracts.js';
 
 const repoRoot = resolve(import.meta.dirname, '..');
+const packageManifest = JSON.parse(
+  readFileSync(resolve(repoRoot, 'package.json'), 'utf8')
+) as {
+  main: string;
+  scripts: { build: string };
+};
 
 describe('postman-repo-sync-action contract', () => {
-  it('keeps the open-alpha surface in kebab-case with bifrost as the default backend', () => {
+  it('keeps the customer preview surface in kebab-case with bifrost as the default backend', () => {
     expect(postmanRepoSyncActionContract.defaults.integrationBackend).toBe('bifrost');
 
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
@@ -90,8 +96,13 @@ describe('postman-repo-sync-action contract', () => {
 
     expect(actionYaml.runs).toEqual({
       using: 'node24',
-      main: 'dist/index.cjs'
+      main: 'dist/action.cjs'
     });
+    expect(packageManifest.main).toBe('dist/index.cjs');
+    expect(packageManifest.scripts.build).toContain('src/index.ts --bundle');
+    expect(packageManifest.scripts.build).toContain('--outfile=dist/index.cjs');
+    expect(packageManifest.scripts.build).toContain('src/main.ts --bundle');
+    expect(packageManifest.scripts.build).toContain('--outfile=dist/action.cjs');
 
     expect(Object.keys(actionYaml.inputs)).toEqual(
       Object.keys(postmanRepoSyncActionContract.inputs)
@@ -126,11 +137,11 @@ describe('postman-repo-sync-action contract', () => {
     expect(
       createExecutionPlan({
         repoWriteMode: 'commit-and-push',
-        currentRef: 'release/public-open-alpha',
+        currentRef: 'release/public-customer-preview',
         githubHeadRef: 'ignored/head',
         githubRefName: 'ignored/ref'
       }).resolvedCurrentRef
-    ).toBe('release/public-open-alpha');
+    ).toBe('release/public-customer-preview');
 
     expect(
       createExecutionPlan({

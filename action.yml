@@ -1,5 +1,5 @@
 name: postman-repo-sync-action
-description: Sync exported Postman artifacts into a repository and expose open-alpha workspace-link and environment-sync contract outputs.
+description: Sync exported Postman artifacts into a repository and expose customer preview workspace-link and environment-sync contract outputs.
 inputs:
 
   generate-ci-workflow:
@@ -143,7 +143,7 @@ inputs:
     default: prod
 outputs:
   integration-backend:
-    description: Resolved integration backend for the open-alpha run.
+    description: Resolved integration backend for the customer preview run.
   resolved-current-ref:
     description: Resolved push target based on current-ref semantics.
   workspace-link-status:
@@ -162,4 +162,4 @@ outputs:
     description: Commit SHA produced by repo-write-mode, if any.
 runs:
   using: node24
-  main: dist/index.cjs
+  main: dist/action.cjs
