@@ -1467,16 +1467,3 @@ export async function runAction(
 
   return runRepoSync(inputs, dependencies);
 }
-
-const entrypoint = process.argv[1];
-const currentModulePath = typeof __filename === 'string' ? __filename : '';
-
-if (entrypoint && currentModulePath === entrypoint) {
-  runAction().catch((error: unknown) => {
-    if (error instanceof Error) {
-      core.setFailed(error.message);
-      return;
-    }
-    core.setFailed(String(error));
-  });
-}
