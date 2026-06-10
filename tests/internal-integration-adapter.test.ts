@@ -99,9 +99,10 @@ describe('internal integration adapter', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('fails when the repo is already linked to a different workspace', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse(
+  it('fails with workspace identity when the conflicting workspace is visible', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(
         {
           error: {
             status: 400,
@@ -111,8 +112,10 @@ describe('internal integration adapter', () => {
           }
         },
         { status: 400 }
-      )
-    );
+      ))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { id: 'ws-stale', name: 'Payments Service' } })
+      );
     const adapter = createInternalIntegrationAdapter({
       backend: 'bifrost',
       accessToken: 'token-123',
@@ -125,7 +128,108 @@ describe('internal integration adapter', () => {
         'ws-123',
         'https://github.com/postman-cs/repo-sync-demo'
       )
-    ).rejects.toThrow('already linked to workspace ws-stale');
+    ).rejects.toThrow(
+      /already linked to workspace ws-stale.*Payments Service.*go\.postman\.co\/workspace\/ws-stale/s
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains invisible conflicting workspaces and points at workspace-team-id', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(
+        {
+          error: {
+            status: 400,
+            name: 'invalidParamError',
+            message: 'File system with this repo and path already exists',
+            meta: { workspaceId: 'ws-stale' }
+          }
+        },
+        { status: 400 }
+      ))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { name: 'forbidden' } }, { status: 403 })
+      );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).rejects.toThrow(
+      /already linked to workspace ws-stale.*invisible to the credentials.*workspace-team-id/s
+    );
+  });
+
+  it('notes recently deleted conflicting workspaces', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(
+        {
+          error: {
+            status: 400,
+            name: 'invalidParamError',
+            message: 'File system with this repo and path already exists',
+            meta: { workspaceId: 'ws-stale' }
+          }
+        },
+        { status: 400 }
+      ))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { name: 'workspaceNotFoundError' } }, { status: 404 })
+      );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).rejects.toThrow(/already linked to workspace ws-stale.*recently deleted/s);
+  });
+
+  it('still fails usefully when the conflict lookup itself fails', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(
+        {
+          error: {
+            status: 400,
+            name: 'invalidParamError',
+            message: 'File system with this repo and path already exists',
+            meta: { workspaceId: 'ws-stale' }
+          }
+        },
+        { status: 400 }
+      ))
+      .mockRejectedValueOnce(new Error('network down'));
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).rejects.toThrow(
+      /already linked to workspace ws-stale.*could not be resolved/s
+    );
   });
 
   it('keeps legacy duplicate bodies without a workspace id idempotent', async () => {

@@ -24611,7 +24611,7 @@ var BifrostInternalIntegrationAdapter = class {
           const existingWorkspaceId = extractDuplicateWorkspaceId(body);
           if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
             throw new Error(
-              `Repository is already linked to workspace ${existingWorkspaceId}, so Bifrost refused the link to workspace ${workspaceId}. If that workspace was deleted, its filesystem record still reserves this repo and path; disconnect the stale link (restore the old workspace and disconnect the repository, or have a team admin remove it) and re-run.`
+              await this.describeWorkspaceLinkConflict(existingWorkspaceId, workspaceId, repoUrl)
             );
           }
           return;
@@ -24624,6 +24624,49 @@ var BifrostInternalIntegrationAdapter = class {
         url
       });
     }
+  }
+  /**
+   * Build the failure message for a duplicate-link conflict. Looks the owning
+   * workspace up through the same Bifrost proxy credentials as the connect
+   * attempt, so the outcome doubles as a visibility probe: a 403 means the
+   * workspace exists for someone else (personal visibility or another
+   * sub-team), which is the common org-mode failure shape.
+   */
+  async describeWorkspaceLinkConflict(existingWorkspaceId, targetWorkspaceId, repoUrl) {
+    const base = `Repository ${repoUrl} is already linked to workspace ${existingWorkspaceId}, so Bifrost refused the link to workspace ${targetWorkspaceId}.`;
+    let lookupStatus = 0;
+    let workspaceName = "";
+    try {
+      const response = await this.fetchImpl(`${this.bifrostBaseUrl}/ws/proxy`, {
+        method: "POST",
+        headers: this.bifrostHeaders(),
+        body: JSON.stringify({
+          service: "workspaces",
+          method: "GET",
+          path: `/workspaces/${existingWorkspaceId}`
+        })
+      });
+      lookupStatus = response.status;
+      if (response.ok) {
+        const parsed = await response.json();
+        if (typeof parsed?.data?.name === "string" && parsed.data.name) {
+          workspaceName = parsed.data.name;
+        } else if (parsed?.error) {
+          lookupStatus = 403;
+        }
+      }
+    } catch {
+    }
+    if (workspaceName) {
+      return `${base} That workspace is "${workspaceName}" (https://go.postman.co/workspace/${existingWorkspaceId}). To reuse it, pass workspace-id: ${existingWorkspaceId} or set the POSTMAN_WORKSPACE_ID repository variable to it. To link this workspace instead, disconnect the repository from "${workspaceName}" in Workspace Settings or delete that workspace (deleting a workspace also removes its repository link record), then re-run.`;
+    }
+    if (lookupStatus === 401 || lookupStatus === 403) {
+      return `${base} That workspace exists but is invisible to the credentials this action runs with. This usually means an org-mode onboarding run created it without workspace-team-id, leaving it with personal visibility that hides it from teammates, other API keys, and the API Catalog; it may also belong to another sub-team. Ask whoever created it (or a team admin) to disconnect the repository from that workspace or delete it (deleting a workspace also removes its repository link record), then re-run.`;
+    }
+    if (lookupStatus === 404) {
+      return `${base} That workspace looks recently deleted; its repository link record is removed with it. Re-run, and contact Postman support if the conflict persists.`;
+    }
+    return `${base} Details for that workspace could not be resolved with these credentials. Disconnect the repository from it or delete that workspace (deleting a workspace also removes its repository link record) and re-run; if it is invisible to you, ask its creator or a team admin.`;
   }
   async createApiKey(name) {
     const url = `${this.bifrostBaseUrl}/ws/proxy`;
