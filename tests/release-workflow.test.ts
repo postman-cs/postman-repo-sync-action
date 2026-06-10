@@ -32,12 +32,27 @@ describe('release workflow publishing contract', () => {
 
   it('keeps GitHub release artifacts while making npm publication idempotent', () => {
     expect(namedStep('Publish GitHub release')).not.toMatch(/\n\s+if:/);
-    expect(npmRegistrySetupStep()).toContain("if: steps.release_tag.outputs.npm_publish == 'true'");
+    // setup-node with the npm registry runs unconditionally in the publish job:
+    // the tarball steps below need npm even when npm publish is skipped.
+    expect(npmRegistrySetupStep()).toContain("registry-url: 'https://registry.npmjs.org'");
     expect(namedStep('Check npm package version')).toContain('id: npm_package');
+    expect(namedStep('Check npm package version')).toContain("if: needs.validate.outputs.npm_publish == 'true'");
     expect(namedStep('Check npm package version')).toContain('npm view "$PKG_NAME@$PKG_VERSION" version');
     expect(namedStep('Check npm package version')).toContain('already_published=true');
-    expect(namedStep('Publish to npm')).toContain("if: steps.release_tag.outputs.npm_publish == 'true' && steps.npm_package.outputs.already_published != 'true'");
+    expect(namedStep('Publish to npm')).toContain("if: needs.validate.outputs.npm_publish == 'true' && steps.npm_package.outputs.already_published != 'true'");
     expect(namedStep('Attach npm tarball to release')).not.toMatch(/\n\s+if:/);
     expect(namedStep('Upload tarball')).not.toMatch(/\n\s+if:/);
+  });
+
+  it('gates covered release tags on the central live e2e before any publish step', () => {
+    expect(releaseWorkflow).toContain('echo "gate_required=true" >> "$GITHUB_OUTPUT"');
+    expect(releaseWorkflow).toContain('echo "gate_required=false" >> "$GITHUB_OUTPUT"');
+    expect(releaseWorkflow).toContain(
+      "if: ${{ needs.validate.outputs.gate_required == 'true' }}"
+    );
+    expect(releaseWorkflow).toContain(
+      "if: ${{ always() && needs.validate.result == 'success' && (needs.validate.outputs.gate_required != 'true' || needs.live-e2e-gate.result == 'success') }}"
+    );
+    expect(releaseWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
   });
 });
