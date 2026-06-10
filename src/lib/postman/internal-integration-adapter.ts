@@ -32,6 +32,28 @@ export interface InternalIntegrationAdapter {
   ): Promise<string>;
 }
 
+/**
+ * Pull the owning workspace id out of a Bifrost duplicate-link error body.
+ * The current shape is {error:{name:'invalidParamError',message:'File system
+ * with this repo and path already exists',meta:{workspaceId:'...'}}}; legacy
+ * 'projectAlreadyConnected' bodies carry no workspace id and yield undefined.
+ */
+function extractDuplicateWorkspaceId(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { meta?: { workspaceId?: unknown } };
+      meta?: { workspaceId?: unknown };
+    };
+    const candidate =
+      parsed?.error?.meta?.workspaceId ?? parsed?.meta?.workspaceId;
+    return typeof candidate === 'string' && candidate.trim()
+      ? candidate.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly accessToken: string;
   private readonly bifrostBaseUrl: string;
@@ -141,6 +163,24 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
           (body.includes('invalidParamError') && body.includes('already exists')) ||
           body.includes('projectAlreadyConnected');
         if (isDuplicate) {
+          // The duplicate error carries the workspace that holds the existing
+          // filesystem record (error.meta.workspaceId). When that workspace is
+          // not the one being linked, this is a stale record (typically left
+          // behind by a deleted workspace; the record survives deletion and
+          // keeps the repo+path pair reserved), so the workspace being linked
+          // ends up with no link at all. Swallowing that case reports a link
+          // that does not exist; fail loudly instead.
+          const existingWorkspaceId = extractDuplicateWorkspaceId(body);
+          if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
+            throw new Error(
+              `Repository is already linked to workspace ${existingWorkspaceId}, ` +
+                `so Bifrost refused the link to workspace ${workspaceId}. ` +
+                'If that workspace was deleted, its filesystem record still ' +
+                'reserves this repo and path; disconnect the stale link ' +
+                '(restore the old workspace and disconnect the repository, or ' +
+                'have a team admin remove it) and re-run.'
+            );
+          }
           return;
         }
       }

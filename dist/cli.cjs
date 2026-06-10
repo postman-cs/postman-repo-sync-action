@@ -22615,6 +22615,15 @@ var HttpError = class _HttpError extends Error {
 };
 
 // src/lib/postman/internal-integration-adapter.ts
+function extractDuplicateWorkspaceId(body) {
+  try {
+    const parsed = JSON.parse(body);
+    const candidate = parsed?.error?.meta?.workspaceId ?? parsed?.meta?.workspaceId;
+    return typeof candidate === "string" && candidate.trim() ? candidate.trim() : void 0;
+  } catch {
+    return void 0;
+  }
+}
 var BifrostInternalIntegrationAdapter = class {
   accessToken;
   bifrostBaseUrl;
@@ -22702,6 +22711,12 @@ var BifrostInternalIntegrationAdapter = class {
         const body = await response.text();
         const isDuplicate = body.includes("invalidParamError") && body.includes("already exists") || body.includes("projectAlreadyConnected");
         if (isDuplicate) {
+          const existingWorkspaceId = extractDuplicateWorkspaceId(body);
+          if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
+            throw new Error(
+              `Repository is already linked to workspace ${existingWorkspaceId}, so Bifrost refused the link to workspace ${workspaceId}. If that workspace was deleted, its filesystem record still reserves this repo and path; disconnect the stale link (restore the old workspace and disconnect the repository, or have a team admin remove it) and re-run.`
+            );
+          }
           return;
         }
       }

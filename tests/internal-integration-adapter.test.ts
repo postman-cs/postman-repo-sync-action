@@ -70,6 +70,83 @@ describe('internal integration adapter', () => {
     );
   });
 
+  it('treats a duplicate link on the same workspace as idempotent success', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            status: 400,
+            name: 'invalidParamError',
+            message: 'File system with this repo and path already exists',
+            meta: { workspaceId: 'ws-123' }
+          }
+        },
+        { status: 400 }
+      )
+    );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it('fails when the repo is already linked to a different workspace', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            status: 400,
+            name: 'invalidParamError',
+            message: 'File system with this repo and path already exists',
+            meta: { workspaceId: 'ws-stale' }
+          }
+        },
+        { status: 400 }
+      )
+    );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).rejects.toThrow('already linked to workspace ws-stale');
+  });
+
+  it('keeps legacy duplicate bodies without a workspace id idempotent', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('projectAlreadyConnected', { status: 400 })
+    );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.connectWorkspaceToRepository(
+        'ws-123',
+        'https://github.com/postman-cs/repo-sync-demo'
+      )
+    ).resolves.toBeUndefined();
+  });
+
   it('sanitizes token content in internal failures', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('token-123 worker failure', {
