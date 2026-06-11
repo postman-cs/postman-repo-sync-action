@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: postman-cs/postman-repo-sync-action@v0
+      - uses: postman-cs/postman-repo-sync-action@v1
         with:
           project-name: core-payments
           workspace-id: ws-123
