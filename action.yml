@@ -1,5 +1,5 @@
-name: postman-repo-sync-action
-description: Sync exported Postman artifacts into a repository and expose workspace-link and environment-sync outputs.
+name: Postman Repo Sync
+description: Export Postman collections and environments into your repo and wire CI, mocks, and monitors around them.
 author: Postman
 branding:
   icon: refresh-cw
