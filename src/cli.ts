@@ -165,6 +165,7 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'committer-email',
     'postman-api-key',
     'postman-access-token',
+    'credential-preflight',
     'github-token',
     'gh-fallback-token',
     'ci-workflow-base64',

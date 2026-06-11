@@ -25,6 +25,11 @@ import {
   resolvePostmanEndpointProfile,
   type PostmanStack
 } from './lib/postman/base-urls.js';
+import {
+  runCredentialPreflight,
+  type PreflightMode
+} from './lib/postman/credential-identity.js';
+import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { createSecretMasker, type SecretMasker } from './lib/secrets.js';
 import { validateCertMaterial } from './lib/ssl-validation.js';
@@ -63,6 +68,7 @@ export interface ResolvedInputs {
   committerEmail: string;
   postmanApiKey: string;
   postmanAccessToken: string;
+  credentialPreflight: PreflightMode;
   githubToken: string;
   ghFallbackToken: string;
   ciWorkflowBase64: string;
@@ -85,6 +91,7 @@ export interface ResolvedInputs {
   postmanApiBase: string;
   postmanBifrostBase: string;
   postmanCliInstallUrl: string;
+  postmanIapubBase: string;
 }
 
 interface RepoSyncOutputs {
@@ -222,6 +229,18 @@ function normalizeSpecSyncMode(value: string): 'update' | 'version' {
   return 'update';
 }
 
+function parseCredentialPreflight(value: string | undefined): PreflightMode {
+  const definition = postmanRepoSyncActionContract.inputs['credential-preflight'];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || '').trim() || (definition.default ?? 'warn');
+  if (allowed.includes(normalized)) {
+    return normalized as PreflightMode;
+  }
+  throw new Error(
+    `Unsupported credential-preflight "${normalized}". Supported values: ${allowed.join(', ')}`
+  );
+}
+
 function normalizeReleaseLabel(value: string): string {
   const cleaned = normalizeInputValue(value)
     .replace(/^refs\/heads\//, '')
@@ -297,6 +316,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     committerEmail: getInput('committer-email', env) || 'help@postman.com',
     postmanApiKey: getInput('postman-api-key', env),
     postmanAccessToken: getInput('postman-access-token', env),
+    credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
     githubToken: getInput('github-token', env),
     ghFallbackToken: getInput('gh-fallback-token', env),
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
@@ -319,7 +339,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
-    postmanCliInstallUrl: endpointProfile.cliInstallUrl
+    postmanCliInstallUrl: endpointProfile.cliInstallUrl,
+    postmanIapubBase: endpointProfile.iapubBaseUrl
   };
 }
 
@@ -566,6 +587,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_COMMITTER_EMAIL: readInput(actionCore, 'committer-email') || 'help@postman.com',
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
+    INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, 'credential-preflight') || 'warn',
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, 'ci-workflow-base64'),
@@ -1434,6 +1456,20 @@ export async function runAction(
     inputs.sslClientPassphrase,
     inputs.sslExtraCaCerts
   ]);
+
+  // Proactive credential preflight: resolve and cross-check both identities
+  // once, before any environment, mock, monitor, or link call. It does not
+  // depend on the lazy org-mode auto-detect inside resolvePostmanApiKeyAndTeamId.
+  await runCredentialPreflight({
+    apiBaseUrl: inputs.postmanApiBase,
+    iapubBaseUrl: inputs.postmanIapubBase,
+    postmanApiKey: inputs.postmanApiKey,
+    postmanAccessToken: inputs.postmanAccessToken,
+    explicitTeamId: inputs.teamId || undefined,
+    mode: inputs.credentialPreflight,
+    mask: masker,
+    log: actionCore
+  });
 
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {
     env: process.env

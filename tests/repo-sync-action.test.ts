@@ -17,10 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   readActionInputs,
   resolvePostmanApiKeyAndTeamId,
+  runAction,
   runRepoSync,
   type RepoSyncDependencies,
   type ResolvedInputs
 } from '../src/index.js';
+import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
+import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 
 type ResourcesYamlShape = {
   cloudResources?: {
@@ -58,6 +61,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     committerEmail: 'help@postman.com',
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'postman-access-token',
+    credentialPreflight: 'warn',
     githubToken: 'github-token',
     ghFallbackToken: 'fallback-token',
     ciWorkflowBase64: '',
@@ -80,6 +84,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanApiBase: 'https://api.getpostman.com',
     postmanBifrostBase: 'https://bifrost-premium-https-v4.gw.postman.com',
     postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
+    postmanIapubBase: 'https://iapub.postman.co',
     ...overrides
   };
 }
@@ -207,6 +212,22 @@ describe('repo sync action', () => {
       'github-token',
       'fallback-token'
     ]);
+  });
+
+  it('resolves credential-preflight through readActionInputs with a warn default', () => {
+    const base = {
+      'project-name': 'core-payments',
+      'postman-api-key': 'pmak-test'
+    };
+
+    const { core: defaultCore } = createCoreStub(base);
+    expect(readActionInputs(defaultCore).credentialPreflight).toBe('warn');
+
+    const { core: enforceCore } = createCoreStub({
+      ...base,
+      'credential-preflight': 'enforce'
+    });
+    expect(readActionInputs(enforceCore).credentialPreflight).toBe('enforce');
   });
 
   it('requires ssl-client-key when ssl-client-cert is provided', () => {
@@ -1367,5 +1388,344 @@ describe('repo-variable fallback resolution', () => {
     expect(github.getRepositoryVariable).not.toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_BASELINE_COLLECTION_UID');
     expect(github.getRepositoryVariable).not.toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_SMOKE_COLLECTION_UID');
     expect(github.getRepositoryVariable).not.toHaveBeenCalledWith('POSTMAN_CORE_PAYMENTS_CONTRACT_COLLECTION_UID');
+  });
+});
+
+describe('runAction credential preflight', () => {
+  let originalCwd = '';
+  let testDir = '';
+  let savedPostmanTeamId: string | undefined;
+
+  function defaultAdapterStub() {
+    return {
+      createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
+      associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  beforeEach(async () => {
+    __resetIdentityMemo();
+    originalCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'repo-sync-preflight-'));
+    process.chdir(testDir);
+    process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
+    process.env.GITHUB_REF_NAME = 'feature/repo-sync';
+    delete process.env.GITHUB_HEAD_REF;
+    savedPostmanTeamId = process.env.POSTMAN_TEAM_ID;
+    delete process.env.POSTMAN_TEAM_ID;
+
+    // These cases exercise the real Bifrost adapter (reactive advice included),
+    // so the file-level adapter mock is routed to the actual implementation.
+    const actualAdapter = await vi.importActual<
+      typeof import('../src/lib/postman/internal-integration-adapter.js')
+    >('../src/lib/postman/internal-integration-adapter.js');
+    vi.mocked(createInternalIntegrationAdapter).mockImplementation(
+      actualAdapter.createInternalIntegrationAdapter
+    );
+  });
+
+  afterEach(() => {
+    vi.mocked(createInternalIntegrationAdapter).mockImplementation(defaultAdapterStub);
+    vi.unstubAllGlobals();
+    process.chdir(originalCwd);
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REF_NAME;
+    if (savedPostmanTeamId !== undefined) {
+      process.env.POSTMAN_TEAM_ID = savedPostmanTeamId;
+    }
+  });
+
+  function baseInputValues(overrides: Record<string, string> = {}): Record<string, string> {
+    return {
+      'project-name': 'core-payments',
+      'workspace-id': 'ws-preflight',
+      'postman-api-key': 'pmak-test',
+      'postman-access-token': 'access-token-test',
+      'environments-json': '["prod"]',
+      'env-runtime-urls-json': '{"prod":"https://api.example.com"}',
+      'repo-write-mode': 'none',
+      'generate-ci-workflow': 'false',
+      ...overrides
+    };
+  }
+
+  function createRunActionCore(values: Record<string, string>, events: string[]) {
+    const infos: string[] = [];
+    const warnings: string[] = [];
+    const outputs: Record<string, string> = {};
+    const core = {
+      getInput: (name: string, options?: { required?: boolean }) => {
+        const value = values[name] ?? '';
+        if (options?.required && !value) {
+          throw new Error(`Input required and not supplied: ${name}`);
+        }
+        return value;
+      },
+      info: (message: string) => {
+        infos.push(message);
+        events.push(`info:${message}`);
+      },
+      setFailed: () => {},
+      setOutput: (name: string, value: string) => {
+        outputs[name] = value;
+      },
+      setSecret: () => {},
+      warning: (message: string) => {
+        warnings.push(message);
+        events.push(`warning:${message}`);
+      }
+    };
+    return { core, infos, outputs, warnings };
+  }
+
+  function createExecStub() {
+    return {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' })
+    };
+  }
+
+  interface RunActionRouterOptions {
+    events: string[];
+    meFirstCallStatus?: number;
+    meUser?: Record<string, unknown>;
+    sessionStatus?: number;
+    sessionBody?: Record<string, unknown>;
+    associateResponse?: () => Response | undefined;
+  }
+
+  function createRunActionFetchRouter(options: RunActionRouterOptions): typeof fetch {
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status });
+    let meCalls = 0;
+    const router = async (
+      input: string | URL | Request,
+      init?: RequestInit
+    ): Promise<Response> => {
+      const url = String(input);
+      const method = String(init?.method || 'GET').toUpperCase();
+      options.events.push(`fetch:${method} ${url}`);
+
+      if (url === 'https://api.getpostman.com/me') {
+        meCalls += 1;
+        // The preflight probe is always the first /me call in runAction; the
+        // second is the action's own key validation.
+        if (options.meFirstCallStatus && options.meFirstCallStatus !== 200 && meCalls === 1) {
+          return json({ error: { name: 'AuthenticationError' } }, options.meFirstCallStatus);
+        }
+        return json({
+          user: options.meUser ?? {
+            id: 12345678,
+            fullName: 'Ada Lovelace',
+            teamId: 10490519,
+            teamName: 'jared-demo',
+            teamDomain: 'jared-demo'
+          }
+        });
+      }
+      if (url === 'https://iapub.postman.co/api/sessions/current') {
+        if (options.sessionStatus && options.sessionStatus !== 200) {
+          return json({ error: 'denied' }, options.sessionStatus);
+        }
+        return json(
+          options.sessionBody ?? {
+            identity: { team: 10490519, domain: 'jared-demo' },
+            data: { user: { id: 555, roles: ['admin'] } },
+            consumerType: 'service_account'
+          }
+        );
+      }
+      if (url === 'https://api.getpostman.com/teams') {
+        return json({ data: [] });
+      }
+      if (
+        url.startsWith('https://api.getpostman.com/environments?workspace=') &&
+        method === 'POST'
+      ) {
+        return json({ environment: { uid: '123-env-prod-uid' } });
+      }
+      if (url.startsWith('https://api.getpostman.com/environments/')) {
+        return json({
+          environment: { id: 'env-prod', name: 'core-payments - prod', values: [] }
+        });
+      }
+      if (
+        url ===
+        'https://catalog-admin.postman-account2009.workers.dev/api/internal/system-envs/associate'
+      ) {
+        const custom = options.associateResponse?.();
+        return custom ?? json({ ok: true });
+      }
+      if (url === 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy') {
+        return json({ data: { ok: true } });
+      }
+      throw new Error(`Unrouted fetch in runAction test: ${method} ${url}`);
+    };
+    return router as typeof fetch;
+  }
+
+  it('runAction logs PMAK and session identity lines before the first environment call', async () => {
+    const events: string[] = [];
+    vi.stubGlobal('fetch', createRunActionFetchRouter({ events }));
+    const { core, infos, outputs } = createRunActionCore(baseInputValues(), events);
+
+    await runAction(core, createExecStub());
+
+    expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
+    const pmakLineIndex = events.findIndex((entry) =>
+      entry.startsWith('info:postman: PMAK identity')
+    );
+    const sessionLineIndex = events.findIndex((entry) =>
+      entry.startsWith('info:postman: access-token session identity')
+    );
+    const createEnvironmentIndex = events.findIndex((entry) =>
+      entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
+    );
+    expect(pmakLineIndex).toBeGreaterThanOrEqual(0);
+    expect(sessionLineIndex).toBeGreaterThan(pmakLineIndex);
+    expect(createEnvironmentIndex).toBeGreaterThan(sessionLineIndex);
+    expect(infos.some((line) => line.includes('credential preflight OK'))).toBe(true);
+  });
+
+  it('runAction completes when the /me probe and iapub both 404 (preflight non-fatal)', async () => {
+    const events: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      createRunActionFetchRouter({ events, meFirstCallStatus: 404, sessionStatus: 404 })
+    );
+    const { core, warnings, outputs } = createRunActionCore(baseInputValues(), events);
+
+    await runAction(core, createExecStub());
+
+    expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
+    expect(
+      warnings.some((line) => line.includes('could not resolve PMAK identity'))
+    ).toBe(true);
+    expect(
+      warnings.some((line) =>
+        line.includes('could not resolve the access-token session identity')
+      )
+    ).toBe(true);
+  });
+
+  it('runAction under credential-preflight=enforce FAILS fast with both parent-org ids named when injected /me teamId differs from iapub identity.team', async () => {
+    const events: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      createRunActionFetchRouter({
+        events,
+        meUser: { id: 1, fullName: 'Ada Lovelace', teamId: 10490519, teamName: 'jared-demo' },
+        sessionBody: {
+          identity: { team: 13347347, domain: 'field-services-v12-demo' },
+          data: { user: { id: 2, roles: ['admin'] } },
+          consumerType: 'service_account'
+        }
+      })
+    );
+    const { core } = createRunActionCore(
+      baseInputValues({ 'credential-preflight': 'enforce' }),
+      events
+    );
+
+    let thrown: unknown;
+    try {
+      await runAction(core, createExecStub());
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain('credential preflight FAILED');
+    expect(message).toContain('10490519');
+    expect(message).toContain('13347347');
+    expect(
+      events.some((entry) =>
+        entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
+      )
+    ).toBe(false);
+  });
+
+  it('runAction under the default (warn) logs a NOTE and continues on that same mismatch (does not fail)', async () => {
+    const events: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      createRunActionFetchRouter({
+        events,
+        meUser: { id: 1, fullName: 'Ada Lovelace', teamId: 10490519, teamName: 'jared-demo' },
+        sessionBody: {
+          identity: { team: 13347347, domain: 'field-services-v12-demo' },
+          data: { user: { id: 2, roles: ['admin'] } },
+          consumerType: 'service_account'
+        }
+      })
+    );
+    const { core, warnings, outputs } = createRunActionCore(baseInputValues(), events);
+
+    await runAction(core, createExecStub());
+
+    expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
+    const note = warnings.find((line) => line.includes('credential preflight note'));
+    expect(note).toBeDefined();
+    expect(note).toContain('10490519');
+    expect(note).toContain('13347347');
+    expect(
+      events.some((entry) =>
+        entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
+      )
+    ).toBe(true);
+  });
+
+  it('runAction with credential-preflight=off makes no /me/iapub probe', async () => {
+    const events: string[] = [];
+    vi.stubGlobal('fetch', createRunActionFetchRouter({ events }));
+    const { core, infos, outputs } = createRunActionCore(
+      baseInputValues({ 'credential-preflight': 'off' }),
+      events
+    );
+
+    await runAction(core, createExecStub());
+
+    expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
+    expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(false);
+    expect(
+      events.filter((entry) => entry === 'fetch:GET https://api.getpostman.com/me')
+    ).toHaveLength(1);
+    expect(infos.some((line) => line.includes('postman: PMAK identity'))).toBe(false);
+  });
+
+  it('reactive advice still rewrites a Bifrost UNAUTHENTICATED even when credential-preflight=off', async () => {
+    const events: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      createRunActionFetchRouter({
+        events,
+        associateResponse: () =>
+          new Response(JSON.stringify({ error: { code: 'UNAUTHENTICATED' } }), {
+            status: 401,
+            statusText: 'Unauthorized'
+          })
+      })
+    );
+    const { core, warnings, outputs } = createRunActionCore(
+      baseInputValues({
+        'credential-preflight': 'off',
+        'system-env-map-json': '{"prod":"sys-prod"}'
+      }),
+      events
+    );
+
+    await runAction(core, createExecStub());
+
+    expect(outputs['environment-sync-status']).toBe('failed');
+    const adviceWarning = warnings.find((line) =>
+      line.includes('System environment association failed')
+    );
+    expect(adviceWarning).toBeDefined();
+    expect(adviceWarning).toContain('Bifrost rejected the access token (UNAUTHENTICATED)');
+    expect(adviceWarning).toContain(
+      'POST https://api.getpostman.com/service-account-tokens'
+    );
+    expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(false);
   });
 });

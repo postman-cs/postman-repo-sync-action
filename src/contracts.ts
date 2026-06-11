@@ -198,6 +198,13 @@ export const postmanRepoSyncActionContract: {
       description: 'Postman access token used for Bifrost and system environment association.',
       required: false
     },
+    'credential-preflight': {
+      description:
+        'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created; off skips the identity probes entirely (the reactive error guidance still applies). Promotion of the default to enforce is planned once the live e2e legs prove both directions.',
+      required: false,
+      default: 'warn',
+      allowedValues: ['enforce', 'warn', 'off']
+    },
     'github-token': {
       description: 'GitHub token used for repo variable persistence and commits.',
       required: false

@@ -24054,12 +24054,14 @@ var POSTMAN_ENDPOINT_PROFILES = {
   prod: {
     apiBaseUrl: "https://api.getpostman.com",
     bifrostBaseUrl: "https://bifrost-premium-https-v4.gw.postman.com",
-    cliInstallUrl: "https://dl-cli.pstmn.io/install/unix.sh"
+    cliInstallUrl: "https://dl-cli.pstmn.io/install/unix.sh",
+    iapubBaseUrl: "https://iapub.postman.co"
   },
   beta: {
     apiBaseUrl: "https://api.getpostman-beta.com",
     bifrostBaseUrl: "https://bifrost-https-v4.gw.postman-beta.com",
-    cliInstallUrl: "https://dl-cli.pstmn-beta.io/install/unix.sh"
+    cliInstallUrl: "https://dl-cli.pstmn-beta.io/install/unix.sh",
+    iapubBaseUrl: "https://iapub.postman.co"
   }
 };
 function parsePostmanStack(value) {
@@ -24511,6 +24513,299 @@ var HttpError = class _HttpError extends Error {
   }
 };
 
+// src/lib/postman/credential-identity.ts
+var sessionPath = "/api/sessions/current";
+var pmakMemo = /* @__PURE__ */ new Map();
+var sessionMemo = /* @__PURE__ */ new Map();
+var memoizedSessionIdentity;
+function getMemoizedSessionIdentity() {
+  return memoizedSessionIdentity;
+}
+function asRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return void 0;
+  }
+  return value;
+}
+function coerceId(raw) {
+  return raw ? String(raw) : void 0;
+}
+function coerceText(raw) {
+  if (typeof raw !== "string") {
+    return void 0;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : void 0;
+}
+function normalizeBaseUrl(raw) {
+  return String(raw || "").replace(/\/+$/, "");
+}
+async function resolvePmakIdentity(opts) {
+  const apiKey = String(opts.apiKey || "").trim();
+  if (!apiKey) {
+    return void 0;
+  }
+  const baseUrl = normalizeBaseUrl(opts.apiBaseUrl);
+  const memoKey = `${baseUrl}::${apiKey}`;
+  let pending = pmakMemo.get(memoKey);
+  if (!pending) {
+    pending = probePmakIdentity(baseUrl, apiKey, opts.fetchImpl ?? fetch);
+    pmakMemo.set(memoKey, pending);
+  }
+  return pending;
+}
+async function probePmakIdentity(baseUrl, apiKey, fetchImpl) {
+  try {
+    const response = await fetchImpl(`${baseUrl}/me`, {
+      method: "GET",
+      headers: { "X-Api-Key": apiKey }
+    });
+    if (!response.ok) {
+      return void 0;
+    }
+    const payload = asRecord(await response.json());
+    const user = asRecord(payload?.user);
+    if (!user) {
+      return void 0;
+    }
+    return {
+      source: "pmak/me",
+      userId: coerceId(user.id),
+      fullName: coerceText(user.fullName) ?? coerceText(user.username),
+      teamId: coerceId(user.teamId),
+      teamName: coerceText(user.teamName),
+      teamDomain: coerceText(user.teamDomain)
+    };
+  } catch {
+    return void 0;
+  }
+}
+async function resolveSessionIdentity(opts) {
+  const accessToken = String(opts.accessToken || "").trim();
+  if (!accessToken) {
+    return void 0;
+  }
+  const baseUrl = normalizeBaseUrl(opts.iapubBaseUrl);
+  const memoKey = `${baseUrl}::${accessToken}`;
+  let pending = sessionMemo.get(memoKey);
+  if (!pending) {
+    pending = probeSessionIdentity(baseUrl, accessToken, opts.fetchImpl ?? fetch);
+    sessionMemo.set(memoKey, pending);
+  }
+  return pending;
+}
+async function probeSessionIdentity(baseUrl, accessToken, fetchImpl) {
+  try {
+    const response = await fetchImpl(`${baseUrl}${sessionPath}`, {
+      method: "GET",
+      headers: { "x-access-token": accessToken }
+    });
+    if (!response.ok) {
+      return void 0;
+    }
+    const payload = asRecord(await response.json());
+    if (!payload) {
+      return void 0;
+    }
+    const identity = asRecord(payload.identity);
+    const data = asRecord(payload.data);
+    const user = asRecord(data?.user);
+    const roleEntries = Array.isArray(user?.roles) ? user.roles.map((entry) => coerceText(entry) ?? coerceId(entry)).filter((entry) => Boolean(entry)) : [];
+    const singleRole = coerceText(user?.role);
+    const roles = roleEntries.length > 0 ? roleEntries : singleRole ? [singleRole] : void 0;
+    const resolved = {
+      source: "iapub/sessions",
+      userId: coerceId(user?.id),
+      fullName: coerceText(user?.fullName) ?? coerceText(user?.name) ?? coerceText(user?.username),
+      teamId: coerceId(identity?.team),
+      teamDomain: coerceText(identity?.domain),
+      ...roles ? { roles } : {},
+      consumerType: coerceText(payload.consumerType) ?? coerceText(data?.consumerType) ?? coerceText(user?.consumerType)
+    };
+    memoizedSessionIdentity = resolved;
+    return resolved;
+  } catch {
+    return void 0;
+  }
+}
+function describeTeam(id) {
+  const label = id?.teamName ?? id?.teamDomain;
+  return `team ${id?.teamId ?? "unresolved"}${label ? ` (${label})` : ""}`;
+}
+function formatIdentityLine(id, mask) {
+  const teamPart = id.teamId ? describeTeam(id) : "team unresolved";
+  const domainPart = id.teamDomain ? `, domain ${id.teamDomain}` : "";
+  if (id.source === "pmak/me") {
+    const userPart = id.userId ? `user ${id.userId}${id.fullName ? ` (${id.fullName})` : ""}, ` : "";
+    return mask(`postman: PMAK identity - ${userPart}${teamPart}${domainPart}`);
+  }
+  return mask(
+    `postman: access-token session identity - ${teamPart}${domainPart} [source: iapub/sessions]`
+  );
+}
+function crossCheckIdentities(args) {
+  if (args.mode === "off") {
+    return { ok: true, level: "ok", message: "" };
+  }
+  const pmakTeamId = args.pmak?.teamId;
+  const sessionTeamId = args.session?.teamId;
+  if (pmakTeamId && sessionTeamId && pmakTeamId !== sessionTeamId) {
+    const level = args.mode === "enforce" ? "fail" : "note";
+    const lead = level === "fail" ? "credential preflight FAILED" : "credential preflight note";
+    const fix = level === "fail" ? "Use one credential pair from a single parent org: re-mint the access token from the same parent org as postman-api-key (postman-resolve-service-token-action, or POST https://api.getpostman.com/service-account-tokens with that team's PMAK), or set postman-api-key to the matching parent org." : "Use one credential pair from a single parent org. Set credential-preflight: enforce to fail the run on this condition.";
+    return {
+      ok: false,
+      level,
+      message: args.mask(
+        `postman: ${lead} - PMAK belongs to ${describeTeam(args.pmak)} but the access token's session belongs to a different parent org, ${describeTeam(args.session)}. Assets would be created against one team while Bifrost linking and governance act under the other, producing duplicate-link 400s and workspaces not visible to the other credential. ` + fix
+      )
+    };
+  }
+  if (pmakTeamId && sessionTeamId) {
+    const scope = args.workspaceTeamId || args.explicitTeamId ? "parent org team" : "team";
+    const label = args.pmak?.teamName ?? args.pmak?.teamDomain ?? args.session?.teamName ?? args.session?.teamDomain;
+    return {
+      ok: true,
+      level: "ok",
+      message: args.mask(
+        `postman: credential preflight OK - PMAK and access token both resolve to ${scope} ${pmakTeamId}${label ? ` (${label})` : ""}`
+      )
+    };
+  }
+  const missing = [
+    !pmakTeamId ? "PMAK identity" : void 0,
+    !sessionTeamId ? "access-token session identity" : void 0
+  ].filter(Boolean).join(" and ");
+  return {
+    ok: false,
+    level: "note",
+    message: args.mask(
+      `postman: credential preflight note - cross-check skipped because the ${missing} did not resolve a team id; continuing with reactive error guidance only`
+    )
+  };
+}
+async function runCredentialPreflight(args) {
+  if (args.mode === "off") {
+    return;
+  }
+  const mask = args.mask;
+  const apiKey = String(args.postmanApiKey || "").trim();
+  const accessToken = String(args.postmanAccessToken || "").trim();
+  let pmak;
+  if (apiKey) {
+    try {
+      pmak = await resolvePmakIdentity({
+        apiBaseUrl: args.apiBaseUrl,
+        apiKey,
+        fetchImpl: args.fetchImpl
+      });
+    } catch (error2) {
+      args.log.warning(
+        mask(
+          `postman: credential preflight could not resolve PMAK identity: ${error2 instanceof Error ? error2.message : String(error2)}`
+        )
+      );
+    }
+    if (pmak) {
+      args.log.info(formatIdentityLine(pmak, mask));
+    } else {
+      args.log.warning(
+        mask("postman: credential preflight could not resolve PMAK identity from GET /me; continuing")
+      );
+    }
+  }
+  if (!accessToken) {
+    args.log.info(mask("postman: Bifrost diagnostics limited: no access token"));
+    return;
+  }
+  let session;
+  try {
+    session = await resolveSessionIdentity({
+      iapubBaseUrl: args.iapubBaseUrl,
+      accessToken,
+      fetchImpl: args.fetchImpl
+    });
+  } catch (error2) {
+    args.log.warning(
+      mask(
+        `postman: credential preflight could not resolve access-token session identity: ${error2 instanceof Error ? error2.message : String(error2)}`
+      )
+    );
+  }
+  if (session) {
+    args.log.info(formatIdentityLine(session, mask));
+  } else {
+    args.log.warning(
+      mask(
+        "postman: credential preflight could not resolve the access-token session identity from iapub; continuing with reactive error guidance only"
+      )
+    );
+  }
+  const result = crossCheckIdentities({
+    pmak,
+    session,
+    workspaceTeamId: args.workspaceTeamId,
+    explicitTeamId: args.explicitTeamId,
+    mode: args.mode,
+    mask
+  });
+  if (!result.message) {
+    return;
+  }
+  if (result.level === "fail") {
+    throw new Error(result.message);
+  }
+  if (result.level === "note") {
+    args.log.warning(result.message);
+    return;
+  }
+  args.log.info(result.message);
+}
+
+// src/lib/postman/error-advice.ts
+var WORKSPACE_PERSONAL_ONLY_ADVICE = "Workspace creation failed: This may be an Org-mode account that requires a workspace-team-id input. The Postman API does not allow creating team workspaces at the organization level. Use the workspace-team-id input to specify which sub-team should own this workspace.";
+function expiryAdvice(code) {
+  return `postman: Bifrost rejected the access token (${code}). Service-account access tokens expire after about 1 to 1.5 hours; this run likely outlived its token. Re-mint a fresh token (postman-resolve-service-token-action, or POST https://api.getpostman.com/service-account-tokens) and re-run. If it was just minted, confirm postman-access-token is the token for the same parent org as postman-api-key.`;
+}
+function forbiddenAdvice(ctx) {
+  const sessionDetail = ctx.sessionTeamId ? ` while the access token is valid (it resolved to team ${ctx.sessionTeamId}${ctx.sessionRoles && ctx.sessionRoles.length > 0 ? `, roles [${ctx.sessionRoles.join(", ")}]` : ""}${ctx.sessionConsumerType ? `, consumerType ${ctx.sessionConsumerType}` : ""} at preflight)` : "";
+  const scopedTeamId = ctx.workspaceTeamId || ctx.explicitTeamId;
+  const teamClause = scopedTeamId ? `, or workspace-team-id ${scopedTeamId} names a sub-team it cannot act in` : ", or the workspace-team-id / POSTMAN_TEAM_ID in use names a sub-team it cannot act in";
+  return `postman: Bifrost refused ${ctx.operation || "this operation"} with 403${sessionDetail}. The token's identity lacks permission for this endpoint${teamClause}. Verify the token's role and that workspace-team-id / POSTMAN_TEAM_ID matches a sub-team from GET https://api.getpostman.com/teams.`;
+}
+function buildAdvice(status, body, ctx) {
+  if (body.includes("UNAUTHENTICATED")) {
+    return expiryAdvice("UNAUTHENTICATED");
+  }
+  if (body.includes("authenticationError")) {
+    return expiryAdvice("authenticationError");
+  }
+  if (body.includes("Only personal workspaces")) {
+    return WORKSPACE_PERSONAL_ONLY_ADVICE;
+  }
+  if (body.includes("projectAlreadyConnected")) {
+    return `postman: ${ctx.operation || "this operation"} reports projectAlreadyConnected with no workspace id in the error body. The repository is already linked to a workspace this credential cannot see, usually one created by a different credential pair or sub-team. Delete the stale link or its workspace, then re-run with one credential pair from a single parent org.`;
+  }
+  if (body.includes("invalidParamError") && body.includes("already exists")) {
+    return `postman: ${ctx.operation || "this operation"} hit a duplicate resource error (invalidParamError: already exists). A matching resource already exists, possibly under another credential pair or sub-team where this credential cannot see it. Identify which workspace holds the existing resource and re-run with one credential pair from a single parent org.`;
+  }
+  if (body.includes("Team feature is not available for your organization")) {
+    return `postman: ${ctx.operation || "this operation"} failed because the team feature is not available for this organization. The credential belongs to an account whose plan lacks team features; use credentials from the intended team and confirm the plan supports this operation.`;
+  }
+  if (body.includes("You are not authorized to perform this action") || status === 403 && ctx.hasAccessToken) {
+    return forbiddenAdvice(ctx);
+  }
+  return void 0;
+}
+function adviseFromHttpError(err, ctx) {
+  const body = err.responseBody || err.message || "";
+  const advice = buildAdvice(err.status, body, ctx);
+  if (!advice) {
+    return void 0;
+  }
+  return new Error(ctx.mask(advice), { cause: err });
+}
+
 // src/lib/postman/internal-integration-adapter.ts
 function extractDuplicateWorkspaceId(body) {
   try {
@@ -24526,6 +24821,7 @@ var BifrostInternalIntegrationAdapter = class {
   bifrostBaseUrl;
   fetchImpl;
   orgMode;
+  secretMasker;
   teamId;
   workerBaseUrl;
   constructor(options) {
@@ -24539,7 +24835,7 @@ var BifrostInternalIntegrationAdapter = class {
     this.workerBaseUrl = String(
       options.workerBaseUrl || "https://catalog-admin.postman-account2009.workers.dev"
     ).replace(/\/+$/, "");
-    void (options.secretMasker ?? createSecretMasker([this.accessToken]));
+    this.secretMasker = options.secretMasker ?? createSecretMasker([this.accessToken]);
   }
   /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
   bifrostHeaders() {
@@ -24551,6 +24847,19 @@ var BifrostInternalIntegrationAdapter = class {
       headers["x-entity-team-id"] = this.teamId;
     }
     return headers;
+  }
+  /** Reactive error-advice context, enriched with the preflight session memo when present. */
+  adviceContext(operation) {
+    const session = getMemoizedSessionIdentity();
+    return {
+      operation,
+      hasAccessToken: Boolean(this.accessToken),
+      sessionTeamId: session?.teamId,
+      sessionRoles: session?.roles,
+      sessionConsumerType: session?.consumerType,
+      explicitTeamId: this.teamId || void 0,
+      mask: this.secretMasker
+    };
   }
   async associateSystemEnvironments(workspaceId, associations) {
     if (associations.length === 0) {
@@ -24574,7 +24883,7 @@ var BifrostInternalIntegrationAdapter = class {
       }
     );
     if (!response.ok) {
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: {
           Authorization: `Bearer ${this.accessToken}`,
@@ -24583,6 +24892,11 @@ var BifrostInternalIntegrationAdapter = class {
         secretValues: [this.accessToken],
         url: `${this.workerBaseUrl}/api/internal/system-envs/associate`
       });
+      const advised = adviseFromHttpError(
+        httpErr,
+        this.adviceContext("system environment association")
+      );
+      throw advised ?? httpErr;
     }
   }
   async connectWorkspaceToRepository(workspaceId, repoUrl) {
@@ -24604,8 +24918,10 @@ var BifrostInternalIntegrationAdapter = class {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
+      let consumedBody;
       if (response.status === 400) {
         const body = await response.text();
+        consumedBody = body;
         const isDuplicate = body.includes("invalidParamError") && body.includes("already exists") || body.includes("projectAlreadyConnected");
         if (isDuplicate) {
           const existingWorkspaceId = extractDuplicateWorkspaceId(body);
@@ -24617,12 +24933,18 @@ var BifrostInternalIntegrationAdapter = class {
           return;
         }
       }
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: headers,
         secretValues: [this.accessToken],
-        url
+        url,
+        ...consumedBody !== void 0 ? { responseBody: consumedBody } : {}
       });
+      const advised = adviseFromHttpError(
+        httpErr,
+        this.adviceContext("workspace repository linking")
+      );
+      throw advised ?? httpErr;
     }
   }
   /**
@@ -24683,12 +25005,14 @@ var BifrostInternalIntegrationAdapter = class {
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: headers,
         secretValues: [this.accessToken],
         url
       });
+      const advised = adviseFromHttpError(httpErr, this.adviceContext("API key generation"));
+      throw advised ?? httpErr;
     }
     const data = await response.json();
     if (!data?.apikey?.key) {
@@ -24706,6 +25030,255 @@ function createInternalIntegrationAdapter(options) {
   }
   return new BifrostInternalIntegrationAdapter(options);
 }
+
+// src/contracts.ts
+var postmanRepoSyncActionContract = {
+  name: "postman-repo-sync-action",
+  description: "Public customer preview contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.",
+  defaults: {
+    integrationBackend: "bifrost",
+    artifactDir: "postman",
+    repoWriteMode: "commit-and-push",
+    collectionSyncMode: "refresh",
+    specSyncMode: "update",
+    workspaceLinkEnabled: true,
+    environmentSyncEnabled: true,
+    committerName: "Postman CSE",
+    committerEmail: "help@postman.com"
+  },
+  inputs: {
+    "generate-ci-workflow": {
+      description: "Whether to generate the CI workflow file",
+      required: false,
+      default: "true"
+    },
+    "ci-workflow-path": {
+      description: "Path to write the generated CI workflow file",
+      required: false,
+      default: ".github/workflows/ci.yml"
+    },
+    "project-name": {
+      description: "Service project name used for environment, mock, and monitor naming.",
+      required: true
+    },
+    "workspace-id": {
+      description: "Postman workspace ID used for workspace-link and export metadata.",
+      required: false
+    },
+    "baseline-collection-id": {
+      description: "Baseline collection ID used for exported artifacts and mock server creation.",
+      required: false
+    },
+    "monitor-type": {
+      description: 'Type of monitor to create ("cloud" or "cli"). "cli" will skip cloud monitor creation and rely on the CI workflow.',
+      required: false,
+      default: "cloud"
+    },
+    "smoke-collection-id": {
+      description: "Smoke collection ID used for monitor creation.",
+      required: false
+    },
+    "contract-collection-id": {
+      description: "Contract collection ID used for exported artifacts.",
+      required: false
+    },
+    "collection-sync-mode": {
+      description: "Collection sync lifecycle mode (refresh or version).",
+      required: false,
+      default: "refresh"
+    },
+    "spec-sync-mode": {
+      description: "Spec sync lifecycle mode (update or version).",
+      required: false,
+      default: "update"
+    },
+    "release-label": {
+      description: "Optional release label used for versioned naming.",
+      required: false
+    },
+    "monitor-id": {
+      description: "Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one.",
+      required: false
+    },
+    "mock-url": {
+      description: "Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one.",
+      required: false
+    },
+    "monitor-cron": {
+      description: "Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run).",
+      required: false,
+      default: ""
+    },
+    "environments-json": {
+      description: "JSON array of environment slugs to create or update.",
+      required: false,
+      default: '["prod"]'
+    },
+    "repo-url": {
+      description: "Explicit repository URL. Defaults to the workflow repository URL.",
+      required: false
+    },
+    "integration-backend": {
+      description: "Integration backend for workspace linking and environment sync.",
+      required: false,
+      default: "bifrost"
+    },
+    "workspace-link-enabled": {
+      description: "Enable workspace linking.",
+      required: false,
+      default: "true"
+    },
+    "environment-sync-enabled": {
+      description: "Enable system environment association.",
+      required: false,
+      default: "true"
+    },
+    "system-env-map-json": {
+      description: "JSON map of environment slug to system environment id.",
+      required: false,
+      default: "{}"
+    },
+    "environment-uids-json": {
+      description: "JSON map of environment slug to Postman environment uid.",
+      required: false,
+      default: "{}"
+    },
+    "env-runtime-urls-json": {
+      description: "JSON map of environment slug to runtime base URL.",
+      required: false,
+      default: "{}"
+    },
+    "artifact-dir": {
+      description: "Root directory for exported Postman artifacts.",
+      required: false,
+      default: "postman"
+    },
+    "repo-write-mode": {
+      description: "Repo mutation mode for generated artifacts and workflow files.",
+      required: false,
+      default: "commit-and-push"
+    },
+    "current-ref": {
+      description: "Explicit ref override for push-changes when checkout is detached.",
+      required: false
+    },
+    "committer-name": {
+      description: "Git committer name for sync commits.",
+      required: false,
+      default: "Postman CSE"
+    },
+    "committer-email": {
+      description: "Git committer email for sync commits.",
+      required: false,
+      default: "help@postman.com"
+    },
+    "postman-api-key": {
+      description: "Postman API key used for environment, mock, and monitor operations.",
+      required: false
+    },
+    "postman-access-token": {
+      description: "Postman access token used for Bifrost and system environment association.",
+      required: false
+    },
+    "credential-preflight": {
+      description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created; off skips the identity probes entirely (the reactive error guidance still applies). Promotion of the default to enforce is planned once the live e2e legs prove both directions.",
+      required: false,
+      default: "warn",
+      allowedValues: ["enforce", "warn", "off"]
+    },
+    "github-token": {
+      description: "GitHub token used for repo variable persistence and commits.",
+      required: false
+    },
+    "gh-fallback-token": {
+      description: "Fallback token for repository variable APIs and workflow-file pushes.",
+      required: false
+    },
+    "org-mode": {
+      description: "Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.",
+      required: false,
+      default: "false"
+    },
+    "ci-workflow-base64": {
+      description: "Optional base64-encoded ci.yml content. Defaults to the built-in template.",
+      required: false
+    },
+    "ssl-client-cert": {
+      description: "Base64-encoded PEM client certificate for Postman CLI mTLS runs.",
+      required: false
+    },
+    "ssl-client-key": {
+      description: "Base64-encoded PEM client private key for Postman CLI mTLS runs.",
+      required: false
+    },
+    "ssl-client-passphrase": {
+      description: "Optional passphrase for encrypted ssl-client-key.",
+      required: false
+    },
+    "ssl-extra-ca-certs": {
+      description: "Optional base64-encoded PEM CA certificate bundle for custom trust.",
+      required: false
+    },
+    "spec-id": {
+      description: "Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.",
+      required: false
+    },
+    "spec-path": {
+      description: "Optional repo-root-relative path to the local spec file for resources/workflows metadata.",
+      required: false
+    },
+    "postman-stack": {
+      description: "Postman stack profile.",
+      required: false,
+      default: "prod",
+      allowedValues: ["prod", "beta"]
+    }
+  },
+  outputs: {
+    "integration-backend": {
+      description: "Resolved integration backend for the customer preview run."
+    },
+    "resolved-current-ref": {
+      description: "Resolved push target based on current-ref semantics."
+    },
+    "workspace-link-status": {
+      description: "Whether workspace linking succeeded, was skipped, or failed."
+    },
+    "environment-sync-status": {
+      description: "Whether environment sync succeeded, was skipped, or failed."
+    },
+    "environment-uids-json": {
+      description: "JSON map of environment slug to Postman environment uid."
+    },
+    "mock-url": {
+      description: "Created or reused mock server URL."
+    },
+    "monitor-id": {
+      description: "Created or reused smoke monitor ID."
+    },
+    "repo-sync-summary-json": {
+      description: "JSON summary of repo materialization and workspace sync outputs."
+    },
+    "commit-sha": {
+      description: "Commit SHA produced by repo-write-mode, if any."
+    }
+  },
+  behavior: {
+    retainedFromFinalize: [
+      "Create or update Postman environments from runtime URLs.",
+      "Associate Postman environments to system environments through Bifrost.",
+      "Create mock servers and smoke monitors from generated collections.",
+      "Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.",
+      "Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.",
+      "Commit synced artifacts and push them back to the current checked out ref."
+    ],
+    removedFromFinalize: [
+      "Generate Fern docs or write documentation URLs back to GitHub.",
+      "Store AWS deployment orchestration concerns in the public action interface.",
+      "Push directly to `main`."
+    ]
+  }
+};
 
 // src/lib/postman/postman-assets-client.ts
 var PostmanAssetsClient = class {
@@ -25038,6 +25611,17 @@ function normalizeSpecSyncMode(value) {
   }
   return "update";
 }
+function parseCredentialPreflight(value) {
+  const definition = postmanRepoSyncActionContract.inputs["credential-preflight"];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || "").trim() || (definition.default ?? "warn");
+  if (allowed.includes(normalized)) {
+    return normalized;
+  }
+  throw new Error(
+    `Unsupported credential-preflight "${normalized}". Supported values: ${allowed.join(", ")}`
+  );
+}
 function normalizeReleaseLabel(value) {
   const cleaned = normalizeInputValue(value).replace(/^refs\/heads\//, "").replace(/^refs\/tags\//, "").replace(/\s+/g, "-").replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-").replace(/^[._-]+|[._-]+$/g, "");
   return cleaned;
@@ -25096,6 +25680,7 @@ function resolveInputs(env = process.env) {
     committerEmail: getInput2("committer-email", env) || "help@postman.com",
     postmanApiKey: getInput2("postman-api-key", env),
     postmanAccessToken: getInput2("postman-access-token", env),
+    credentialPreflight: parseCredentialPreflight(getInput2("credential-preflight", env)),
     githubToken: getInput2("github-token", env),
     ghFallbackToken: getInput2("gh-fallback-token", env),
     ciWorkflowBase64: getInput2("ci-workflow-base64", env),
@@ -25115,7 +25700,8 @@ function resolveInputs(env = process.env) {
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
-    postmanCliInstallUrl: endpointProfile.cliInstallUrl
+    postmanCliInstallUrl: endpointProfile.cliInstallUrl,
+    postmanIapubBase: endpointProfile.iapubBaseUrl
   };
 }
 function buildEnvironmentValues(envName, baseUrl) {
@@ -25305,6 +25891,7 @@ function readActionInputs(actionCore) {
     INPUT_COMMITTER_EMAIL: readInput(actionCore, "committer-email") || "help@postman.com",
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
+    INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, "credential-preflight") || "warn",
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, "ci-workflow-base64"),
@@ -25986,6 +26573,16 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
     inputs.sslClientPassphrase,
     inputs.sslExtraCaCerts
   ]);
+  await runCredentialPreflight({
+    apiBaseUrl: inputs.postmanApiBase,
+    iapubBaseUrl: inputs.postmanIapubBase,
+    postmanApiKey: inputs.postmanApiKey,
+    postmanAccessToken: inputs.postmanAccessToken,
+    explicitTeamId: inputs.teamId || void 0,
+    mode: inputs.credentialPreflight,
+    mask: masker,
+    log: actionCore
+  });
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {
     env: process.env
   });

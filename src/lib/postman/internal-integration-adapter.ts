@@ -1,6 +1,8 @@
 import { HttpError } from '../http-error.js';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
+import { getMemoizedSessionIdentity } from './credential-identity.js';
+import { adviseFromHttpError, type ErrorAdviceContext } from './error-advice.js';
 
 export interface GovernanceAssociation {
   envUid: string;
@@ -59,6 +61,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly bifrostBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly orgMode: boolean;
+  private readonly secretMasker: SecretMasker;
   private readonly teamId: string;
   private readonly workerBaseUrl: string;
 
@@ -74,7 +77,8 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       options.workerBaseUrl ||
         'https://catalog-admin.postman-account2009.workers.dev'
     ).replace(/\/+$/, '');
-    void (options.secretMasker ?? createSecretMasker([this.accessToken]));
+    this.secretMasker =
+      options.secretMasker ?? createSecretMasker([this.accessToken]);
   }
 
   /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
@@ -87,6 +91,20 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       headers['x-entity-team-id'] = this.teamId;
     }
     return headers;
+  }
+
+  /** Reactive error-advice context, enriched with the preflight session memo when present. */
+  private adviceContext(operation: string): ErrorAdviceContext {
+    const session = getMemoizedSessionIdentity();
+    return {
+      operation,
+      hasAccessToken: Boolean(this.accessToken),
+      sessionTeamId: session?.teamId,
+      sessionRoles: session?.roles,
+      sessionConsumerType: session?.consumerType,
+      explicitTeamId: this.teamId || undefined,
+      mask: this.secretMasker
+    };
   }
 
   async associateSystemEnvironments(
@@ -116,7 +134,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     );
 
     if (!response.ok) {
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: {
           Authorization: `Bearer ${this.accessToken}`,
@@ -125,6 +143,11 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
         secretValues: [this.accessToken],
         url: `${this.workerBaseUrl}/api/internal/system-envs/associate`
       });
+      const advised = adviseFromHttpError(
+        httpErr,
+        this.adviceContext('system environment association')
+      );
+      throw advised ?? httpErr;
     }
   }
 
@@ -157,8 +180,10 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       // same repo is already connected. Both the legacy ('invalidParamError' +
       // 'already exists') and current ('projectAlreadyConnected') error shapes
       // are treated as expected re-link attempts.
+      let consumedBody: string | undefined;
       if (response.status === 400) {
         const body = await response.text();
+        consumedBody = body;
         const isDuplicate =
           (body.includes('invalidParamError') && body.includes('already exists')) ||
           body.includes('projectAlreadyConnected');
@@ -180,12 +205,18 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
           return;
         }
       }
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: headers,
         secretValues: [this.accessToken],
-        url
+        url,
+        ...(consumedBody !== undefined ? { responseBody: consumedBody } : {})
       });
+      const advised = adviseFromHttpError(
+        httpErr,
+        this.adviceContext('workspace repository linking')
+      );
+      throw advised ?? httpErr;
     }
   }
 
@@ -289,12 +320,14 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     });
 
     if (!response.ok) {
-      throw await HttpError.fromResponse(response, {
+      const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: headers,
         secretValues: [this.accessToken],
         url
       });
+      const advised = adviseFromHttpError(httpErr, this.adviceContext('API key generation'));
+      throw advised ?? httpErr;
     }
 
     const data = await response.json() as { apikey?: { key?: string } };

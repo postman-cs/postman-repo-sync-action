@@ -251,6 +251,49 @@ describe('internal integration adapter', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('UNAUTHENTICATED on associateSystemEnvironments yields re-mint guidance', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'UNAUTHENTICATED' } },
+        { status: 401, statusText: 'Unauthorized' }
+      )
+    );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      workerBaseUrl: 'https://catalog-admin.example.test',
+      fetchImpl
+    });
+
+    await expect(
+      adapter.associateSystemEnvironments('ws-123', [
+        { envUid: 'env-prod', systemEnvId: 'sys-prod' }
+      ])
+    ).rejects.toThrow(
+      /Bifrost rejected the access token \(UNAUTHENTICATED\).*Re-mint a fresh token.*service-account-tokens/s
+    );
+  });
+
+  it('createApiKey 403 yields role guidance', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(
+        { error: { message: 'You are not authorized to perform this action' } },
+        { status: 403, statusText: 'Forbidden' }
+      )
+    );
+    const adapter = createInternalIntegrationAdapter({
+      backend: 'bifrost',
+      accessToken: 'token-123',
+      teamId: '11430732',
+      fetchImpl
+    });
+
+    await expect(adapter.createApiKey('repo-sync-action-key')).rejects.toThrow(
+      /Bifrost refused API key generation with 403.*Verify the token's role/s
+    );
+  });
+
   it('sanitizes token content in internal failures', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('token-123 worker failure', {

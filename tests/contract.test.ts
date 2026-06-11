@@ -8,6 +8,7 @@ import {
   createExecutionPlan,
   postmanRepoSyncActionContract
 } from '../src/contracts.js';
+import { resolveInputs } from '../src/index.js';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(
@@ -51,6 +52,7 @@ describe('postman-repo-sync-action contract', () => {
       'committer-email',
       'postman-api-key',
       'postman-access-token',
+      'credential-preflight',
       'github-token',
       'gh-fallback-token',
       'org-mode',
@@ -75,6 +77,38 @@ describe('postman-repo-sync-action contract', () => {
       'repo-sync-summary-json',
       'commit-sha'
     ]);
+  });
+
+  it('exposes credential-preflight as an optional kebab-case input defaulting to warn', () => {
+    expect('credential-preflight').toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+    const definition = postmanRepoSyncActionContract.inputs['credential-preflight'];
+    expect(definition).toBeDefined();
+    expect(definition.required).toBe(false);
+    expect(definition.default).toBe('warn');
+    expect(definition.allowedValues).toEqual(['enforce', 'warn', 'off']);
+
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string }>;
+    };
+    expect(actionYaml.inputs['credential-preflight']?.required).toBe(false);
+    expect(actionYaml.inputs['credential-preflight']?.default).toBe('warn');
+
+    expect(resolveInputs({ INPUT_PROJECT_NAME: 'core-payments' }).credentialPreflight).toBe(
+      'warn'
+    );
+    expect(
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_CREDENTIAL_PREFLIGHT: 'enforce'
+      }).credentialPreflight
+    ).toBe('enforce');
+    expect(() =>
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_CREDENTIAL_PREFLIGHT: 'sometimes'
+      })
+    ).toThrow(/Unsupported credential-preflight/);
   });
 
   it('documents current behavior and current-ref push semantics', () => {
