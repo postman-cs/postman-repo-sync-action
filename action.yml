@@ -1,5 +1,9 @@
 name: postman-repo-sync-action
-description: Sync exported Postman artifacts into a repository and expose customer preview workspace-link and environment-sync contract outputs.
+description: Sync exported Postman artifacts into a repository and expose workspace-link and environment-sync outputs.
+author: Postman
+branding:
+  icon: refresh-cw
+  color: orange
 inputs:
 
   generate-ci-workflow:
