@@ -13,6 +13,7 @@ import {
   type RepoSyncDependencies,
   type ResolvedInputs
 } from './index.js';
+import { runCredentialPreflight } from './lib/postman/credential-identity.js';
 import { createSecretMasker } from './lib/secrets.js';
 
 interface CliConfig {
@@ -272,6 +273,21 @@ export async function runCli(
     inputs.sslClientPassphrase,
     inputs.sslExtraCaCerts
   ]);
+  // Proactive credential preflight: resolve and cross-check both identities
+  // once, before resolve/createApiKey or any write. The CLI entry must run this
+  // exactly as runAction does, or dist/cli.cjs (what CI and the e2e harness
+  // invoke) would skip the preflight that dist/index.cjs performs.
+  await runCredentialPreflight({
+    apiBaseUrl: inputs.postmanApiBase,
+    iapubBaseUrl: inputs.postmanIapubBase,
+    postmanApiKey: inputs.postmanApiKey,
+    postmanAccessToken: inputs.postmanAccessToken,
+    explicitTeamId: inputs.teamId || undefined,
+    mode: inputs.credentialPreflight,
+    mask: initialMasker,
+    log: reporter
+  });
+
   const resolvingExec = createCliExec(initialMasker);
   const resolved = await resolvePostmanApiKeyAndTeamId(
     inputs,
