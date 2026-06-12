@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync
@@ -881,12 +882,52 @@ function buildSpecCollectionWorkflowManifest(
   );
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
 
 export function assertPathWithinCwd(targetPath: string, fieldName: string): void {
-  const base = path.resolve('.');
-  const resolved = path.resolve(base, targetPath);
+  const originalPath = String(targetPath || '');
+  const rawPath = originalPath.trim();
+  const segments = rawPath.split(/[\\/]+/).filter(Boolean);
+  if (
+    !rawPath ||
+    hasControlCharacter(originalPath) ||
+    path.isAbsolute(rawPath) ||
+    path.win32.isAbsolute(rawPath) ||
+    segments.includes('..') ||
+    rawPath.startsWith(':') ||
+    hasControlCharacter(rawPath)
+  ) {
+    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
+  }
+
+  const base = realpathSync(process.cwd());
+  const resolved = path.resolve(base, rawPath);
   const relative = path.relative(base, resolved);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
+  }
+
+  let existingPath = resolved;
+  while (!existsSync(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) {
+      break;
+    }
+    existingPath = parent;
+  }
+
+  const realExistingPath = realpathSync(existingPath);
+  const realRelative = path.relative(base, realExistingPath);
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
     throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
   }
 }
@@ -1057,7 +1098,19 @@ async function commitAndPushGeneratedFiles(
     provisionExists ? provisionPath : null
   ].filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === provisionPath)) as string[];
 
-  const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ['.'];
+  if (stagePaths.length === 0) {
+    dependencies.core.info('No generated repository paths were found; skipping repo mutation.');
+    return {
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: resolveCurrentRef({
+        currentRef: inputs.currentRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        repoWriteMode: inputs.repoWriteMode
+      })
+    };
+  }
 
   const result = await dependencies.repoMutation.commitAndPush({
     repoWriteMode: inputs.repoWriteMode,
@@ -1069,7 +1122,7 @@ async function commitAndPushGeneratedFiles(
     adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
     githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
     fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
-    stagePaths: effectiveStagePaths
+    stagePaths
   });
 
   return {
