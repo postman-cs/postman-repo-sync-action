@@ -132,6 +132,15 @@ export const postmanRepoSyncActionContract: {
       required: false,
       default: '["prod"]'
     },
+    'git-provider': {
+      description: "Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected when omitted.",
+      required: false,
+      allowedValues: ['github', 'gitlab', 'bitbucket', 'azure-devops']
+    },
+    'ado-token': {
+      description: 'Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.',
+      required: false
+    },
     'repo-url': {
       description: 'Explicit repository URL. Defaults to the workflow repository URL.',
       required: false

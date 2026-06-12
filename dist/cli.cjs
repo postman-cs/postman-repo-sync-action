@@ -22292,6 +22292,108 @@ function buildCiWorkflowLines(installUrl) {
   ];
 }
 var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
+function buildAdoCiWorkflowLines(installUrl) {
+  return [
+    "name: CI/CD Pipeline",
+    "trigger:",
+    "  branches:",
+    "    include:",
+    "      - main",
+    "schedules:",
+    '  - cron: "0 */6 * * *"',
+    "    displayName: Scheduled run",
+    "    branches:",
+    "      include:",
+    "        - main",
+    "    always: false",
+    "pool:",
+    "  vmImage: ubuntu-latest",
+    "steps:",
+    "  - checkout: self",
+    "    persistCredentials: true",
+    '  - script: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
+    "    displayName: Install Postman CLI",
+    "    env:",
+    `      POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
+    '  - script: postman login --with-api-key "$POSTMAN_API_KEY"',
+    "    displayName: Login to Postman CLI",
+    "    env:",
+    "      POSTMAN_API_KEY: $(POSTMAN_API_KEY)",
+    "  - script: |",
+    "      SMOKE=$(grep '\\[Smoke\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      CONTRACT=$(grep '\\[Contract\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      ENV=$(grep 'prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      ENV=${ENV:-$(grep '\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
+    '      [ -n "$SMOKE" ] || { echo "Missing smoke collection UID in .postman/resources.yaml"; exit 1; }',
+    '      [ -n "$CONTRACT" ] || { echo "Missing contract collection UID in .postman/resources.yaml"; exit 1; }',
+    '      [ -n "$ENV" ] || { echo "Missing environment UID in .postman/resources.yaml"; exit 1; }',
+    '      echo "##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]$SMOKE"',
+    '      echo "##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]$CONTRACT"',
+    '      echo "##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]$ENV"',
+    "    displayName: Resolve Postman Resource IDs",
+    "  - script: |",
+    '      mkdir -p "$(Agent.TempDirectory)/postman-ssl"',
+    '      printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '      printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.key"',
+    '      if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
+    '        printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/ca.crt"',
+    "      fi",
+    "    condition: ne(variables['POSTMAN_SSL_CLIENT_CERT_B64'], '')",
+    "    displayName: Decode SSL certificates",
+    "    env:",
+    "      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)",
+    "      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)",
+    "      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)",
+    "  - script: |",
+    '      CMD=(postman collection run "$(POSTMAN_SMOKE_COLLECTION_UID)"',
+    '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
+    "        --report-events",
+    '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
+    '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
+    '        if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '          CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "        fi",
+    '        if [ -f "$(Agent.TempDirectory)/postman-ssl/ca.crt" ]; then',
+    '          CMD+=(--ssl-extra-ca-certs "$(Agent.TempDirectory)/postman-ssl/ca.crt")',
+    "        fi",
+    "      fi",
+    '      "${CMD[@]}"',
+    "    displayName: Run Smoke Tests",
+    "    env:",
+    "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
+    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    "  - script: |",
+    '      CMD=(postman collection run "$(POSTMAN_CONTRACT_COLLECTION_UID)"',
+    '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
+    "        --report-events",
+    '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
+    '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
+    '        if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '          CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "        fi",
+    '        if [ -f "$(Agent.TempDirectory)/postman-ssl/ca.crt" ]; then',
+    '          CMD+=(--ssl-extra-ca-certs "$(Agent.TempDirectory)/postman-ssl/ca.crt")',
+    "        fi",
+    "      fi",
+    '      "${CMD[@]}"',
+    "    displayName: Run Contract Tests",
+    "    env:",
+    "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
+    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    ""
+  ];
+}
+function getCiWorkflowTemplate(provider, options = {}) {
+  if (provider === "azure-devops") {
+    const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+    return buildAdoCiWorkflowLines(validateHttpsInstallUrl(rawUrl)).join("\n");
+  }
+  return renderCiWorkflowTemplate(options);
+}
 
 // src/lib/secrets.ts
 var REDACTED = "[REDACTED]";
@@ -22387,8 +22489,65 @@ function normalizeBranchRef(value) {
   return trimmed;
 }
 function buildPushTokenOrder(options) {
-  const ordered = [options.fallbackToken, options.githubToken].map((entry) => String(entry || "").trim()).filter(Boolean);
+  const ordered = [options.adoToken, options.fallbackToken, options.githubToken].map((entry) => String(entry || "").trim()).filter(Boolean);
   return ordered.filter((token, index) => ordered.indexOf(token) === index);
+}
+function parseHttpsRemote(rawUrl) {
+  const trimmed = String(rawUrl || "").trim();
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  const normalized = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : trimmed;
+  const url = new URL(normalized);
+  url.username = "";
+  url.password = "";
+  url.hash = "";
+  return url;
+}
+function withoutGitSuffix(pathname) {
+  return pathname.endsWith(".git") ? pathname.slice(0, -4) : pathname;
+}
+function withGitSuffix(pathname) {
+  return pathname.endsWith(".git") ? pathname : `${pathname}.git`;
+}
+function formatUrl(url, pathname = url.pathname) {
+  return `${url.protocol}//${url.host}${pathname}${url.search}`;
+}
+function buildAuthenticatedRemoteUrl(provider, repository, token, repoUrl) {
+  const encodedToken = encodeURIComponent(token);
+  if (provider === "github") {
+    const url = parseHttpsRemote(repoUrl || `https://github.com/${repository}`);
+    return `${url.protocol}//x-access-token:${encodedToken}@${url.host}${withGitSuffix(withoutGitSuffix(url.pathname))}${url.search}`;
+  }
+  if (provider === "gitlab") {
+    const url = parseHttpsRemote(repoUrl || `https://gitlab.com/${repository}`);
+    return `${url.protocol}//oauth2:${encodedToken}@${url.host}${withGitSuffix(withoutGitSuffix(url.pathname))}${url.search}`;
+  }
+  if (provider === "azure-devops") {
+    const url = parseHttpsRemote(repoUrl || `https://dev.azure.com/${repository}`);
+    return `${url.protocol}//anything:${encodedToken}@${url.host}${url.pathname}${url.search}`;
+  }
+  throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${provider}"`);
+}
+function supportsTokenRemote(provider) {
+  return provider === "github" || provider === "gitlab" || provider === "azure-devops";
+}
+function buildScopedExtraHeaderResetConfigs(provider, remoteUrl) {
+  const fallbackRoot = provider === "gitlab" ? "https://gitlab.com/" : "https://github.com/";
+  const url = parseHttpsRemote(remoteUrl || fallbackRoot);
+  const keys = [];
+  if (provider === "azure-devops") {
+    if (url.hostname === "dev.azure.com") {
+      const [organization] = url.pathname.split("/").filter(Boolean);
+      if (organization) {
+        keys.push(`http.${url.protocol}//${url.host}/${organization}/.extraheader=`);
+      }
+    } else if (url.hostname.endsWith(".visualstudio.com")) {
+      keys.push(`http.${url.protocol}//${url.host}/.extraheader=`);
+    }
+    keys.push(`http.${formatUrl(url)}.extraheader=`);
+  } else {
+    keys.push(`http.${url.protocol}//${url.host}/.extraheader=`);
+  }
+  return keys.filter((key, index) => keys.indexOf(key) === index);
 }
 function resolveCurrentRef(context) {
   if (context.repoWriteMode !== "commit-and-push") {
@@ -22402,16 +22561,20 @@ function resolveCurrentRef(context) {
 }
 var RepoMutationService = class {
   execute;
+  provider;
   repository;
+  repoUrl;
   secretMasker;
   constructor(options) {
     this.execute = options.execute;
+    this.provider = options.provider ?? "github";
     this.repository = options.repository;
+    this.repoUrl = options.repoUrl;
     this.secretMasker = options.secretMasker ?? createSecretMasker([]);
   }
   async commitAndPush(options) {
     const resolvedCurrentRef = resolveCurrentRef(options);
-    const tokens = buildPushTokenOrder({
+    const tokens = this.provider === "azure-devops" ? buildPushTokenOrder({ adoToken: options.adoToken }) : buildPushTokenOrder({
       fallbackToken: options.fallbackToken,
       githubToken: options.githubToken
     });
@@ -22443,27 +22606,38 @@ var RepoMutationService = class {
     if (!resolvedCurrentRef) {
       throw new Error("No current ref could be resolved for repo-write-mode=commit-and-push");
     }
-    if (tokens.length === 0) {
+    const usePersistedCredentials = tokens.length === 0 && this.provider === "azure-devops";
+    if (tokens.length === 0 && !usePersistedCredentials) {
       throw new Error("No push token configured for repo-write-mode=commit-and-push");
     }
+    if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
+      throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+    }
     const originalRemote = (await this.execute("git", ["remote", "get-url", "origin"])).stdout.trim();
-    await this.execute("git", [
-      "config",
-      "--unset-all",
-      "http.https://github.com/.extraheader"
-    ]);
     let pushed = false;
     let lastError = "";
+    let remoteChanged = false;
     const isNonRetryablePushError = (message) => /workflow|permission/i.test(message);
     try {
-      for (const token of tokens) {
-        await this.execute("git", [
-          "remote",
-          "set-url",
-          "origin",
-          `https://x-access-token:${token}@github.com/${this.repository}.git`
-        ]);
+      const pushCandidates = usePersistedCredentials ? [null] : tokens;
+      for (const token of pushCandidates) {
+        const resetConfigArgs = token === null ? [] : buildScopedExtraHeaderResetConfigs(this.provider, originalRemote || this.repoUrl || "").flatMap((config) => ["-c", config]);
+        if (token !== null) {
+          await this.execute("git", [
+            "remote",
+            "set-url",
+            "origin",
+            buildAuthenticatedRemoteUrl(
+              this.provider,
+              this.repository,
+              token,
+              this.repoUrl || originalRemote
+            )
+          ]);
+          remoteChanged = true;
+        }
         const push = await this.execute("git", [
+          ...resetConfigArgs,
           "push",
           "origin",
           `HEAD:refs/heads/${resolvedCurrentRef}`
@@ -22478,7 +22652,9 @@ var RepoMutationService = class {
         }
       }
     } finally {
-      await this.execute("git", ["remote", "set-url", "origin", originalRemote]);
+      if (remoteChanged) {
+        await this.execute("git", ["remote", "set-url", "origin", originalRemote]);
+      }
     }
     if (!pushed) {
       throw new Error(secretMasker(lastError || "Failed to push generated changes"));
@@ -23219,6 +23395,15 @@ var postmanRepoSyncActionContract = {
       required: false,
       default: '["prod"]'
     },
+    "git-provider": {
+      description: "Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected when omitted.",
+      required: false,
+      allowedValues: ["github", "gitlab", "bitbucket", "azure-devops"]
+    },
+    "ado-token": {
+      description: "Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.",
+      required: false
+    },
     "repo-url": {
       description: "Explicit repository URL. Defaults to the workflow repository URL.",
       required: false
@@ -23768,7 +23953,8 @@ function createAssetProjectName(inputs, releaseLabel) {
 function resolveInputs(env = process.env) {
   const repoContext = detectRepoContext(
     {
-      repoUrl: getInput("repo-url", env)
+      repoUrl: getInput("repo-url", env),
+      gitProvider: getInput("git-provider", env)
     },
     env
   );
@@ -23799,20 +23985,22 @@ function resolveInputs(env = process.env) {
     envRuntimeUrls,
     artifactDir: getInput("artifact-dir", env) || "postman",
     repoWriteMode: normalizeRepoWriteMode(getInput("repo-write-mode", env) || "commit-and-push"),
-    currentRef: getInput("current-ref", env) || normalizeInputValue(env.GITHUB_REF),
-    githubHeadRef: getInput("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF),
+    currentRef: getInput("current-ref", env) || normalizeInputValue(env.GITHUB_REF) || normalizeInputValue(env.BUILD_SOURCEBRANCH),
+    githubHeadRef: getInput("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF) || normalizeInputValue(env.SYSTEM_PULLREQUEST_SOURCEBRANCH),
     githubRefName: getInput("github-ref-name", env) || normalizeInputValue(env.GITHUB_REF_NAME) || normalizeInputValue(repoContext.ref),
     committerName: getInput("committer-name", env) || "Postman CSE",
     committerEmail: getInput("committer-email", env) || "help@postman.com",
     postmanApiKey: getInput("postman-api-key", env),
     postmanAccessToken: getInput("postman-access-token", env),
     credentialPreflight: parseCredentialPreflight(getInput("credential-preflight", env)),
+    adoToken: getInput("ado-token", env) || normalizeInputValue(env.SYSTEM_ACCESSTOKEN),
     githubToken: getInput("github-token", env),
     ghFallbackToken: getInput("gh-fallback-token", env),
+    provider: repoContext.provider,
     ciWorkflowBase64: getInput("ci-workflow-base64", env),
     generateCiWorkflow: parseBooleanInput(getInput("generate-ci-workflow", env), true),
     monitorType: getInput("monitor-type", env) || "cloud",
-    ciWorkflowPath: getInput("ci-workflow-path", env) || ".github/workflows/ci.yml",
+    ciWorkflowPath: getInput("ci-workflow-path", env) || (repoContext.provider === "azure-devops" ? "azure-pipelines.yml" : ".github/workflows/ci.yml"),
     orgMode: parseBooleanInput(getInput("org-mode", env), false),
     monitorId: getInput("monitor-id", env),
     mockUrl: getInput("mock-url", env),
@@ -24141,7 +24329,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
     (0, import_node_fs.writeFileSync)(globalsFilePath, "name: Globals\nvalues: []\n");
   }
   if (inputs.generateCiWorkflow) {
-    ensureDir(".github/workflows");
+    const ciDir = inputs.ciWorkflowPath.split("/").slice(0, -1).join("/");
+    if (ciDir) {
+      ensureDir(ciDir);
+    }
   }
   const manifestCollections = {};
   const discoveredSpecs = scanLocalSpecReferences();
@@ -24200,6 +24391,11 @@ function renderCiWorkflow(inputs) {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
+  if (inputs.provider === "azure-devops") {
+    return getCiWorkflowTemplate(inputs.provider, {
+      postmanCliInstallUrl: inputs.postmanCliInstallUrl
+    });
+  }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl
   });
@@ -24229,16 +24425,17 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     }
     (0, import_node_fs.writeFileSync)(inputs.ciWorkflowPath, ciWorkflow);
   }
-  const provisionExists = (0, import_node_fs.existsSync)(".github/workflows/provision.yml");
+  const provisionPath = ".github/workflows/provision.yml";
+  const provisionExists = inputs.provider === "github" && (0, import_node_fs.existsSync)(provisionPath);
   if (provisionExists) {
-    (0, import_node_fs.rmSync)(".github/workflows/provision.yml");
+    (0, import_node_fs.rmSync)(provisionPath);
   }
   const stagePaths = [
     inputs.artifactDir,
     ".postman",
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
-    provisionExists ? ".github/workflows/provision.yml" : null
-  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs.existsSync)(entry) || entry === ".github/workflows/provision.yml"));
+    provisionExists ? provisionPath : null
+  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs.existsSync)(entry) || entry === provisionPath));
   const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ["."];
   const result = await dependencies.repoMutation.commitAndPush({
     repoWriteMode: inputs.repoWriteMode,
@@ -24247,8 +24444,9 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     githubRefName: inputs.githubRefName,
     committerName: inputs.committerName,
     committerEmail: inputs.committerEmail,
-    githubToken: inputs.githubToken,
-    fallbackToken: inputs.ghFallbackToken,
+    adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
+    githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
+    fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
     stagePaths: effectiveStagePaths
   });
   return {
@@ -24462,7 +24660,15 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       const autoTeamId = await tempClient.getAutoDerivedTeamId();
       if (autoTeamId) teamId = autoTeamId;
     }
-    if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
+    if (inputs.provider === "azure-devops") {
+      if (options.persistGeneratedApiKeySecret ?? true) {
+        actionCore.warning(
+          "A new Postman API key was generated but automatic secret persistence is not supported for Azure DevOps. Set the POSTMAN_API_KEY pipeline secret variable manually."
+        );
+      } else {
+        actionCore.info("Skipping generated POSTMAN_API_KEY secret persistence for this run.");
+      }
+    } else if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
       actionCore.info("Persisting new Postman API key to GitHub repository secrets...");
       const ghToken = inputs.ghFallbackToken || inputs.githubToken;
       const repo = inputs.repository;
@@ -24527,6 +24733,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   const masker = options.secretMasker ?? createSecretMasker([
     resolved.apiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,
@@ -24541,7 +24748,9 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     secretMasker: masker
   });
   const repoMutation = repository && (inputs.repoWriteMode === "commit-only" || inputs.repoWriteMode === "commit-and-push") ? new RepoMutationService({
+    provider: inputs.provider,
     repository,
+    repoUrl: inputs.repoUrl || void 0,
     secretMasker: masker,
     execute: async (command, args) => {
       const result = await factories.exec.getExecOutput(command, args, {
@@ -24670,6 +24879,8 @@ function parseCliArgs(argv, env = process.env) {
     "spec-sync-mode",
     "release-label",
     "environments-json",
+    "git-provider",
+    "ado-token",
     "repo-url",
     "integration-backend",
     "workspace-link-enabled",
@@ -24743,6 +24954,7 @@ function createCliDependencies(inputs, resolved) {
   const secretMasker = createSecretMasker([
     resolved.apiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,
@@ -24771,6 +24983,7 @@ async function runCli(argv = process.argv.slice(2), runtime = {}) {
   const initialMasker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,

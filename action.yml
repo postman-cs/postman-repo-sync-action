@@ -11,9 +11,8 @@ inputs:
     required: false
     default: "true"
   ci-workflow-path:
-    description: Path to write the generated CI workflow file
+    description: Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise.
     required: false
-    default: .github/workflows/ci.yml
   project-name:
     description: Service project name used for environment, mock, and monitor naming.
     required: true
@@ -58,8 +57,14 @@ inputs:
     description: JSON array of environment slugs to create or update.
     required: false
     default: '["prod"]'
+  git-provider:
+    description: Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted.
+    required: false
+  ado-token:
+    description: Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.
+    required: false
   repo-url:
-    description: 'Explicit repository URL (GitHub or GitLab). Defaults to https://github.com/$GITHUB_REPOSITORY on GitHub Actions, or $CI_PROJECT_URL on GitLab CI, when omitted.'
+    description: 'Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted.'
     required: false
   integration-backend:
     description: Integration backend for workspace linking and environment sync.
