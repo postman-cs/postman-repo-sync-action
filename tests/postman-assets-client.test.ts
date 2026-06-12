@@ -315,3 +315,79 @@ describe('getMe', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('collection visibility retry', () => {
+  const unableBody = JSON.stringify({
+    error: { name: 'serverError', message: 'Unable to load collection 55002873-b50e3ab4' }
+  });
+
+  it('retries monitor creation when the collection is not yet visible', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => new Response(unableBody, { status: 400, statusText: 'Bad Request' }))
+      .mockImplementationOnce(async () => new Response(unableBody, { status: 400, statusText: 'Bad Request' }))
+      .mockImplementation(async () => jsonResponse({ monitor: { uid: 'mon-1' } }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    const uid = await client.createMonitor('ws-1', 'Smoke', 'col-1', 'env-1', '0 0 * * 0');
+    expect(uid).toBe('mon-1');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries mock creation on transient 5xx responses', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('oops', { status: 500, statusText: 'Internal Server Error' }))
+      .mockResolvedValue(jsonResponse({ mock: { uid: 'mock-1', mockUrl: 'https://m.mock.pstmn.io' } }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    const mock = await client.createMock('ws-1', 'Mock', 'col-1', 'env-1');
+    expect(mock.uid).toBe('mock-1');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry unrelated 400 responses', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'invalid cron' } }), {
+          status: 400,
+          statusText: 'Bad Request'
+        })
+      );
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(
+      client.createMonitor('ws-1', 'Smoke', 'col-1', 'env-1', '0 0 * * 0')
+    ).rejects.toThrow('400');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after exhausting attempts when the collection never appears', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response(unableBody, { status: 400, statusText: 'Bad Request' }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.createMock('ws-1', 'Mock', 'col-1', 'env-1')).rejects.toThrow(
+      'Unable to load collection'
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+});
