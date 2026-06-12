@@ -149,6 +149,8 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'spec-sync-mode',
     'release-label',
     'environments-json',
+    'git-provider',
+    'ado-token',
     'repo-url',
     'integration-backend',
     'workspace-link-enabled',
@@ -234,6 +236,7 @@ export function createCliDependencies(
   const secretMasker = createSecretMasker([
     resolved.apiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,
@@ -267,6 +270,7 @@ export async function runCli(
   const initialMasker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,

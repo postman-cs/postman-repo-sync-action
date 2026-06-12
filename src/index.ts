@@ -13,9 +13,9 @@ import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 import { convertAndSplitCollection } from './postman-v3/converter.js';
-import { renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
+import { getCiWorkflowTemplate, renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
-import { detectRepoContext } from './lib/repo/context.js';
+import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
 import { createTelemetryContext } from '@postman-cse/automation-telemetry-core';
 import {
   createInternalIntegrationAdapter,
@@ -73,8 +73,10 @@ export interface ResolvedInputs {
   postmanApiKey: string;
   postmanAccessToken: string;
   credentialPreflight: PreflightMode;
+  adoToken: string;
   githubToken: string;
   ghFallbackToken: string;
+  provider: GitProvider;
   ciWorkflowBase64: string;
   generateCiWorkflow: boolean;
   monitorType: string;
@@ -279,7 +281,8 @@ function createAssetProjectName(
 export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInputs {
   const repoContext = detectRepoContext(
     {
-      repoUrl: getInput('repo-url', env)
+      repoUrl: getInput('repo-url', env),
+      gitProvider: getInput('git-provider', env)
     },
     env
   );
@@ -313,8 +316,14 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     envRuntimeUrls,
     artifactDir: getInput('artifact-dir', env) || 'postman',
     repoWriteMode: normalizeRepoWriteMode(getInput('repo-write-mode', env) || 'commit-and-push'),
-    currentRef: getInput('current-ref', env) || normalizeInputValue(env.GITHUB_REF),
-    githubHeadRef: getInput('github-head-ref', env) || normalizeInputValue(env.GITHUB_HEAD_REF),
+    currentRef:
+      getInput('current-ref', env) ||
+      normalizeInputValue(env.GITHUB_REF) ||
+      normalizeInputValue(env.BUILD_SOURCEBRANCH),
+    githubHeadRef:
+      getInput('github-head-ref', env) ||
+      normalizeInputValue(env.GITHUB_HEAD_REF) ||
+      normalizeInputValue(env.SYSTEM_PULLREQUEST_SOURCEBRANCH),
     githubRefName:
       getInput('github-ref-name', env) ||
       normalizeInputValue(env.GITHUB_REF_NAME) ||
@@ -324,12 +333,16 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanApiKey: getInput('postman-api-key', env),
     postmanAccessToken: getInput('postman-access-token', env),
     credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
+    adoToken: getInput('ado-token', env) || normalizeInputValue(env.SYSTEM_ACCESSTOKEN),
     githubToken: getInput('github-token', env),
     ghFallbackToken: getInput('gh-fallback-token', env),
+    provider: repoContext.provider,
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
     generateCiWorkflow: parseBooleanInput(getInput('generate-ci-workflow', env), true),
     monitorType: getInput('monitor-type', env) || 'cloud',
-    ciWorkflowPath: getInput('ci-workflow-path', env) || '.github/workflows/ci.yml',
+    ciWorkflowPath:
+      getInput('ci-workflow-path', env) ||
+      (repoContext.provider === 'azure-devops' ? 'azure-pipelines.yml' : '.github/workflows/ci.yml'),
     orgMode: parseBooleanInput(getInput('org-mode', env), false),
     monitorId: getInput('monitor-id', env),
     mockUrl: getInput('mock-url', env),
@@ -556,6 +569,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   const projectName = readInput(actionCore, 'project-name', true);
   const postmanApiKey = readInput(actionCore, 'postman-api-key');
   const postmanAccessToken = readInput(actionCore, 'postman-access-token');
+  const adoToken = readInput(actionCore, 'ado-token');
   const githubToken = readInput(actionCore, 'github-token');
   const ghFallbackToken = readInput(actionCore, 'gh-fallback-token');
   const sslClientCert = readInput(actionCore, 'ssl-client-cert');
@@ -563,23 +577,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   const sslClientPassphrase = readInput(actionCore, 'ssl-client-passphrase');
   const sslExtraCaCerts = readInput(actionCore, 'ssl-extra-ca-certs');
 
-  if (postmanApiKey) actionCore.setSecret(postmanApiKey);
-  if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
-  if (githubToken) actionCore.setSecret(githubToken);
-  if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
-  if (sslClientCert) actionCore.setSecret(sslClientCert);
-  if (sslClientKey) actionCore.setSecret(sslClientKey);
-  if (sslClientPassphrase) actionCore.setSecret(sslClientPassphrase);
-  if (sslExtraCaCerts) actionCore.setSecret(sslExtraCaCerts);
-
-  if (sslClientCert) {
-    if (!sslClientKey) {
-      throw new Error('ssl-client-key is required when ssl-client-cert is provided');
-    }
-    validateCertMaterial(sslClientCert, sslClientKey, sslClientPassphrase || undefined);
-  }
-
-  return resolveInputs({
+  const inputs = resolveInputs({
     ...process.env,
     INPUT_PROJECT_NAME: projectName,
     INPUT_WORKSPACE_ID: readInput(actionCore, 'workspace-id'),
@@ -592,6 +590,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_SPEC_SYNC_MODE: readInput(actionCore, 'spec-sync-mode') || 'update',
     INPUT_RELEASE_LABEL: readInput(actionCore, 'release-label'),
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, 'environments-json') || '["prod"]',
+    INPUT_GIT_PROVIDER: readInput(actionCore, 'git-provider'),
     INPUT_REPO_URL: readInput(actionCore, 'repo-url'),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, 'integration-backend') || 'bifrost',
     INPUT_WORKSPACE_LINK_ENABLED: readInput(actionCore, 'workspace-link-enabled'),
@@ -609,12 +608,13 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, 'credential-preflight') || 'warn',
+    INPUT_ADO_TOKEN: adoToken,
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, 'ci-workflow-base64'),
     INPUT_GENERATE_CI_WORKFLOW: readInput(actionCore, 'generate-ci-workflow'),
     INPUT_MONITOR_TYPE: readInput(actionCore, 'monitor-type') || 'cloud',
-    INPUT_CI_WORKFLOW_PATH: readInput(actionCore, 'ci-workflow-path') || '.github/workflows/ci.yml',
+    INPUT_CI_WORKFLOW_PATH: readInput(actionCore, 'ci-workflow-path'),
     INPUT_ORG_MODE: readInput(actionCore, 'org-mode'),
     INPUT_MONITOR_ID: readInput(actionCore, 'monitor-id'),
     INPUT_MOCK_URL: readInput(actionCore, 'mock-url'),
@@ -630,6 +630,29 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
+
+  if (inputs.postmanApiKey) actionCore.setSecret(inputs.postmanApiKey);
+  if (inputs.postmanAccessToken) actionCore.setSecret(inputs.postmanAccessToken);
+  if (inputs.adoToken) actionCore.setSecret(inputs.adoToken);
+  if (inputs.githubToken) actionCore.setSecret(inputs.githubToken);
+  if (inputs.ghFallbackToken) actionCore.setSecret(inputs.ghFallbackToken);
+  if (inputs.sslClientCert) actionCore.setSecret(inputs.sslClientCert);
+  if (inputs.sslClientKey) actionCore.setSecret(inputs.sslClientKey);
+  if (inputs.sslClientPassphrase) actionCore.setSecret(inputs.sslClientPassphrase);
+  if (inputs.sslExtraCaCerts) actionCore.setSecret(inputs.sslExtraCaCerts);
+
+  if (inputs.sslClientCert) {
+    if (!inputs.sslClientKey) {
+      throw new Error('ssl-client-key is required when ssl-client-cert is provided');
+    }
+    validateCertMaterial(
+      inputs.sslClientCert,
+      inputs.sslClientKey,
+      inputs.sslClientPassphrase || undefined
+    );
+  }
+
+  return inputs;
 }
 
 function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, string> {
@@ -663,6 +686,13 @@ async function persistSslSecrets(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
   if (!inputs.sslClientCert) {
+    return;
+  }
+
+  if (inputs.provider === 'azure-devops') {
+    actionCore.warning(
+      'SSL inputs were provided but automatic secret persistence is not supported for Azure DevOps. Set these pipeline secret variables manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).'
+    );
     return;
   }
 
@@ -919,7 +949,10 @@ async function exportArtifacts(
     writeFileSync(globalsFilePath, 'name: Globals\nvalues: []\n');
   }
   if (inputs.generateCiWorkflow) {
-    ensureDir('.github/workflows');
+    const ciDir = inputs.ciWorkflowPath.split('/').slice(0, -1).join('/');
+    if (ciDir) {
+      ensureDir(ciDir);
+    }
   }
 
   const manifestCollections: Record<string, string> = {};
@@ -987,6 +1020,11 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, 'base64').toString('utf8');
   }
+  if (inputs.provider === 'azure-devops') {
+    return getCiWorkflowTemplate(inputs.provider, {
+      postmanCliInstallUrl: inputs.postmanCliInstallUrl
+    });
+  }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
     postmanRegion: inputs.postmanRegion
@@ -1032,17 +1070,18 @@ async function commitAndPushGeneratedFiles(
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
   }
 
-  const provisionExists = existsSync('.github/workflows/provision.yml');
+  const provisionPath = '.github/workflows/provision.yml';
+  const provisionExists = inputs.provider === 'github' && existsSync(provisionPath);
   if (provisionExists) {
-    rmSync('.github/workflows/provision.yml');
+    rmSync(provisionPath);
   }
 
   const stagePaths = [
     inputs.artifactDir,
     '.postman',
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
-    provisionExists ? '.github/workflows/provision.yml' : null
-  ].filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === '.github/workflows/provision.yml')) as string[];
+    provisionExists ? provisionPath : null
+  ].filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === provisionPath)) as string[];
 
   const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ['.'];
 
@@ -1053,8 +1092,9 @@ async function commitAndPushGeneratedFiles(
     githubRefName: inputs.githubRefName,
     committerName: inputs.committerName,
     committerEmail: inputs.committerEmail,
-    githubToken: inputs.githubToken,
-    fallbackToken: inputs.ghFallbackToken,
+    adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
+    githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
+    fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
     stagePaths: effectiveStagePaths
   });
 
@@ -1349,7 +1389,15 @@ export async function resolvePostmanApiKeyAndTeamId(
        if (autoTeamId) teamId = autoTeamId;
     }
 
-    if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
+    if (inputs.provider === 'azure-devops') {
+      if (options.persistGeneratedApiKeySecret ?? true) {
+        actionCore.warning(
+          'A new Postman API key was generated but automatic secret persistence is not supported for Azure DevOps. Set the POSTMAN_API_KEY pipeline secret variable manually.'
+        );
+      } else {
+        actionCore.info('Skipping generated POSTMAN_API_KEY secret persistence for this run.');
+      }
+    } else if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
       actionCore.info('Persisting new Postman API key to GitHub repository secrets...');
       const ghToken = inputs.ghFallbackToken || inputs.githubToken;
       const repo = inputs.repository;
@@ -1432,6 +1480,7 @@ export function createRepoSyncDependencies(
     createSecretMasker([
       resolved.apiKey,
       inputs.postmanAccessToken,
+      inputs.adoToken,
       inputs.githubToken,
       inputs.ghFallbackToken,
       inputs.sslClientCert,
@@ -1451,7 +1500,9 @@ export function createRepoSyncDependencies(
     repository &&
     (inputs.repoWriteMode === 'commit-only' || inputs.repoWriteMode === 'commit-and-push')
       ? new RepoMutationService({
+          provider: inputs.provider,
           repository,
+          repoUrl: inputs.repoUrl || undefined,
           secretMasker: masker,
           execute: async (command, args) => {
             const result = await factories.exec.getExecOutput(command, args, {
@@ -1494,6 +1545,7 @@ export async function runAction(
   const masker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,

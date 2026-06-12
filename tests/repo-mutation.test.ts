@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   RepoMutationService,
+  buildAuthenticatedRemoteUrl,
   buildPushTokenOrder,
   resolveCurrentRef
 } from '../src/lib/github/repo-mutation.js';
@@ -12,19 +13,7 @@ type CommandResult = {
   stderr: string;
 };
 
-type CommandKey =
-  | 'git add -A -- postman .postman .github/workflows'
-  | 'git add -A -- postman .postman .github/workflows/ci.yml .github/workflows/provision.yml'
-  | 'git commit -m chore: sync Postman artifacts and metadata'
-  | 'git config --unset-all http.https://github.com/.extraheader'
-  | 'git config user.email support@postman.com'
-  | 'git config user.name Postman'
-  | 'git diff --cached --quiet'
-  | 'git push origin HEAD:refs/heads/feature/sync-artifacts'
-  | 'git remote get-url origin'
-  | 'git remote set-url origin https://github.com/postman-cs/repo-sync-demo.git'
-  | 'git remote set-url origin https://x-access-token:fallback-token@github.com/postman-cs/repo-sync-demo.git'
-  | 'git rev-parse HEAD';
+type CommandKey = string;
 
 function createCommandMap(
   overrides: Partial<Record<CommandKey, CommandResult>>
@@ -71,12 +60,13 @@ function createCommandMap(
       stdout: 'https://github.com/postman-cs/repo-sync-demo.git\n',
       stderr: ''
     },
-    'git config --unset-all http.https://github.com/.extraheader': {
-      exitCode: 1,
-      stdout: '',
-      stderr: ''
-    },
     'git remote set-url origin https://x-access-token:fallback-token@github.com/postman-cs/repo-sync-demo.git':
+      {
+        exitCode: 0,
+        stdout: '',
+        stderr: ''
+      },
+    'git -c http.https://github.com/.extraheader= push origin HEAD:refs/heads/feature/sync-artifacts':
       {
         exitCode: 0,
         stdout: '',
@@ -123,10 +113,40 @@ describe('repo mutation helpers', () => {
 
     expect(
       buildPushTokenOrder({
+        adoToken: 'ado-token',
         githubToken: 'same-token',
         fallbackToken: 'same-token'
       })
-    ).toEqual(['same-token']);
+    ).toEqual(['ado-token', 'same-token']);
+  });
+
+  it('builds provider-specific authenticated remotes without mutating the repository path', () => {
+    expect(
+      buildAuthenticatedRemoteUrl(
+        'github',
+        'postman-cs/repo-sync-demo',
+        'github token',
+        'https://github.com/postman-cs/repo-sync-demo.git'
+      )
+    ).toBe('https://x-access-token:github%20token@github.com/postman-cs/repo-sync-demo.git');
+
+    expect(
+      buildAuthenticatedRemoteUrl(
+        'gitlab',
+        'postman-cs/repo-sync-demo',
+        'gitlab-token',
+        'https://gitlab.com/postman-cs/repo-sync-demo'
+      )
+    ).toBe('https://oauth2:gitlab-token@gitlab.com/postman-cs/repo-sync-demo.git');
+
+    expect(
+      buildAuthenticatedRemoteUrl(
+        'azure-devops',
+        'unused/repo',
+        'ado token',
+        'https://dev.azure.com/postman/CSE/_git/repo-sync-demo'
+      )
+    ).toBe('https://anything:ado%20token@dev.azure.com/postman/CSE/_git/repo-sync-demo');
   });
 
   it('resolves the current ref with branch-safe semantics', () => {
@@ -184,6 +204,8 @@ describe('repo mutation helpers', () => {
       resolvedCurrentRef: 'feature/sync-artifacts'
     });
     expect(execute).toHaveBeenCalledWith('git', [
+      '-c',
+      'http.https://github.com/.extraheader=',
       'push',
       'origin',
       'HEAD:refs/heads/feature/sync-artifacts'
@@ -200,12 +222,13 @@ describe('repo mutation helpers', () => {
   it('redacts secrets from git push failures', async () => {
     const execute = createExecuteMock(
       createCommandMap({
-        'git push origin HEAD:refs/heads/feature/sync-artifacts': {
-          exitCode: 1,
-          stdout: '',
-          stderr:
-            'remote: workflow denied for https://x-access-token:fallback-token@github.com/postman-cs/repo-sync-demo.git with primary-token'
-        }
+        'git -c http.https://github.com/.extraheader= push origin HEAD:refs/heads/feature/sync-artifacts':
+          {
+            exitCode: 1,
+            stdout: '',
+            stderr:
+              'remote: workflow denied for https://x-access-token:fallback-token@github.com/postman-cs/repo-sync-demo.git with primary-token'
+          }
       })
     );
     const repoMutation = new RepoMutationService({
@@ -246,6 +269,114 @@ describe('repo mutation helpers', () => {
         ]
       })
     ).rejects.not.toThrow('primary-token');
+  });
+
+  it('uses URL-scoped extraheader resets when pushing with an Azure DevOps token', async () => {
+    const adoRemote = 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo';
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git remote get-url origin': {
+          exitCode: 0,
+          stdout: `${adoRemote}\n`,
+          stderr: ''
+        },
+        'git remote set-url origin https://anything:ado-token@dev.azure.com/postman/CSE/_git/repo-sync-demo':
+          {
+            exitCode: 0,
+            stdout: '',
+            stderr: ''
+          },
+        'git -c http.https://dev.azure.com/postman/.extraheader= -c http.https://dev.azure.com/postman/CSE/_git/repo-sync-demo.extraheader= push origin HEAD:refs/heads/feature/sync-artifacts':
+          {
+            exitCode: 0,
+            stdout: '',
+            stderr: ''
+        },
+        [`git remote set-url origin ${adoRemote}`]: {
+          exitCode: 0,
+          stdout: '',
+          stderr: ''
+        }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      provider: 'azure-devops',
+      repository: 'postman-cs/repo-sync-demo',
+      repoUrl: adoRemote,
+      execute
+    });
+
+    const result = await repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'refs/heads/feature/sync-artifacts',
+      adoToken: 'ado-token',
+      committerName: 'Postman CSE',
+      committerEmail: 'help@postman.com',
+      stagePaths: [
+        'postman',
+        '.postman',
+        '.github/workflows/ci.yml',
+        '.github/workflows/provision.yml'
+      ]
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(execute).toHaveBeenCalledWith('git', [
+      '-c',
+      'http.https://dev.azure.com/postman/.extraheader=',
+      '-c',
+      'http.https://dev.azure.com/postman/CSE/_git/repo-sync-demo.extraheader=',
+      'push',
+      'origin',
+      'HEAD:refs/heads/feature/sync-artifacts'
+    ]);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      '-c',
+      'http.extraHeader=',
+      'push',
+      'origin',
+      'HEAD:refs/heads/feature/sync-artifacts'
+    ]);
+  });
+
+  it('uses Azure DevOps persisted checkout credentials when no ADO token is configured', async () => {
+    const adoRemote = 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo';
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git remote get-url origin': {
+          exitCode: 0,
+          stdout: `${adoRemote}\n`,
+          stderr: ''
+        }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      provider: 'azure-devops',
+      repository: 'postman-cs/repo-sync-demo',
+      repoUrl: adoRemote,
+      execute
+    });
+
+    const result = await repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'refs/heads/feature/sync-artifacts',
+      committerName: 'Postman CSE',
+      committerEmail: 'help@postman.com',
+      stagePaths: ['postman', '.postman', '.github/workflows']
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(execute).toHaveBeenCalledWith('git', [
+      'push',
+      'origin',
+      'HEAD:refs/heads/feature/sync-artifacts'
+    ]);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'remote',
+      'set-url',
+      'origin',
+      expect.stringContaining('@dev.azure.com')
+    ]);
   });
 
   it('returns without commit when there are no staged changes', async () => {

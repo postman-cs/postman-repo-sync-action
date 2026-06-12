@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-import { renderCiWorkflowTemplate } from '../src/lib/ci-workflow-template.js';
+import {
+  getCiWorkflowTemplate,
+  renderCiWorkflowTemplate
+} from '../src/lib/ci-workflow-template.js';
 
 describe('renderCiWorkflowTemplate', () => {
   it('produces multi-line YAML output with real newlines', () => {
@@ -196,5 +199,19 @@ describe('renderCiWorkflowTemplate', () => {
     expect(usLogin.run).not.toContain('--region');
 
     expect(() => renderCiWorkflowTemplate({ postmanRegion: 'ap' })).toThrow(/postman-region/);
+  });
+
+  it('renders valid Azure DevOps YAML when requested', () => {
+    const ciWorkflow = getCiWorkflowTemplate('azure-devops');
+    const parsed = parse(ciWorkflow);
+
+    expect(parsed.name).toBe('CI/CD Pipeline');
+    expect(parsed.trigger.branches.include).toContain('main');
+    expect(parsed.pool.vmImage).toBe('ubuntu-latest');
+    expect(parsed.steps[0]).toMatchObject({
+      checkout: 'self',
+      persistCredentials: true
+    });
+    expect(ciWorkflow).toContain('--env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}"');
   });
 });
