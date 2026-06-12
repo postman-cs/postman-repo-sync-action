@@ -599,6 +599,38 @@ describe('repo sync action', () => {
     expect(callArgs.stagePaths).not.toContain('.github/workflows/provision.yml');
   });
 
+  it('skips repo mutation instead of falling back to staging the repository root when no generated paths exist', async () => {
+    const { core, infos } = createCoreStub();
+    const repoMutation = {
+      commitAndPush: vi.fn()
+    };
+
+    const result = await runRepoSync(
+      createInputs({
+        workspaceId: '',
+        baselineCollectionId: '',
+        smokeCollectionId: '',
+        contractCollectionId: '',
+        environments: [],
+        workspaceLinkEnabled: false,
+        environmentSyncEnabled: false,
+        generateCiWorkflow: false
+      }),
+      {
+        core,
+        postman: {} as unknown as RepoSyncDependencies['postman'],
+        repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    expect(repoMutation.commitAndPush).not.toHaveBeenCalled();
+    expect(infos).toContain('No generated repository paths were found; skipping repo mutation.');
+    expect(result).toMatchObject({
+      'commit-sha': '',
+      'resolved-current-ref': 'feature/repo-sync'
+    });
+  });
+
   it('writes the generated CI workflow to a custom path when configured', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
