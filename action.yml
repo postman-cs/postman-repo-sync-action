@@ -1,5 +1,5 @@
-name: Postman Repo Sync
-description: Export Postman collections and environments into your repo and wire CI, mocks, and monitors around them.
+name: 'Postman Onboarding: Repo Sync'
+description: Export Postman collections and environments into your repo with CI wiring. Part of the Postman API Onboarding suite.
 author: Postman
 branding:
   icon: refresh-cw
