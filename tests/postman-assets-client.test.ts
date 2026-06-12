@@ -338,11 +338,11 @@ describe('collection visibility retry', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  it('retries mock creation on transient 5xx responses', async () => {
+  it('retries mock creation on 429 throttling', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response('oops', { status: 500, statusText: 'Internal Server Error' }))
-      .mockResolvedValue(jsonResponse({ mock: { uid: 'mock-1', mockUrl: 'https://m.mock.pstmn.io' } }));
+      .mockImplementationOnce(async () => new Response('slow down', { status: 429, statusText: 'Too Many Requests' }))
+      .mockImplementation(async () => jsonResponse({ mock: { uid: 'mock-1', mockUrl: 'https://m.mock.pstmn.io' } }));
     const client = new PostmanAssetsClient({
       apiKey: 'pmak-test',
       fetchImpl,
@@ -352,6 +352,20 @@ describe('collection visibility retry', () => {
     const mock = await client.createMock('ws-1', 'Mock', 'col-1', 'env-1');
     expect(mock.uid).toBe('mock-1');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry ambiguous 5xx responses on non-idempotent creates', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response('oops', { status: 500, statusText: 'Internal Server Error' }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.createMock('ws-1', 'Mock', 'col-1', 'env-1')).rejects.toThrow('500');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry unrelated 400 responses', async () => {
