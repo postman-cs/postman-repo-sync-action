@@ -25429,8 +25429,10 @@ var PostmanAssetsClient = class {
    * Monitor and mock creation reference a collection that may have been
    * created moments earlier; the Postman backend is eventually consistent
    * and can reject the reference with a 400 "Unable to load collection"
-   * until the collection becomes visible. Retry that specific 400 plus
-   * generic transient statuses with backoff.
+   * until the collection becomes visible. Retry only that specific 400 and
+   * 429 throttling: both guarantee nothing was created. A 5xx on these
+   * non-idempotent creates is ambiguous (the asset may exist server-side),
+   * so it is not retried to avoid duplicate mocks and monitors.
    */
   async requestWithCollectionRetry(path8, init) {
     return retry(() => this.request(path8, init), {
@@ -25443,7 +25445,7 @@ var PostmanAssetsClient = class {
         if (!(error2 instanceof HttpError)) {
           return false;
         }
-        if (error2.status >= 500 || error2.status === 429) {
+        if (error2.status === 429) {
           return true;
         }
         return error2.status === 400 && /unable to load collection/i.test(error2.responseBody);
