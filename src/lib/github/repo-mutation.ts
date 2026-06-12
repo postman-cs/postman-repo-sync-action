@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
 
 export type RepoWriteMode = 'none' | 'commit-only' | 'commit-and-push';
@@ -82,6 +84,44 @@ export function resolveCurrentRef(context: RepoMutationContext): string {
   );
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeStagePaths(stagePaths: string[]): string[] {
+  const normalized: string[] = [];
+
+  for (const entry of stagePaths) {
+    const rawPath = String(entry || '');
+    const stagePath = rawPath.trim();
+    if (!stagePath) {
+      continue;
+    }
+
+    const segments = stagePath.split(/[\\/]+/).filter(Boolean);
+    if (
+      hasControlCharacter(rawPath) ||
+      path.isAbsolute(stagePath) ||
+      path.win32.isAbsolute(stagePath) ||
+      segments.includes('..') ||
+      stagePath.startsWith(':') ||
+      hasControlCharacter(stagePath)
+    ) {
+      throw new Error(`Unsafe git stage path: ${stagePath}`);
+    }
+
+    normalized.push(stagePath);
+  }
+
+  return normalized;
+}
+
 export class RepoMutationService {
   private readonly execute: ExecuteFn;
   private readonly repository: string;
@@ -100,15 +140,24 @@ export class RepoMutationService {
     resolvedCurrentRef: string;
   }> {
     const resolvedCurrentRef = resolveCurrentRef(options);
+    const stagePaths = normalizeStagePaths(options.stagePaths);
     const tokens = buildPushTokenOrder({
       fallbackToken: options.fallbackToken,
       githubToken: options.githubToken
     });
     const secretMasker = createSecretMasker(tokens);
 
+    if (stagePaths.length === 0) {
+      return {
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef
+      };
+    }
+
     await this.execute('git', ['config', 'user.name', options.committerName]);
     await this.execute('git', ['config', 'user.email', options.committerEmail]);
-    await this.execute('git', ['add', '-A', '--', ...options.stagePaths]);
+    await this.execute('git', ['add', '-A', '--', ...stagePaths]);
 
     const staged = await this.execute('git', ['diff', '--cached', '--quiet']);
     if (staged.exitCode === 0) {

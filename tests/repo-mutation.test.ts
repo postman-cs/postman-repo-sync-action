@@ -197,6 +197,59 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
+  it('returns before git mutations when no stage paths are provided', async () => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    const result = await repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'feature/sync-artifacts',
+      committerName: 'Postman CSE',
+      committerEmail: 'help@postman.com',
+      stagePaths: ['', '  ']
+    });
+
+    expect(result).toEqual({
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: 'feature/sync-artifacts'
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['/tmp/out'],
+    ['C:\\tmp\\out'],
+    ['../outside'],
+    ['postman/../../outside'],
+    [':(top)'],
+    ['postman\0out'],
+    ['postman\rout'],
+    ['postman\nout'],
+    ['postman\x1Fout']
+  ])('rejects unsafe git stage path %j before git mutations', async (stagePath) => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'feature/sync-artifacts',
+        githubToken: 'primary-token',
+        committerName: 'Postman CSE',
+        committerEmail: 'help@postman.com',
+        stagePaths: [stagePath]
+      })
+    ).rejects.toThrow('Unsafe git stage path');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('redacts secrets from git push failures', async () => {
     const execute = createExecuteMock(
       createCommandMap({
