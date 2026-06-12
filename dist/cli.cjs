@@ -22306,19 +22306,30 @@ var SENSITIVE_HEADER_NAMES = /* @__PURE__ */ new Set([
 function isIterable(value) {
   return value !== null && value !== void 0 && typeof value !== "string" && typeof value[Symbol.iterator] === "function";
 }
+function appendStringSecret(value, results) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return;
+  }
+  results.push(normalized);
+  try {
+    const encoded = encodeURIComponent(normalized);
+    if (encoded !== normalized) {
+      results.push(encoded);
+    }
+  } catch {
+  }
+}
 function appendSecretValues(value, results) {
   if (value === null || value === void 0) {
     return;
   }
   if (typeof value === "string") {
-    const normalized = value.trim();
-    if (normalized) {
-      results.push(normalized);
-    }
+    appendStringSecret(value, results);
     return;
   }
   if (typeof value === "number" || typeof value === "boolean") {
-    results.push(String(value));
+    appendStringSecret(String(value), results);
     return;
   }
   if (Array.isArray(value) || isIterable(value)) {

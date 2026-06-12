@@ -23,19 +23,32 @@ function isIterable(value: unknown): value is Iterable<unknown> {
   );
 }
 
+function appendStringSecret(value: string, results: string[]): void {
+  const normalized = value.trim();
+  if (!normalized) {
+    return;
+  }
+  results.push(normalized);
+  try {
+    const encoded = encodeURIComponent(normalized);
+    if (encoded !== normalized) {
+      results.push(encoded);
+    }
+  } catch {
+    // Ignore malformed surrogate pairs; the raw value is still registered.
+  }
+}
+
 function appendSecretValues(value: unknown, results: string[]): void {
   if (value === null || value === undefined) {
     return;
   }
   if (typeof value === 'string') {
-    const normalized = value.trim();
-    if (normalized) {
-      results.push(normalized);
-    }
+    appendStringSecret(value, results);
     return;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
-    results.push(String(value));
+    appendStringSecret(String(value), results);
     return;
   }
   if (Array.isArray(value) || isIterable(value)) {

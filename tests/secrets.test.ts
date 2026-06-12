@@ -32,6 +32,27 @@ describe('secret safety rails', () => {
     expect(sanitized).toBe(`Authorization: Bearer ${REDACTED} and key ${REDACTED}`);
   });
 
+  it('redacts percent-encoded variants of secrets embedded in URLs', () => {
+    const token = 'pat with/special+chars&unsafe';
+    const encoded = encodeURIComponent(token);
+    const sanitized = redactSecrets(
+      `push failed for https://user:${encoded}@dev.azure.com/org/repo and raw ${token}`,
+      [token]
+    );
+
+    expect(sanitized).not.toContain(token);
+    expect(sanitized).not.toContain(encoded);
+    expect(sanitized).toBe(
+      `push failed for https://user:${REDACTED}@dev.azure.com/org/repo and raw ${REDACTED}`
+    );
+  });
+
+  it('leaves secrets without encodable characters registered once', () => {
+    const sanitized = redactSecrets('plain token-abc here', ['token-abc']);
+
+    expect(sanitized).toBe(`plain ${REDACTED} here`);
+  });
+
   it('sanitizes headers before surfacing them', () => {
     const headers = sanitizeHeaders(
       {
