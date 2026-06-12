@@ -9182,14 +9182,14 @@ var require_retry_agent = __commonJS({
         this.#options = options;
       }
       dispatch(opts, handler) {
-        const retry = new RetryHandler({
+        const retry2 = new RetryHandler({
           ...opts,
           retryOptions: this.#options
         }, {
           dispatch: this.#agent.dispatch.bind(this.#agent),
           handler
         });
-        return this.#agent.dispatch(opts, retry);
+        return this.#agent.dispatch(opts, retry2);
       }
       close() {
         return this.#agent.close();
@@ -25282,12 +25282,60 @@ var postmanRepoSyncActionContract = {
   }
 };
 
+// src/lib/retry.ts
+function sleep(delayMs) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, delayMs);
+  });
+}
+function normalizeRetryOptions(options) {
+  return {
+    maxAttempts: Math.max(1, options.maxAttempts ?? 3),
+    delayMs: Math.max(0, options.delayMs ?? 2e3),
+    backoffMultiplier: Math.max(1, options.backoffMultiplier ?? 1),
+    maxDelayMs: options.maxDelayMs === void 0 ? Number.POSITIVE_INFINITY : Math.max(0, options.maxDelayMs),
+    onRetry: options.onRetry ?? (async () => void 0),
+    shouldRetry: options.shouldRetry ?? (() => true),
+    sleep: options.sleep ?? sleep
+  };
+}
+async function retry(operation, options = {}) {
+  const normalized = normalizeRetryOptions(options);
+  let nextDelayMs = normalized.delayMs;
+  for (let attempt = 1; attempt <= normalized.maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error2) {
+      const shouldRetry = attempt < normalized.maxAttempts && normalized.shouldRetry(error2, {
+        attempt,
+        maxAttempts: normalized.maxAttempts
+      });
+      if (!shouldRetry) {
+        throw error2;
+      }
+      await normalized.onRetry({
+        attempt,
+        maxAttempts: normalized.maxAttempts,
+        delayMs: nextDelayMs,
+        error: error2
+      });
+      await normalized.sleep(nextDelayMs);
+      nextDelayMs = Math.min(
+        normalized.maxDelayMs,
+        Math.round(nextDelayMs * normalized.backoffMultiplier)
+      );
+    }
+  }
+  throw new Error("Retry exhausted without returning or throwing");
+}
+
 // src/lib/postman/postman-assets-client.ts
 var PostmanAssetsClient = class {
   apiKey;
   baseUrl;
   bifrostBaseUrl;
   fetchImpl;
+  retrySleep;
   constructor(options) {
     this.apiKey = String(options.apiKey || "").trim();
     this.baseUrl = String(options.baseUrl || POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl).replace(
@@ -25298,6 +25346,7 @@ var PostmanAssetsClient = class {
       options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retrySleep = options.retrySleep;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
   getBaseUrl() {
@@ -25361,9 +25410,34 @@ var PostmanAssetsClient = class {
       })
     });
   }
+  /**
+   * Monitor and mock creation reference a collection that may have been
+   * created moments earlier; the Postman backend is eventually consistent
+   * and can reject the reference with a 400 "Unable to load collection"
+   * until the collection becomes visible. Retry that specific 400 plus
+   * generic transient statuses with backoff.
+   */
+  async requestWithCollectionRetry(path8, init) {
+    return retry(() => this.request(path8, init), {
+      maxAttempts: 5,
+      delayMs: 2e3,
+      backoffMultiplier: 2,
+      maxDelayMs: 15e3,
+      ...this.retrySleep ? { sleep: this.retrySleep } : {},
+      shouldRetry: (error2) => {
+        if (!(error2 instanceof HttpError)) {
+          return false;
+        }
+        if (error2.status >= 500 || error2.status === 429) {
+          return true;
+        }
+        return error2.status === 400 && /unable to load collection/i.test(error2.responseBody);
+      }
+    });
+  }
   async createMonitor(workspaceId, name, collectionUid, environmentUid, cronSchedule) {
     const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : "0 0 * * 0";
-    const response = await this.request(`/monitors?workspace=${workspaceId}`, {
+    const response = await this.requestWithCollectionRetry(`/monitors?workspace=${workspaceId}`, {
       method: "POST",
       body: JSON.stringify({
         monitor: {
@@ -25393,7 +25467,7 @@ var PostmanAssetsClient = class {
     return uid;
   }
   async createMock(workspaceId, name, collectionUid, environmentUid) {
-    const response = await this.request(`/mocks?workspace=${workspaceId}`, {
+    const response = await this.requestWithCollectionRetry(`/mocks?workspace=${workspaceId}`, {
       method: "POST",
       body: JSON.stringify({
         mock: {

@@ -1,4 +1,5 @@
 import { HttpError } from '../http-error.js';
+import { retry } from '../retry.js';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 
@@ -21,6 +22,7 @@ export interface PostmanAssetsClientOptions {
   baseUrl?: string;
   bifrostBaseUrl?: string;
   fetchImpl?: typeof fetch;
+  retrySleep?: (delayMs: number) => Promise<void>;
   secretMasker?: SecretMasker;
 }
 
@@ -29,6 +31,7 @@ export class PostmanAssetsClient {
   private readonly baseUrl: string;
   private readonly bifrostBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly retrySleep: ((delayMs: number) => Promise<void>) | undefined;
 
   constructor(options: PostmanAssetsClientOptions) {
     this.apiKey = String(options.apiKey || '').trim();
@@ -40,6 +43,7 @@ export class PostmanAssetsClient {
       options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retrySleep = options.retrySleep;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
 
@@ -123,6 +127,38 @@ export class PostmanAssetsClient {
     });
   }
 
+
+  /**
+   * Monitor and mock creation reference a collection that may have been
+   * created moments earlier; the Postman backend is eventually consistent
+   * and can reject the reference with a 400 "Unable to load collection"
+   * until the collection becomes visible. Retry that specific 400 plus
+   * generic transient statuses with backoff.
+   */
+  private async requestWithCollectionRetry(
+    path: string,
+    init: RequestInit
+  ): Promise<FetchResult> {
+    return retry(() => this.request(path, init), {
+      maxAttempts: 5,
+      delayMs: 2000,
+      backoffMultiplier: 2,
+      maxDelayMs: 15000,
+      ...(this.retrySleep ? { sleep: this.retrySleep } : {}),
+      shouldRetry: (error) => {
+        if (!(error instanceof HttpError)) {
+          return false;
+        }
+        if (error.status >= 500 || error.status === 429) {
+          return true;
+        }
+        return (
+          error.status === 400 && /unable to load collection/i.test(error.responseBody)
+        );
+      }
+    });
+  }
+
   async createMonitor(
     workspaceId: string,
     name: string,
@@ -131,7 +167,7 @@ export class PostmanAssetsClient {
     cronSchedule?: string
   ): Promise<string> {
     const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
-    const response = await this.request(`/monitors?workspace=${workspaceId}`, {
+    const response = await this.requestWithCollectionRetry(`/monitors?workspace=${workspaceId}`, {
       method: 'POST',
       body: JSON.stringify({
         monitor: {
@@ -171,7 +207,7 @@ export class PostmanAssetsClient {
     collectionUid: string,
     environmentUid: string
   ): Promise<{ uid: string; url: string }> {
-    const response = await this.request(`/mocks?workspace=${workspaceId}`, {
+    const response = await this.requestWithCollectionRetry(`/mocks?workspace=${workspaceId}`, {
       method: 'POST',
       body: JSON.stringify({
         mock: {
