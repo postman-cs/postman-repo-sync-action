@@ -1,6 +1,6 @@
 # Postman Repo Sync
 
-[![CI](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/postman-cs/postman-repo-sync-action?sort=semver)](https://github.com/postman-cs/postman-repo-sync-action/releases) [![npm](https://img.shields.io/npm/v/%40postman-cse%2Fonboarding-repo-sync)](https://www.npmjs.com/package/@postman-cse/onboarding-repo-sync) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/postman-cs/postman-repo-sync-action/badge)](https://scorecard.dev/viewer/?uri=github.com/postman-cs/postman-repo-sync-action)
+[![CI](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/postman-cs/postman-repo-sync-action?sort=semver)](https://github.com/postman-cs/postman-repo-sync-action/releases) [![npm](https://img.shields.io/npm/v/%40postman-cse%2Fonboarding-repo-sync)](https://www.npmjs.com/package/@postman-cse/onboarding-repo-sync) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Exports Postman collections and environments into your repository and wires CI, mocks, and monitors around them.
 
