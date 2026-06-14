@@ -16,7 +16,7 @@ import { convertAndSplitCollection } from './postman-v3/converter.js';
 import { renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext } from './lib/repo/context.js';
-import { createTelemetryContext } from './lib/telemetry.js';
+import { createTelemetryContext } from '@postman-cse/automation-telemetry-core';
 import {
   createInternalIntegrationAdapter,
   type InternalIntegrationAdapter
@@ -29,6 +29,7 @@ import {
   type PostmanStack
 } from './lib/postman/base-urls.js';
 import {
+  getMemoizedSessionIdentity,
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
@@ -1072,9 +1073,11 @@ export async function runRepoSync(
   telemetry.setTeamId(dependencies.teamId);
   try {
     const result = await runRepoSyncInner(inputs, dependencies);
+    telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion('success');
     return result;
   } catch (error) {
+    telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion('failure');
     throw error;
   }
