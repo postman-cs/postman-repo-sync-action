@@ -205,7 +205,7 @@ The action syncs a Postman workspace into the checked-out repository and can con
 - Optional generated GitHub Actions workflow for [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-run-collection/) smoke and contract runs.
 - Optional mock server, cloud monitor, workspace repository link, and system environment associations.
 
-The generated files are intended to be committed when `repo-write-mode` is `commit-only` or `commit-and-push`. Treat `postman/` and `.postman/` as reviewable source artifacts for the onboarding workflow, not as temporary build output.
+The generated files are intended to be committed when `repo-write-mode` is `commit-only` or `commit-and-push`. Treat `postman/` and `.postman/` as reviewable source artifacts for the onboarding workflow; commit and review them like any other tracked source.
 
 A typical export looks like:
 
@@ -271,8 +271,14 @@ runner kind, the run outcome, and a one-way SHA-256 hash of the repository
 identifier. The Postman team ID is sent in the clear on a legitimate-interest
 basis to measure product adoption.
 
+The `events.pm-cse.dev` endpoint is operated by the Postman Customer Success
+Engineering team. Postman, Inc. processes these events only to measure
+onboarding adoption in aggregate, retains them only as aggregated counts for
+product-adoption trend analysis, and includes no payload field that identifies
+an individual person.
+
 It never sends API keys, access tokens, spec content, workspace or repository
-names in the clear, or any personal data. It is fire-and-forget with a hard
+names, or any personal data. It is fire-and-forget with a hard
 timeout and can never block or fail your pipeline. Corporate HTTP and HTTPS
 proxies are honored through the standard `HTTPS_PROXY`, `HTTP_PROXY`, and
 `NO_PROXY` environment variables.
