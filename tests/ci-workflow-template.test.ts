@@ -165,4 +165,25 @@ describe('renderCiWorkflowTemplate', () => {
 
     expect(installStep.env.POSTMAN_CLI_INSTALL_URL).toBe(url);
   });
+
+  it('passes the configured Postman region to generated CLI login', () => {
+    const ciWorkflow = renderCiWorkflowTemplate({ postmanRegion: 'eu' });
+    const parsed = parse(ciWorkflow);
+    const loginStep = parsed.jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Login to Postman CLI'
+    );
+
+    expect(loginStep.run).toContain('--region eu');
+
+    const usWorkflow = renderCiWorkflowTemplate({ postmanRegion: 'us' });
+    const usLogin = parse(usWorkflow).jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Login to Postman CLI'
+    );
+    // us is the CLI default and `--region us` is rejected by the Postman CLI, so the
+    // generated login omits the flag for us.
+    expect(usLogin.run).toContain('postman login --with-api-key');
+    expect(usLogin.run).not.toContain('--region');
+
+    expect(() => renderCiWorkflowTemplate({ postmanRegion: 'ap' })).toThrow(/postman-region/);
+  });
 });

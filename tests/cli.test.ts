@@ -110,6 +110,15 @@ describe('cli', () => {
     expect(inputs.postmanCliInstallUrl).toBe('https://dl-cli.pstmn-beta.io/install/unix.sh');
     expect(() => resolveInputs({ INPUT_POSTMAN_STACK: 'stage' })).toThrow(/Unsupported postman-stack/);
   });
+
+  it('selects EU public API endpoints from postman-region', () => {
+    const inputs = resolveInputs({ INPUT_POSTMAN_REGION: 'eu' });
+
+    expect(inputs.postmanRegion).toBe('eu');
+    expect(inputs.postmanApiBase).toBe('https://api.eu.postman.com');
+    expect(() => resolveInputs({ INPUT_POSTMAN_REGION: 'ap' })).toThrow(/Unsupported postman-region/);
+    expect(() => resolveInputs({ INPUT_POSTMAN_REGION: 'eu', INPUT_POSTMAN_STACK: 'beta' })).toThrow(/postman-region=eu/);
+  });
 });
 
 describe('runCli credential preflight seam', () => {
@@ -224,26 +233,23 @@ describe('runCli credential preflight seam', () => {
     expect(logged).toContain('postman: access-token session identity - ');
   });
 
-  it('skips the preflight entirely when credential-preflight is off', async () => {
-    const fetchMock = stubIdentityFetch(111, 222);
+  it('rejects credential-preflight=off instead of skipping identity checks', async () => {
     const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
 
-    await withTempCwd(async () => {
-      await runCli(
-        [
-          '--project-name', 'preflight-off',
-          '--postman-api-key', 'pmak-xyz',
-          '--postman-access-token', 'tok-xyz',
-          '--credential-preflight', 'off'
-        ],
-        { env: {}, executeRepoSync, writeStdout: () => undefined }
-      );
-    });
+    await expect(
+      withTempCwd(async () => {
+        await runCli(
+          [
+            '--project-name', 'preflight-off',
+            '--postman-api-key', 'pmak-xyz',
+            '--postman-access-token', 'tok-xyz',
+            '--credential-preflight', 'off'
+          ],
+          { env: {}, executeRepoSync, writeStdout: () => undefined }
+        );
+      })
+    ).rejects.toThrow(/Unsupported credential-preflight/);
 
-    expect(executeRepoSync).toHaveBeenCalledTimes(1);
-    const probed = fetchMock.mock.calls.map((call) => String(call[0]));
-    // off short-circuits the cross-check; no session probe runs. The resolve
-    // path may still call GET /me to derive the team id.
-    expect(probed.some((url) => url.includes('/api/sessions/current'))).toBe(false);
+    expect(executeRepoSync).not.toHaveBeenCalled();
   });
 });

@@ -17,8 +17,8 @@ type CommandKey =
   | 'git add -A -- postman .postman .github/workflows/ci.yml .github/workflows/provision.yml'
   | 'git commit -m chore: sync Postman artifacts and metadata'
   | 'git config --unset-all http.https://github.com/.extraheader'
-  | 'git config user.email help@postman.com'
-  | 'git config user.name Postman CSE'
+  | 'git config user.email support@postman.com'
+  | 'git config user.name Postman'
   | 'git diff --cached --quiet'
   | 'git push origin HEAD:refs/heads/feature/sync-artifacts'
   | 'git remote get-url origin'
@@ -30,12 +30,12 @@ function createCommandMap(
   overrides: Partial<Record<CommandKey, CommandResult>>
 ): Record<string, CommandResult> {
   return {
-    'git config user.name Postman CSE': {
+    'git config user.name Postman': {
       exitCode: 0,
       stdout: '',
       stderr: ''
     },
-    'git config user.email help@postman.com': {
+    'git config user.email support@postman.com': {
       exitCode: 0,
       stdout: '',
       stderr: ''
@@ -168,8 +168,8 @@ describe('repo mutation helpers', () => {
       githubHeadRef: 'feature/sync-artifacts',
       githubToken: 'primary-token',
       fallbackToken: 'fallback-token',
-      committerName: 'Postman CSE',
-      committerEmail: 'help@postman.com',
+      committerName: 'Postman',
+      committerEmail: 'support@postman.com',
       stagePaths: [
         'postman',
         '.postman',
@@ -219,8 +219,8 @@ describe('repo mutation helpers', () => {
         currentRef: 'feature/sync-artifacts',
         githubToken: 'primary-token',
         fallbackToken: 'fallback-token',
-        committerName: 'Postman CSE',
-        committerEmail: 'help@postman.com',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
         stagePaths: [
           'postman',
           '.postman',
@@ -236,8 +236,8 @@ describe('repo mutation helpers', () => {
         currentRef: 'feature/sync-artifacts',
         githubToken: 'primary-token',
         fallbackToken: 'fallback-token',
-        committerName: 'Postman CSE',
-        committerEmail: 'help@postman.com',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
         stagePaths: [
           'postman',
           '.postman',
@@ -268,8 +268,8 @@ describe('repo mutation helpers', () => {
       currentRef: 'feature/sync-artifacts',
       githubToken: 'primary-token',
       fallbackToken: 'fallback-token',
-      committerName: 'Postman CSE',
-      committerEmail: 'help@postman.com',
+      committerName: 'Postman',
+      committerEmail: 'support@postman.com',
       stagePaths: ['postman', '.postman', '.github/workflows']
     });
 

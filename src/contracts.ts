@@ -51,7 +51,7 @@ export const postmanRepoSyncActionContract: {
 } = {
   name: 'postman-repo-sync-action',
   description:
-    'Public customer preview contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
+    'Contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.',
   defaults: {
     integrationBackend: 'bifrost',
     artifactDir: 'postman',
@@ -60,8 +60,8 @@ export const postmanRepoSyncActionContract: {
     specSyncMode: 'update',
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,
-    committerName: 'Postman CSE',
-    committerEmail: 'help@postman.com'
+    committerName: 'Postman',
+    committerEmail: 'support@postman.com'
   },
   inputs: {
 
@@ -183,27 +183,34 @@ export const postmanRepoSyncActionContract: {
     'committer-name': {
       description: 'Git committer name for sync commits.',
       required: false,
-      default: 'Postman CSE'
+      default: 'Postman'
     },
     'committer-email': {
       description: 'Git committer email for sync commits.',
       required: false,
-      default: 'help@postman.com'
+      default: 'support@postman.com'
     },
     'postman-api-key': {
       description: 'Postman API key used for environment, mock, and monitor operations.',
       required: false
     },
     'postman-access-token': {
-      description: 'Postman access token used for Bifrost and system environment association.',
+      description:
+        'Postman access token used for workspace linking, system environment association, and generated API-key creation.',
       required: false
+    },
+    'team-id': {
+      description:
+        'Postman team ID resolved by postman-resolve-service-token-action for org-mode integration calls. Falls back to POSTMAN_TEAM_ID when omitted.',
+      required: false,
+      default: ''
     },
     'credential-preflight': {
       description:
-        'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created; off skips the identity probes entirely (the reactive error guidance still applies). Promotion of the default to enforce is planned once the live e2e legs prove both directions.',
+        'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.',
       required: false,
       default: 'warn',
-      allowedValues: ['enforce', 'warn', 'off']
+      allowedValues: ['enforce', 'warn']
     },
     'github-token': {
       description: 'GitHub token used for repo variable persistence and commits.',
@@ -214,7 +221,7 @@ export const postmanRepoSyncActionContract: {
       required: false
     },
     'org-mode': {
-      description: 'Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.',
+      description: 'Whether the Postman team uses org-mode. When true, x-entity-team-id is included in Postman integration API calls. Non-org teams must omit this header.',
       required: false,
       default: 'false'
     },
@@ -246,8 +253,14 @@ export const postmanRepoSyncActionContract: {
       description: 'Optional repo-root-relative path to the local spec file for resources/workflows metadata.',
       required: false
     },
+    'postman-region': {
+      description: 'Postman data residency region for public API and Postman CLI calls. One of: us or eu.',
+      required: false,
+      default: 'us',
+      allowedValues: ['us', 'eu']
+    },
     'postman-stack': {
-      description: 'Postman stack profile.',
+      description: 'Postman stack profile. Leave at the default unless Postman support directs otherwise.',
       required: false,
       default: 'prod',
       allowedValues: ['prod', 'beta']
@@ -255,7 +268,7 @@ export const postmanRepoSyncActionContract: {
   },
   outputs: {
     'integration-backend': {
-      description: 'Resolved integration backend for the customer preview run.'
+      description: 'Resolved integration backend for the onboarding run.'
     },
     'resolved-current-ref': {
       description: 'Resolved push target based on current-ref semantics.'
@@ -285,10 +298,10 @@ export const postmanRepoSyncActionContract: {
   behavior: {
     retainedFromFinalize: [
       'Create or update Postman environments from runtime URLs.',
-      'Associate Postman environments to system environments through Bifrost.',
+      'Associate Postman environments to system environments through Postman integration APIs.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
-      'Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `<name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
+      'Link the Postman workspace to the repository (GitHub or GitLab) through Postman integration APIs.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],
     removedFromFinalize: [

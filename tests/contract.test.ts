@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parse } from 'yaml';
@@ -19,7 +19,7 @@ const packageManifest = JSON.parse(
 };
 
 describe('postman-repo-sync-action contract', () => {
-  it('keeps the customer preview surface in kebab-case with bifrost as the default backend', () => {
+  it('keeps the action surface in kebab-case with bifrost as the default backend', () => {
     expect(postmanRepoSyncActionContract.defaults.integrationBackend).toBe('bifrost');
 
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
@@ -52,6 +52,7 @@ describe('postman-repo-sync-action contract', () => {
       'committer-email',
       'postman-api-key',
       'postman-access-token',
+      'team-id',
       'credential-preflight',
       'github-token',
       'gh-fallback-token',
@@ -63,6 +64,7 @@ describe('postman-repo-sync-action contract', () => {
       'ssl-extra-ca-certs',
       'spec-id',
       'spec-path',
+      'postman-region',
       'postman-stack'
     ]);
 
@@ -86,7 +88,7 @@ describe('postman-repo-sync-action contract', () => {
     expect(definition).toBeDefined();
     expect(definition.required).toBe(false);
     expect(definition.default).toBe('warn');
-    expect(definition.allowedValues).toEqual(['enforce', 'warn', 'off']);
+    expect(definition.allowedValues).toEqual(['enforce', 'warn']);
 
     const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
       inputs: Record<string, { required?: boolean; default?: string }>;
@@ -106,6 +108,12 @@ describe('postman-repo-sync-action contract', () => {
     expect(() =>
       resolveInputs({
         INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_CREDENTIAL_PREFLIGHT: 'off'
+      })
+    ).toThrow(/Unsupported credential-preflight/);
+    expect(() =>
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
         INPUT_CREDENTIAL_PREFLIGHT: 'sometimes'
       })
     ).toThrow(/Unsupported credential-preflight/);
@@ -115,7 +123,7 @@ describe('postman-repo-sync-action contract', () => {
     const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
 
     expect(readme).toContain('Commit generated files and push them back to the current checked out ref.');
-    expect(readme).toContain('Postman Collection v3 multi-file YAML exports under `postman/collections/`');
+    expect(readme).toContain('multi-file YAML exports under `postman/collections/`');
     expect(readme).toContain('`.postman/resources.yaml` with local-to-cloud resource mappings.');
     expect(readme).toContain('For existing repositories that already own their CI workflow, disable workflow generation');
     expect(readme).toContain('Use this for customer-managed PR workflows.');
@@ -150,8 +158,40 @@ describe('postman-repo-sync-action contract', () => {
     expect(actionYaml.inputs['environment-sync-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['artifact-dir']?.default).toBe('postman');
     expect(actionYaml.inputs['repo-write-mode']?.default).toBe('commit-and-push');
+    expect(actionYaml.inputs['postman-region']?.default).toBe('us');
     expect(actionYaml.inputs['postman-stack']?.default).toBe('prod');
+    expect(actionYaml.inputs['team-id']?.default).toBe('');
+    expect(postmanRepoSyncActionContract.inputs['postman-region'].allowedValues).toEqual(['us', 'eu']);
     expect(postmanRepoSyncActionContract.inputs['postman-stack'].allowedValues).toEqual(['prod', 'beta']);
+  });
+
+  it('documents marketplace-ready credential and support surfaces', () => {
+    const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
+    const credentials = readFileSync(resolve(repoRoot, 'docs/credentials.md'), 'utf8');
+    const artifactLayout = readFileSync(resolve(repoRoot, 'docs/artifact-layout.md'), 'utf8');
+    const cli = readFileSync(resolve(repoRoot, 'docs/cli.md'), 'utf8');
+    const publicDocs = [readme, credentials, artifactLayout, cli].join('\n');
+
+    expect(readme).toContain('postman-region: us');
+    expect(readme).toContain('## Which action should I use?');
+    expect(readme).toContain('[Security](SECURITY.md)');
+    expect(readme).toContain('[Support](SUPPORT.md)');
+    expect(readme).toContain('[Release policy](RELEASE_POLICY.md)');
+    expect(readme).not.toMatch(/preview/i);
+    expect(publicDocs).not.toMatch(/\binternal\b/i);
+
+    expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v1');
+    expect(credentials).toContain('Legacy fallback');
+    expect(credentials).toContain('non-service-account access token');
+    expect(credentials).not.toContain('`off` skips');
+    expect(credentials).not.toContain('browser');
+
+    expect(artifactLayout).toContain('The generated files are intended to be committed');
+    expect(cli).toContain('--postman-region us');
+
+    expect(existsSync(resolve(repoRoot, 'SECURITY.md'))).toBe(true);
+    expect(existsSync(resolve(repoRoot, 'SUPPORT.md'))).toBe(true);
+    expect(existsSync(resolve(repoRoot, 'RELEASE_POLICY.md'))).toBe(true);
   });
 
   it('resolves push targets from current-ref semantics instead of hardcoding main', () => {
@@ -171,11 +211,11 @@ describe('postman-repo-sync-action contract', () => {
     expect(
       createExecutionPlan({
         repoWriteMode: 'commit-and-push',
-        currentRef: 'release/public-customer-preview',
+        currentRef: 'release/customer-onboarding',
         githubHeadRef: 'ignored/head',
         githubRefName: 'ignored/ref'
       }).resolvedCurrentRef
-    ).toBe('release/public-customer-preview');
+    ).toBe('release/customer-onboarding');
 
     expect(
       createExecutionPlan({

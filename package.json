@@ -1,7 +1,7 @@
 {
   "name": "@postman-cse/onboarding-repo-sync",
-  "version": "1.0.3",
-  "description": "Public customer preview Postman repo sync GitHub Action.",
+  "version": "1.0.4",
+  "description": "Postman repo sync GitHub Action.",
   "type": "module",
   "main": "dist/index.cjs",
   "bin": {
@@ -15,7 +15,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs && esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/action.cjs && esbuild src/cli.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/cli.cjs",
+    "build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --define:__ACTION_VERSION__=\\\"$npm_package_version\\\" --outfile=dist/index.cjs && esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --define:__ACTION_VERSION__=\\\"$npm_package_version\\\" --outfile=dist/action.cjs && esbuild src/cli.ts --bundle --platform=node --target=node24 --format=cjs --define:__ACTION_VERSION__=\\\"$npm_package_version\\\" --outfile=dist/cli.cjs",
     "check:dist": "npm run build && git diff --exit-code -- dist",
     "docs:tables": "node scripts/render-action-tables.mjs",
     "lint": "eslint .",
@@ -38,7 +38,8 @@
   "dependencies": {
     "@actions/core": "^3.0.1",
     "@actions/exec": "^3.0.0",
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "undici": "^6.24.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.3",

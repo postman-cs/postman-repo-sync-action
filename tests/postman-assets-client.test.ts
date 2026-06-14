@@ -405,3 +405,107 @@ describe('collection visibility retry', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 });
+
+describe('environment create/update resilience', () => {
+  const serverErrorBody = JSON.stringify({
+    error: { name: 'serverError', message: 'Internal server error occurred' }
+  });
+
+  it('retries createEnvironment on a transient 5xx and succeeds', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      // first POST fails with a transient 500
+      .mockResolvedValueOnce(new Response(serverErrorBody, { status: 500, statusText: 'Internal Server Error' }))
+      // reconcile GET on retry: the environment is not present yet
+      .mockResolvedValueOnce(jsonResponse({ environments: [] }))
+      // retried POST succeeds
+      .mockResolvedValueOnce(jsonResponse({ environment: { uid: 'env-retry' } }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.createEnvironment('ws-1', 'proj - prod', [])).resolves.toBe('env-retry');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const methods = fetchImpl.mock.calls.map((call) => (call[1] as RequestInit | undefined)?.method ?? 'GET');
+    expect(methods).toEqual(['POST', 'GET', 'POST']);
+  });
+
+  it('adopts an already-created environment when a 5xx hid a successful create', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      // POST fails with 500 but the environment was actually persisted server-side
+      .mockResolvedValueOnce(new Response(serverErrorBody, { status: 500, statusText: 'Internal Server Error' }))
+      // reconcile GET finds the environment the failed POST created
+      .mockResolvedValueOnce(
+        jsonResponse({ environments: [{ name: 'proj - prod', uid: 'env-adopted' }] })
+      );
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.createEnvironment('ws-1', 'proj - prod', [])).resolves.toBe('env-adopted');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const methods = fetchImpl.mock.calls.map((call) => (call[1] as RequestInit | undefined)?.method ?? 'GET');
+    expect(methods.filter((method) => method === 'POST')).toHaveLength(1);
+  });
+
+  it('does not retry createEnvironment on a 4xx client error', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'bad request' } }), {
+          status: 400,
+          statusText: 'Bad Request'
+        })
+      );
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.createEnvironment('ws-1', 'proj - prod', [])).rejects.toThrow('400');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries updateEnvironment on a transient 5xx (PUT is idempotent)', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(serverErrorBody, { status: 500, statusText: 'Internal Server Error' }))
+      .mockResolvedValueOnce(jsonResponse({ environment: { uid: 'env-1' } }));
+    const client = new PostmanAssetsClient({
+      apiKey: 'pmak-test',
+      fetchImpl,
+      retrySleep: async () => undefined
+    });
+
+    await expect(client.updateEnvironment('env-1', 'proj - prod', [])).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const methods = fetchImpl.mock.calls.map((call) => (call[1] as RequestInit | undefined)?.method ?? 'GET');
+    expect(methods).toEqual(['PUT', 'PUT']);
+  });
+
+  it('lists environments for a workspace as name/uid pairs', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        environments: [
+          { name: 'a', uid: 'u-a' },
+          { name: 'b', uid: 'u-b' }
+        ]
+      })
+    );
+    const client = new PostmanAssetsClient({ apiKey: 'pmak-test', fetchImpl });
+    await expect(client.listEnvironments('ws-1')).resolves.toEqual([
+      { name: 'a', uid: 'u-a' },
+      { name: 'b', uid: 'u-b' }
+    ]);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.getpostman.com/environments?workspace=ws-1',
+      expect.any(Object)
+    );
+  });
+});

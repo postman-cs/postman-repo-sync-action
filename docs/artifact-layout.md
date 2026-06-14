@@ -15,11 +15,17 @@ The default artifact root is `postman/`. The action ensures these directories ex
 
 It also writes `.postman/resources.yaml`, the reusable state file. The generated CI workflow reads that file to resolve smoke collection, contract collection, and environment IDs for Postman CLI runs.
 
+The generated files are intended to be committed when `repo-write-mode` is `commit-only` or `commit-and-push`. Review changes under `postman/` and `.postman/` the same way you review source changes, because they are the workflow's durable Postman state.
+
 ## Collection v3 multi-file YAML
 
 Collections are exported in the Postman Collection v3 format (`$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/`) as a directory tree rather than a single JSON file. Each collection becomes a directory containing a `collection.yaml` plus one YAML file per folder and per request:
 
 ```text
+postman/collections/core-payments/
+  collection.yaml
+  <folder>.yaml
+  <request>.yaml
 postman/collections/[Smoke] core-payments/
   collection.yaml
   <folder>.yaml
@@ -48,7 +54,6 @@ When `collection-sync-mode` or `spec-sync-mode` is `version`, the action require
 | Mode | Behavior |
 | --- | --- |
 | `refresh` | Refresh exports and rewrite resource mappings for the current ref. |
-| `reuse` | Reuse explicit IDs or IDs already present in `.postman/resources.yaml`. |
 | `version` | Require a release label and suffix exported collection directories, mock names, and monitor names with that label. |
 
 `spec-sync-mode` supports:

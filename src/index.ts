@@ -16,13 +16,16 @@ import { convertAndSplitCollection } from './postman-v3/converter.js';
 import { renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext } from './lib/repo/context.js';
+import { createTelemetryContext } from './lib/telemetry.js';
 import {
   createInternalIntegrationAdapter,
   type InternalIntegrationAdapter
 } from './lib/postman/internal-integration-adapter.js';
 import {
+  parsePostmanRegion,
   parsePostmanStack,
   resolvePostmanEndpointProfile,
+  type PostmanRegion,
   type PostmanStack
 } from './lib/postman/base-urls.js';
 import {
@@ -87,6 +90,7 @@ export interface ResolvedInputs {
   specPath: string;
   teamId: string;
   repository: string;
+  postmanRegion: PostmanRegion;
   postmanStack: PostmanStack;
   postmanApiBase: string;
   postmanBifrostBase: string;
@@ -124,6 +128,7 @@ export interface ExecLike {
 }
 
 export interface RepoSyncDependencies {
+  teamId?: string;
   core: Pick<CoreLike, 'info' | 'setOutput' | 'warning'>;
   postman: Pick<
     PostmanAssetsClient,
@@ -282,8 +287,9 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   const systemEnvMap = parseJsonMap(getInput('system-env-map-json', env) || '{}');
   const environmentUids = parseJsonMap(getInput('environment-uids-json', env) || '{}');
   const envRuntimeUrls = parseJsonMap(getInput('env-runtime-urls-json', env) || '{}');
+  const postmanRegion = parsePostmanRegion(getInput('postman-region', env));
   const postmanStack = parsePostmanStack(getInput('postman-stack', env));
-  const endpointProfile = resolvePostmanEndpointProfile(postmanStack);
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion);
 
   return {
     projectName: getInput('project-name', env),
@@ -312,8 +318,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
       getInput('github-ref-name', env) ||
       normalizeInputValue(env.GITHUB_REF_NAME) ||
       normalizeInputValue(repoContext.ref),
-    committerName: getInput('committer-name', env) || 'Postman CSE',
-    committerEmail: getInput('committer-email', env) || 'help@postman.com',
+    committerName: getInput('committer-name', env) || 'Postman',
+    committerEmail: getInput('committer-email', env) || 'support@postman.com',
     postmanApiKey: getInput('postman-api-key', env),
     postmanAccessToken: getInput('postman-access-token', env),
     credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
@@ -336,6 +342,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
       getInput('repository', env) ||
       normalizeInputValue(env.GITHUB_REPOSITORY) ||
       normalizeInputValue(repoContext.repoSlug),
+    postmanRegion,
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
@@ -357,6 +364,8 @@ function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentVa
 }
 
 type CloudResourceMap = Record<string, string>;
+
+const LEGACY_BASELINE_COLLECTION_PREFIX = '[Baseline]';
 
 type PostmanResourcesState = {
   workspace?: {
@@ -394,6 +403,17 @@ function findCloudResourceId(
   return match?.[1];
 }
 
+function matchesCollectionDirectory(filePath: string, directoryName: string): boolean {
+  return normalizeToPosix(filePath).replace(/\/+$/g, '').endsWith(`/collections/${directoryName}`);
+}
+
+function matchesBaselineCollectionResource(filePath: string, assetProjectName: string): boolean {
+  return (
+    matchesCollectionDirectory(filePath, assetProjectName) ||
+    matchesCollectionDirectory(filePath, `${LEGACY_BASELINE_COLLECTION_PREFIX} ${assetProjectName}`)
+  );
+}
+
 function getEnvironmentUidsFromResources(
   resourcesState: PostmanResourcesState | null
 ): Record<string, string> {
@@ -413,7 +433,7 @@ function getEnvironmentUidsFromResources(
 }
 
 function normalizeToPosix(filePath: string): string {
-  return filePath.split(path.sep).join('/');
+  return filePath.split(path.sep).join('/').replace(/\\/g, '/');
 }
 
 function isOpenApiSpecFile(filePath: string): boolean {
@@ -533,7 +553,7 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
 
 export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSecret'>): ResolvedInputs {
   const projectName = readInput(actionCore, 'project-name', true);
-  const postmanApiKey = readInput(actionCore, 'postman-api-key', true);
+  const postmanApiKey = readInput(actionCore, 'postman-api-key');
   const postmanAccessToken = readInput(actionCore, 'postman-access-token');
   const githubToken = readInput(actionCore, 'github-token');
   const ghFallbackToken = readInput(actionCore, 'gh-fallback-token');
@@ -542,7 +562,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   const sslClientPassphrase = readInput(actionCore, 'ssl-client-passphrase');
   const sslExtraCaCerts = readInput(actionCore, 'ssl-extra-ca-certs');
 
-  actionCore.setSecret(postmanApiKey);
+  if (postmanApiKey) actionCore.setSecret(postmanApiKey);
   if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
   if (githubToken) actionCore.setSecret(githubToken);
   if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
@@ -583,8 +603,8 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_CURRENT_REF: readInput(actionCore, 'current-ref'),
     INPUT_GITHUB_HEAD_REF: readInput(actionCore, 'github-head-ref'),
     INPUT_GITHUB_REF_NAME: readInput(actionCore, 'github-ref-name'),
-    INPUT_COMMITTER_NAME: readInput(actionCore, 'committer-name') || 'Postman CSE',
-    INPUT_COMMITTER_EMAIL: readInput(actionCore, 'committer-email') || 'help@postman.com',
+    INPUT_COMMITTER_NAME: readInput(actionCore, 'committer-name') || 'Postman',
+    INPUT_COMMITTER_EMAIL: readInput(actionCore, 'committer-email') || 'support@postman.com',
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, 'credential-preflight') || 'warn',
@@ -604,6 +624,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, 'team-id') || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, 'repository') || process.env.GITHUB_REPOSITORY,
+    INPUT_POSTMAN_REGION: readInput(actionCore, 'postman-region') || 'us',
     INPUT_POSTMAN_STACK: readInput(actionCore, 'postman-stack') || 'prod',
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
@@ -727,6 +748,9 @@ function ensureDir(path: string): void {
 }
 
 function getCollectionDirectoryName(kind: 'Baseline' | 'Smoke' | 'Contract', projectName: string): string {
+  if (kind === 'Baseline') {
+    return projectName;
+  }
   return `[${kind}] ${projectName}`;
 }
 
@@ -963,7 +987,8 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
     return Buffer.from(inputs.ciWorkflowBase64, 'base64').toString('utf8');
   }
   return renderCiWorkflowTemplate({
-    postmanCliInstallUrl: inputs.postmanCliInstallUrl
+    postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+    postmanRegion: inputs.postmanRegion
   });
 }
 
@@ -1043,6 +1068,22 @@ export async function runRepoSync(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
+  const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', logger: dependencies.core });
+  telemetry.setTeamId(dependencies.teamId);
+  try {
+    const result = await runRepoSyncInner(inputs, dependencies);
+    telemetry.emitCompletion('success');
+    return result;
+  } catch (error) {
+    telemetry.emitCompletion('failure');
+    throw error;
+  }
+}
+
+async function runRepoSyncInner(
+  inputs: ResolvedInputs,
+  dependencies: RepoSyncDependencies
+): Promise<RepoSyncOutputs> {
   const outputs = createOutputs(inputs);
   const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
   const releaseLabel = deriveReleaseLabel(inputs);
@@ -1062,7 +1103,7 @@ export async function runRepoSync(
     const cloudCollections = resourcesState.cloudResources?.collections;
     if (!inputs.baselineCollectionId) {
       inputs.baselineCollectionId =
-        findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Baseline]')) || '';
+        findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || '';
       if (inputs.baselineCollectionId) {
         dependencies.core.info('Resolved baseline-collection-id from .postman/resources.yaml');
       }
@@ -1434,6 +1475,7 @@ export function createRepoSyncDependencies(
     : undefined;
 
   return {
+    teamId: resolved.teamId,
     core: factories.core,
     postman,
     internalIntegration,

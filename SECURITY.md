@@ -15,5 +15,8 @@ You should receive an acknowledgement within five business days. Please include 
 
 ## Scope Notes
 
-- This action handles Postman API keys and access tokens. Both are masked in logs by the action itself; never echo them in your own workflow steps.
-- Reports about secrets you exposed in your own workflow configuration are out of scope; rotate the credential in Postman immediately.
+- This action handles Postman API keys, service-account access tokens, generated API keys, GitHub tokens, and optional mTLS certificate material. They are masked in action logs; never echo them in your own workflow steps.
+- Use `postman-resolve-service-token-action` to mint service-account access tokens in CI. User/session access tokens are a legacy fallback and cause a repo-sync preflight warning when detected.
+- Keep `credential-preflight` at `warn` or `enforce`. There is no public opt-out because mismatched Postman credentials can create assets in one team while linking or governance runs under another.
+- Reports about secrets exposed in your own workflow configuration are out of scope for this repository. Rotate the credential in Postman or GitHub immediately.
+- Do not include raw tokens, unredacted workflow logs, private collection contents, or certificate private keys in vulnerability reports.

@@ -8747,7 +8747,7 @@ var require_env_http_proxy_agent = __commonJS({
       "https:": 443
     };
     var experimentalWarned = false;
-    var EnvHttpProxyAgent = class extends DispatcherBase {
+    var EnvHttpProxyAgent2 = class extends DispatcherBase {
       #noProxyValue = null;
       #noProxyEntries = null;
       #opts = null;
@@ -8866,7 +8866,7 @@ var require_env_http_proxy_agent = __commonJS({
         return process.env.no_proxy ?? process.env.NO_PROXY ?? "";
       }
     };
-    module2.exports = EnvHttpProxyAgent;
+    module2.exports = EnvHttpProxyAgent2;
   }
 });
 
@@ -18539,7 +18539,7 @@ var require_undici = __commonJS({
     var BalancedPool = require_balanced_pool();
     var Agent = require_agent();
     var ProxyAgent2 = require_proxy_agent();
-    var EnvHttpProxyAgent = require_env_http_proxy_agent();
+    var EnvHttpProxyAgent2 = require_env_http_proxy_agent();
     var RetryAgent = require_retry_agent();
     var errors = require_errors();
     var util = require_util();
@@ -18562,7 +18562,7 @@ var require_undici = __commonJS({
     module2.exports.BalancedPool = BalancedPool;
     module2.exports.Agent = Agent;
     module2.exports.ProxyAgent = ProxyAgent2;
-    module2.exports.EnvHttpProxyAgent = EnvHttpProxyAgent;
+    module2.exports.EnvHttpProxyAgent = EnvHttpProxyAgent2;
     module2.exports.RetryAgent = RetryAgent;
     module2.exports.RetryHandler = RetryHandler;
     module2.exports.DecoratorHandler = DecoratorHandler;
@@ -22167,6 +22167,13 @@ var POSTMAN_ENDPOINT_PROFILES = {
     iapubBaseUrl: "https://iapub.postman.co"
   }
 };
+function parsePostmanRegion(value) {
+  const normalized = String(value || "us").trim().toLowerCase();
+  if (normalized === "us" || normalized === "eu") {
+    return normalized;
+  }
+  throw new Error(`Unsupported postman-region "${value}". Supported values: us, eu`);
+}
 function parsePostmanStack(value) {
   const normalized = String(value || "prod").trim().toLowerCase();
   if (normalized === "prod" || normalized === "beta") {
@@ -22174,8 +22181,18 @@ function parsePostmanStack(value) {
   }
   throw new Error(`Unsupported postman-stack "${value}". Supported values: prod, beta`);
 }
-function resolvePostmanEndpointProfile(stack) {
-  return POSTMAN_ENDPOINT_PROFILES[stack];
+function resolvePostmanEndpointProfile(stack, region = "us") {
+  if (stack === "beta" && region !== "us") {
+    throw new Error("postman-region=eu is only supported with postman-stack=prod");
+  }
+  const profile = POSTMAN_ENDPOINT_PROFILES[stack];
+  if (region === "eu") {
+    return {
+      ...profile,
+      apiBaseUrl: "https://api.eu.postman.com"
+    };
+  }
+  return profile;
 }
 
 // src/lib/ci-workflow-template.ts
@@ -22192,9 +22209,13 @@ function validateHttpsInstallUrl(url) {
 function renderCiWorkflowTemplate(options = {}) {
   const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
-  return buildCiWorkflowLines(installUrl).join("\n");
+  const postmanRegion = String(options.postmanRegion || "").trim() || "us";
+  if (!["us", "eu"].includes(postmanRegion)) {
+    throw new Error("postman-region must be one of: us, eu; got: " + postmanRegion);
+  }
+  return buildCiWorkflowLines(installUrl, postmanRegion).join("\n");
 }
-function buildCiWorkflowLines(installUrl) {
+function buildCiWorkflowLines(installUrl, postmanRegion) {
   return [
     "name: CI/CD Pipeline",
     "on:",
@@ -22214,7 +22235,7 @@ function buildCiWorkflowLines(installUrl) {
     `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
     '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
     "      - name: Login to Postman CLI",
-    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
+    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}" + (postmanRegion === "eu" ? " --region eu" : ""),
     "      - name: Resolve Postman Resource IDs",
     "        run: |",
     "          ruby <<'RUBY'",
@@ -22558,6 +22579,203 @@ function detectRepoContext(input, env = process.env) {
   };
 }
 
+// src/lib/telemetry.ts
+var import_node_crypto = require("node:crypto");
+var import_undici2 = __toESM(require_undici(), 1);
+
+// src/lib/ci-context.ts
+function norm(value) {
+  const trimmed = (value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : void 0;
+}
+function detectCiContext(env = process.env) {
+  if (norm(env.GITHUB_ACTIONS)) {
+    const runnerEnv = norm(env.RUNNER_ENVIRONMENT);
+    const runnerKind = runnerEnv === "github-hosted" ? "hosted" : runnerEnv === "self-hosted" ? "self-hosted" : "unknown";
+    return {
+      ciProvider: "github",
+      runId: norm(env.GITHUB_RUN_ID),
+      runnerKind
+    };
+  }
+  if (norm(env.GITLAB_CI)) {
+    return {
+      ciProvider: "gitlab",
+      runId: norm(env.CI_PIPELINE_ID) ?? norm(env.CI_PIPELINE_IID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.CIRCLECI)) {
+    return {
+      ciProvider: "circleci",
+      runId: norm(env.CIRCLE_WORKFLOW_ID) ?? norm(env.CIRCLE_BUILD_NUM),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.BUILDKITE)) {
+    const computeType = norm(env.BUILDKITE_COMPUTE_TYPE);
+    const runnerKind = computeType === "hosted" ? "hosted" : computeType === "self-hosted" ? "self-hosted" : "unknown";
+    return {
+      ciProvider: "buildkite",
+      runId: norm(env.BUILDKITE_BUILD_ID) ?? norm(env.BUILDKITE_BUILD_NUMBER),
+      runnerKind
+    };
+  }
+  if (norm(env.TF_BUILD)) {
+    return {
+      ciProvider: "azure",
+      runId: norm(env.BUILD_BUILDID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.CODEBUILD_BUILD_ID)) {
+    return {
+      ciProvider: "codebuild",
+      runId: norm(env.CODEBUILD_BUILD_ID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.BITBUCKET_BUILD_NUMBER)) {
+    return {
+      ciProvider: "bitbucket",
+      runId: norm(env.BITBUCKET_BUILD_NUMBER),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.TEAMCITY_VERSION)) {
+    return {
+      ciProvider: "teamcity",
+      runId: norm(env.BUILD_NUMBER),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.HARNESS_BUILD_ID)) {
+    return {
+      ciProvider: "harness",
+      runId: norm(env.HARNESS_EXECUTION_ID) ?? norm(env.HARNESS_BUILD_ID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.JENKINS_URL)) {
+    return {
+      ciProvider: "jenkins",
+      runId: norm(env.BUILD_ID) ?? norm(env.BUILD_NUMBER) ?? norm(env.BUILD_TAG),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.ATC_EXTERNAL_URL) || norm(env.BUILD_ID) && norm(env.BUILD_PIPELINE_NAME)) {
+    return {
+      ciProvider: "concourse",
+      runId: norm(env.BUILD_ID) ?? norm(env.BUILD_NAME),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.CI)) {
+    return { ciProvider: "other", runnerKind: "unknown" };
+  }
+  return { ciProvider: "unknown", runnerKind: "unknown" };
+}
+
+// src/lib/telemetry.ts
+var SCHEMA_VERSION = 1;
+var DEFAULT_TIMEOUT_MS = 1500;
+var DEFAULT_ENDPOINT = "https://events.pm-cse.dev/v1/events";
+var proxyDispatcher = new import_undici2.EnvHttpProxyAgent();
+function actionVersion() {
+  return "1.0.4" ? "1.0.4" : "unknown";
+}
+function telemetryDisabled(env) {
+  const flag = String(env.POSTMAN_ACTIONS_TELEMETRY ?? "").trim().toLowerCase();
+  if (flag === "off" || flag === "0" || flag === "false" || flag === "no") {
+    return true;
+  }
+  const dnt = String(env.DO_NOT_TRACK ?? "").trim().toLowerCase();
+  if (dnt && dnt !== "0" && dnt !== "false") {
+    return true;
+  }
+  return false;
+}
+function sha256(value) {
+  return (0, import_node_crypto.createHash)("sha256").update(value).digest("hex");
+}
+var noticeShown = false;
+function maybeNotice(logger) {
+  if (noticeShown || !logger) {
+    return;
+  }
+  noticeShown = true;
+  logger.info(
+    "note: postman-actions sends anonymous usage data (team id, action, CI provider). Disable with POSTMAN_ACTIONS_TELEMETRY=off or DO_NOT_TRACK=1."
+  );
+}
+function buildTelemetryEvent(action, teamId, outcome, env, now) {
+  const ci = detectCiContext(env);
+  const repo = detectRepoContext({}, env);
+  const repoSource = repo.repoSlug ?? repo.repoUrl;
+  return {
+    schema_version: SCHEMA_VERSION,
+    event: "completion",
+    action,
+    action_version: actionVersion(),
+    team_id: teamId,
+    ci_provider: ci.ciProvider,
+    run_id: ci.runId,
+    runner_kind: ci.runnerKind,
+    repo_id: repoSource ? sha256(repoSource) : void 0,
+    outcome,
+    ts: now()
+  };
+}
+async function send(event, options) {
+  const env = options.env ?? process.env;
+  const endpoint = options.endpoint ?? env.POSTMAN_ACTIONS_TELEMETRY_ENDPOINT ?? DEFAULT_ENDPOINT;
+  const transport = options.transport ?? import_undici2.fetch;
+  const dispatcher = options.dispatcher ?? proxyDispatcher;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event),
+    signal: controller.signal
+  };
+  init.dispatcher = dispatcher;
+  try {
+    await transport(endpoint, init);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function createTelemetryContext(options) {
+  const env = options.env ?? process.env;
+  const now = options.now ?? Date.now;
+  let teamId = "";
+  let emitted = false;
+  return {
+    setTeamId(value) {
+      if (value) {
+        teamId = String(value);
+      }
+    },
+    emitCompletion(outcome) {
+      if (emitted) {
+        return;
+      }
+      emitted = true;
+      try {
+        if (telemetryDisabled(env) || !teamId) {
+          return;
+        }
+        const event = buildTelemetryEvent(options.action, teamId, outcome, env, now);
+        maybeNotice(options.logger);
+        void send(event, options).catch(() => {
+        });
+      } catch {
+      }
+    }
+  };
+}
+
 // src/lib/http-error.ts
 function truncate(value, limit) {
   if (value.length <= limit) {
@@ -22749,9 +22967,6 @@ function formatIdentityLine(id, mask) {
   );
 }
 function crossCheckIdentities(args) {
-  if (args.mode === "off") {
-    return { ok: true, level: "ok", message: "" };
-  }
   const pmakTeamId = args.pmak?.teamId;
   const sessionTeamId = args.session?.teamId;
   if (pmakTeamId && sessionTeamId && pmakTeamId !== sessionTeamId) {
@@ -22790,9 +23005,6 @@ function crossCheckIdentities(args) {
   };
 }
 async function runCredentialPreflight(args) {
-  if (args.mode === "off") {
-    return;
-  }
   const mask = args.mask;
   const apiKey = String(args.postmanApiKey || "").trim();
   const accessToken = String(args.postmanAccessToken || "").trim();
@@ -22839,6 +23051,14 @@ async function runCredentialPreflight(args) {
   }
   if (session) {
     args.log.info(formatIdentityLine(session, mask));
+    const consumerType = session.consumerType?.trim();
+    if (consumerType && consumerType.toLowerCase() !== "service_account") {
+      args.log.warning(
+        mask(
+          `postman: deprecation warning - postman-access-token resolved to consumerType ${consumerType}. postman-cs/postman-resolve-service-token-action is the primary CI path for service-account access tokens. The Postman CLI credential store populated by \`postman login\` is a legacy fallback for migration only.`
+        )
+      );
+    }
   } else {
     args.log.warning(
       mask(
@@ -23139,7 +23359,7 @@ function createInternalIntegrationAdapter(options) {
 // src/contracts.ts
 var postmanRepoSyncActionContract = {
   name: "postman-repo-sync-action",
-  description: "Public customer preview contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.",
+  description: "Contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.",
   defaults: {
     integrationBackend: "bifrost",
     artifactDir: "postman",
@@ -23148,8 +23368,8 @@ var postmanRepoSyncActionContract = {
     specSyncMode: "update",
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,
-    committerName: "Postman CSE",
-    committerEmail: "help@postman.com"
+    committerName: "Postman",
+    committerEmail: "support@postman.com"
   },
   inputs: {
     "generate-ci-workflow": {
@@ -23270,26 +23490,31 @@ var postmanRepoSyncActionContract = {
     "committer-name": {
       description: "Git committer name for sync commits.",
       required: false,
-      default: "Postman CSE"
+      default: "Postman"
     },
     "committer-email": {
       description: "Git committer email for sync commits.",
       required: false,
-      default: "help@postman.com"
+      default: "support@postman.com"
     },
     "postman-api-key": {
       description: "Postman API key used for environment, mock, and monitor operations.",
       required: false
     },
     "postman-access-token": {
-      description: "Postman access token used for Bifrost and system environment association.",
+      description: "Postman access token used for workspace linking, system environment association, and generated API-key creation.",
       required: false
     },
+    "team-id": {
+      description: "Postman team ID resolved by postman-resolve-service-token-action for org-mode integration calls. Falls back to POSTMAN_TEAM_ID when omitted.",
+      required: false,
+      default: ""
+    },
     "credential-preflight": {
-      description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created; off skips the identity probes entirely (the reactive error guidance still applies). Promotion of the default to enforce is planned once the live e2e legs prove both directions.",
+      description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.",
       required: false,
       default: "warn",
-      allowedValues: ["enforce", "warn", "off"]
+      allowedValues: ["enforce", "warn"]
     },
     "github-token": {
       description: "GitHub token used for repo variable persistence and commits.",
@@ -23300,7 +23525,7 @@ var postmanRepoSyncActionContract = {
       required: false
     },
     "org-mode": {
-      description: "Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.",
+      description: "Whether the Postman team uses org-mode. When true, x-entity-team-id is included in Postman integration API calls. Non-org teams must omit this header.",
       required: false,
       default: "false"
     },
@@ -23332,8 +23557,14 @@ var postmanRepoSyncActionContract = {
       description: "Optional repo-root-relative path to the local spec file for resources/workflows metadata.",
       required: false
     },
+    "postman-region": {
+      description: "Postman data residency region for public API and Postman CLI calls. One of: us or eu.",
+      required: false,
+      default: "us",
+      allowedValues: ["us", "eu"]
+    },
     "postman-stack": {
-      description: "Postman stack profile.",
+      description: "Postman stack profile. Leave at the default unless Postman support directs otherwise.",
       required: false,
       default: "prod",
       allowedValues: ["prod", "beta"]
@@ -23341,7 +23572,7 @@ var postmanRepoSyncActionContract = {
   },
   outputs: {
     "integration-backend": {
-      description: "Resolved integration backend for the customer preview run."
+      description: "Resolved integration backend for the onboarding run."
     },
     "resolved-current-ref": {
       description: "Resolved push target based on current-ref semantics."
@@ -23371,10 +23602,10 @@ var postmanRepoSyncActionContract = {
   behavior: {
     retainedFromFinalize: [
       "Create or update Postman environments from runtime URLs.",
-      "Associate Postman environments to system environments through Bifrost.",
+      "Associate Postman environments to system environments through Postman integration APIs.",
       "Create mock servers and smoke monitors from generated collections.",
-      "Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.",
-      "Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.",
+      "Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `<name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.",
+      "Link the Postman workspace to the repository (GitHub or GitLab) through Postman integration APIs.",
       "Commit synced artifacts and push them back to the current checked out ref."
     ],
     removedFromFinalize: [
@@ -23433,6 +23664,9 @@ async function retry(operation, options = {}) {
 }
 
 // src/lib/postman/postman-assets-client.ts
+function isTransientHttpError(error) {
+  return error instanceof HttpError && (error.status === 429 || error.status >= 500);
+}
 var PostmanAssetsClient = class {
   apiKey;
   baseUrl;
@@ -23486,32 +23720,70 @@ var PostmanAssetsClient = class {
       return null;
     }
   }
+  /**
+   * Shared retry policy for environment create/update. Mirrors
+   * requestWithCollectionRetry's backoff and retries only transient 429/5xx.
+   */
+  environmentRetryOptions() {
+    return {
+      maxAttempts: 5,
+      delayMs: 2e3,
+      backoffMultiplier: 2,
+      maxDelayMs: 15e3,
+      ...this.retrySleep ? { sleep: this.retrySleep } : {},
+      shouldRetry: isTransientHttpError
+    };
+  }
+  async listEnvironments(workspaceId) {
+    const response = await this.request(`/environments?workspace=${workspaceId}`);
+    const items = Array.isArray(response?.environments) ? response.environments : [];
+    return items.map((item) => ({
+      name: String(item?.name ?? "").trim(),
+      uid: String(item?.uid ?? "").trim()
+    }));
+  }
   async createEnvironment(workspaceId, name, values) {
-    const response = await this.request(`/environments?workspace=${workspaceId}`, {
-      method: "POST",
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
+    const targetName = name.trim();
+    let attempted = false;
+    return retry(async () => {
+      if (attempted) {
+        const existingUid = (await this.listEnvironments(workspaceId).catch(() => [])).find((environment) => environment.name === targetName)?.uid;
+        if (existingUid) {
+          return existingUid;
         }
-      })
-    });
-    const uid = String(response?.environment?.uid || "").trim();
-    if (!uid) {
-      throw new Error("Environment create did not return a UID");
-    }
-    return uid;
+      }
+      attempted = true;
+      const response = await this.request(`/environments?workspace=${workspaceId}`, {
+        method: "POST",
+        body: JSON.stringify({
+          environment: {
+            name,
+            values
+          }
+        })
+      });
+      const uid = String(
+        response?.environment?.uid || ""
+      ).trim();
+      if (!uid) {
+        throw new Error("Environment create did not return a UID");
+      }
+      return uid;
+    }, this.environmentRetryOptions());
   }
   async updateEnvironment(uid, name, values) {
-    await this.request(`/environments/${uid}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
-        }
-      })
-    });
+    await retry(
+      () => this.request(`/environments/${uid}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          environment: {
+            name,
+            values
+          }
+        })
+      }),
+      this.environmentRetryOptions()
+    );
   }
   /**
    * Monitor and mock creation reference a collection that may have been
@@ -23776,8 +24048,9 @@ function resolveInputs(env = process.env) {
   const systemEnvMap = parseJsonMap(getInput("system-env-map-json", env) || "{}");
   const environmentUids = parseJsonMap(getInput("environment-uids-json", env) || "{}");
   const envRuntimeUrls = parseJsonMap(getInput("env-runtime-urls-json", env) || "{}");
+  const postmanRegion = parsePostmanRegion(getInput("postman-region", env));
   const postmanStack = parsePostmanStack(getInput("postman-stack", env));
-  const endpointProfile = resolvePostmanEndpointProfile(postmanStack);
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion);
   return {
     projectName: getInput("project-name", env),
     workspaceId: getInput("workspace-id", env),
@@ -23802,8 +24075,8 @@ function resolveInputs(env = process.env) {
     currentRef: getInput("current-ref", env) || normalizeInputValue(env.GITHUB_REF),
     githubHeadRef: getInput("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF),
     githubRefName: getInput("github-ref-name", env) || normalizeInputValue(env.GITHUB_REF_NAME) || normalizeInputValue(repoContext.ref),
-    committerName: getInput("committer-name", env) || "Postman CSE",
-    committerEmail: getInput("committer-email", env) || "help@postman.com",
+    committerName: getInput("committer-name", env) || "Postman",
+    committerEmail: getInput("committer-email", env) || "support@postman.com",
     postmanApiKey: getInput("postman-api-key", env),
     postmanAccessToken: getInput("postman-access-token", env),
     credentialPreflight: parseCredentialPreflight(getInput("credential-preflight", env)),
@@ -23823,6 +24096,7 @@ function resolveInputs(env = process.env) {
     sslExtraCaCerts: getInput("ssl-extra-ca-certs", env),
     teamId: getInput("team-id", env) || normalizeInputValue(env.POSTMAN_TEAM_ID),
     repository: getInput("repository", env) || normalizeInputValue(env.GITHUB_REPOSITORY) || normalizeInputValue(repoContext.repoSlug),
+    postmanRegion,
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
@@ -23841,6 +24115,7 @@ function buildEnvironmentValues(envName, baseUrl) {
     { key: "AWS_SECRET_NAME", value: `api-credentials-${envName}`, type: "default" }
   ];
 }
+var LEGACY_BASELINE_COLLECTION_PREFIX = "[Baseline]";
 function readResourcesState() {
   try {
     return load((0, import_node_fs.readFileSync)(".postman/resources.yaml", "utf8"));
@@ -23855,6 +24130,12 @@ function findCloudResourceId(map2, matcher) {
   const match = Object.entries(map2).find(([filePath]) => matcher(filePath));
   return match?.[1];
 }
+function matchesCollectionDirectory(filePath, directoryName) {
+  return normalizeToPosix(filePath).replace(/\/+$/g, "").endsWith(`/collections/${directoryName}`);
+}
+function matchesBaselineCollectionResource(filePath, assetProjectName) {
+  return matchesCollectionDirectory(filePath, assetProjectName) || matchesCollectionDirectory(filePath, `${LEGACY_BASELINE_COLLECTION_PREFIX} ${assetProjectName}`);
+}
 function getEnvironmentUidsFromResources(resourcesState) {
   const cloudEnvironments = resourcesState?.cloudResources?.environments;
   if (!cloudEnvironments) {
@@ -23868,7 +24149,7 @@ function getEnvironmentUidsFromResources(resourcesState) {
   );
 }
 function normalizeToPosix(filePath) {
-  return filePath.split(path2.sep).join("/");
+  return filePath.split(path2.sep).join("/").replace(/\\/g, "/");
 }
 function isOpenApiSpecFile(filePath) {
   if (!(filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml"))) {
@@ -24018,6 +24299,9 @@ function ensureDir(path4) {
   (0, import_node_fs.mkdirSync)(path4, { recursive: true });
 }
 function getCollectionDirectoryName(kind, projectName) {
+  if (kind === "Baseline") {
+    return projectName;
+  }
   return `[${kind}] ${projectName}`;
 }
 var VOLATILE_KEYS = /* @__PURE__ */ new Set([
@@ -24201,7 +24485,8 @@ function renderCiWorkflow(inputs) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
   return renderCiWorkflowTemplate({
-    postmanCliInstallUrl: inputs.postmanCliInstallUrl
+    postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+    postmanRegion: inputs.postmanRegion
   });
 }
 function createRepoSummary(outputs, envUids, pushed) {
@@ -24258,6 +24543,18 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
   };
 }
 async function runRepoSync(inputs, dependencies) {
+  const telemetry = createTelemetryContext({ action: "postman-repo-sync-action", logger: dependencies.core });
+  telemetry.setTeamId(dependencies.teamId);
+  try {
+    const result = await runRepoSyncInner(inputs, dependencies);
+    telemetry.emitCompletion("success");
+    return result;
+  } catch (error) {
+    telemetry.emitCompletion("failure");
+    throw error;
+  }
+}
+async function runRepoSyncInner(inputs, dependencies) {
   const outputs = createOutputs(inputs);
   const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
   const releaseLabel = deriveReleaseLabel(inputs);
@@ -24273,7 +24570,7 @@ async function runRepoSync(inputs, dependencies) {
     }
     const cloudCollections = resourcesState.cloudResources?.collections;
     if (!inputs.baselineCollectionId) {
-      inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Baseline]")) || "";
+      inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || "";
       if (inputs.baselineCollectionId) {
         dependencies.core.info("Resolved baseline-collection-id from .postman/resources.yaml");
       }
@@ -24563,6 +24860,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     secretMasker: masker
   }) : void 0;
   return {
+    teamId: resolved.teamId,
     core: factories.core,
     postman,
     internalIntegration,
@@ -24705,6 +25003,7 @@ function parseCliArgs(argv, env = process.env) {
     "spec-id",
     "spec-path",
     "team-id",
+    "postman-region",
     "postman-stack"
   ];
   const inputEnv = { ...env };
