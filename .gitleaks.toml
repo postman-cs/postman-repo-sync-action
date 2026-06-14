@@ -1,0 +1,9 @@
+title = "postman-repo-sync-action gitleaks config"
+
+# Inherit gitleaks default rules, then allowlist known non-secret test fixtures.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "SSL unit-test vectors: throwaway self-signed localhost cert/key pairs embedded in tests/ssl-validation.test.ts solely to exercise validateCertMaterial(). Not live credentials."
+paths = ['''tests/ssl-validation\.test\.ts''']
