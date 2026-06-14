@@ -96,6 +96,17 @@ describe('renderCiWorkflowTemplate', () => {
     expect(installStep.run).toContain('curl -fsSL');
   });
 
+  it('passes CI_ENVIRONMENT to Postman CLI as key=value', () => {
+    const ciWorkflow = renderCiWorkflowTemplate();
+
+    expect(ciWorkflow).toContain(
+      '--env-var "CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || \'Production\' }}"'
+    );
+    expect(ciWorkflow).not.toContain(
+      '--env-var "${{ vars.CI_ENVIRONMENT || \'Production\' }}"'
+    );
+  });
+
   it('rejects javascript: pseudo-protocol', () => {
     expect(() =>
       renderCiWorkflowTemplate({
