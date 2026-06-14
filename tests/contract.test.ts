@@ -153,7 +153,7 @@ describe('postman-repo-sync-action contract', () => {
       Object.keys(postmanRepoSyncActionContract.outputs)
     );
 
-    expect(actionYaml.inputs['integration-backend']?.default).toBe('bifrost');
+    expect(actionYaml.inputs['integration-backend']?.default).toBeUndefined();
     expect(actionYaml.inputs['workspace-link-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['environment-sync-enabled']?.default).toBe('true');
     expect(actionYaml.inputs['artifact-dir']?.default).toBe('postman');

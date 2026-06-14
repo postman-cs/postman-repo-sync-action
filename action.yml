@@ -62,9 +62,8 @@ inputs:
     description: 'Explicit repository URL (GitHub or GitLab). Defaults to https://github.com/$GITHUB_REPOSITORY on GitHub Actions, or $CI_PROJECT_URL on GitLab CI, when omitted.'
     required: false
   integration-backend:
-    description: Integration backend for workspace linking and environment sync.
+    description: Advanced/internal. Integration backend for managed workspace linking and environment sync; leave unset to use the default.
     required: false
-    default: bifrost
   workspace-link-enabled:
     description: Enable workspace linking.
     required: false
