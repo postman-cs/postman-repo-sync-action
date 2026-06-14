@@ -23,19 +23,45 @@ function isIterable(value: unknown): value is Iterable<unknown> {
   );
 }
 
+function appendStringSecret(value: string, results: string[]): void {
+  const normalized = value.trim();
+  if (!normalized) {
+    return;
+  }
+  results.push(normalized);
+  try {
+    const encoded = encodeURIComponent(normalized);
+    if (encoded !== normalized) {
+      results.push(encoded);
+    }
+  } catch {
+    // Ignore malformed surrogate pairs; the raw value is still registered.
+  }
+  try {
+    // WHATWG URL serialization percent-encodes userinfo with a narrower set than
+    // encodeURIComponent (for example it leaves "+" intact), so a credentialed
+    // remote URL produced through the URL API can surface a mixed-encoding token
+    // form that neither the raw nor the fully-encoded variant matches.
+    const url = new URL('http://localhost/');
+    url.password = normalized;
+    if (url.password && url.password !== normalized) {
+      results.push(url.password);
+    }
+  } catch {
+    // Ignore values the URL parser rejects; other variants remain registered.
+  }
+}
+
 function appendSecretValues(value: unknown, results: string[]): void {
   if (value === null || value === undefined) {
     return;
   }
   if (typeof value === 'string') {
-    const normalized = value.trim();
-    if (normalized) {
-      results.push(normalized);
-    }
+    appendStringSecret(value, results);
     return;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
-    results.push(String(value));
+    appendStringSecret(String(value), results);
     return;
   }
   if (Array.isArray(value) || isIterable(value)) {

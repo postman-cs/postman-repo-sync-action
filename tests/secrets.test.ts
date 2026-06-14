@@ -32,6 +32,49 @@ describe('secret safety rails', () => {
     expect(sanitized).toBe(`Authorization: Bearer ${REDACTED} and key ${REDACTED}`);
   });
 
+  it('redacts percent-encoded variants of secrets embedded in URLs', () => {
+    const token = 'pat with/special+chars&unsafe';
+    const encoded = encodeURIComponent(token);
+    const sanitized = redactSecrets(
+      `push failed for https://user:${encoded}@dev.azure.com/org/repo and raw ${token}`,
+      [token]
+    );
+
+    expect(sanitized).not.toContain(token);
+    expect(sanitized).not.toContain(encoded);
+    expect(sanitized).toBe(
+      `push failed for https://user:${REDACTED}@dev.azure.com/org/repo and raw ${REDACTED}`
+    );
+  });
+
+  it('redacts URL-serialized (userinfo) token variants in remote URLs', () => {
+    const token = 'pat/abc+def';
+    const url = new URL('http://localhost/');
+    url.password = token;
+    const userinfoForm = url.password;
+
+    // The mixed form keeps "+" literal while encoding "/", so it matches neither
+    // the raw token nor its encodeURIComponent variant.
+    expect(userinfoForm).not.toBe(token);
+    expect(userinfoForm).not.toBe(encodeURIComponent(token));
+
+    const sanitized = redactSecrets(
+      `remote: rejected https://x-access-token:${userinfoForm}@github.com/org/repo.git`,
+      [token]
+    );
+
+    expect(sanitized).not.toContain(userinfoForm);
+    expect(sanitized).toBe(
+      `remote: rejected https://x-access-token:${REDACTED}@github.com/org/repo.git`
+    );
+  });
+
+  it('leaves secrets without encodable characters registered once', () => {
+    const sanitized = redactSecrets('plain token-abc here', ['token-abc']);
+
+    expect(sanitized).toBe(`plain ${REDACTED} here`);
+  });
+
   it('sanitizes headers before surfacing them', () => {
     const headers = sanitizeHeaders(
       {
