@@ -24007,6 +24007,14 @@ function appendStringSecret(value, results) {
     }
   } catch {
   }
+  try {
+    const url = new URL("http://localhost/");
+    url.password = normalized;
+    if (url.password && url.password !== normalized) {
+      results.push(url.password);
+    }
+  } catch {
+  }
 }
 function appendSecretValues(value, results) {
   if (value === null || value === void 0) {

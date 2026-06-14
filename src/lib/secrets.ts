@@ -37,6 +37,19 @@ function appendStringSecret(value: string, results: string[]): void {
   } catch {
     // Ignore malformed surrogate pairs; the raw value is still registered.
   }
+  try {
+    // WHATWG URL serialization percent-encodes userinfo with a narrower set than
+    // encodeURIComponent (for example it leaves "+" intact), so a credentialed
+    // remote URL produced through the URL API can surface a mixed-encoding token
+    // form that neither the raw nor the fully-encoded variant matches.
+    const url = new URL('http://localhost/');
+    url.password = normalized;
+    if (url.password && url.password !== normalized) {
+      results.push(url.password);
+    }
+  } catch {
+    // Ignore values the URL parser rejects; other variants remain registered.
+  }
 }
 
 function appendSecretValues(value: unknown, results: string[]): void {

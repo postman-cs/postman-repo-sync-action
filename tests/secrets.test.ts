@@ -47,6 +47,28 @@ describe('secret safety rails', () => {
     );
   });
 
+  it('redacts URL-serialized (userinfo) token variants in remote URLs', () => {
+    const token = 'pat/abc+def';
+    const url = new URL('http://localhost/');
+    url.password = token;
+    const userinfoForm = url.password;
+
+    // The mixed form keeps "+" literal while encoding "/", so it matches neither
+    // the raw token nor its encodeURIComponent variant.
+    expect(userinfoForm).not.toBe(token);
+    expect(userinfoForm).not.toBe(encodeURIComponent(token));
+
+    const sanitized = redactSecrets(
+      `remote: rejected https://x-access-token:${userinfoForm}@github.com/org/repo.git`,
+      [token]
+    );
+
+    expect(sanitized).not.toContain(userinfoForm);
+    expect(sanitized).toBe(
+      `remote: rejected https://x-access-token:${REDACTED}@github.com/org/repo.git`
+    );
+  });
+
   it('leaves secrets without encodable characters registered once', () => {
     const sanitized = redactSecrets('plain token-abc here', ['token-abc']);
 
