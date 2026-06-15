@@ -154,7 +154,6 @@ with:
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
 | `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
 | `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
-| `integration-backend` | Integration backend for workspace linking and environment sync. | no | `bifrost` |
 | `workspace-link-enabled` | Enable workspace linking. | no | `true` |
 | `environment-sync-enabled` | Enable association of Postman environments to system environments. | no | `true` |
 | `system-env-map-json` | JSON map of environment slug to system environment id. | no | `{}` |
