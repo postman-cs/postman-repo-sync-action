@@ -34,7 +34,7 @@ npm run check:dist   # build + git diff --exit-code
 
 ## Key Behaviors
 
-- **Collection v3 export**: `converter.ts` transforms single-JSON Postman collections into a directory tree: `postman/collections/[Type] name/collection.yaml` with nested folder/request YAML files.
+- **Collection v3 export**: `converter.ts` transforms single-JSON Postman collections into a directory tree: `postman/collections/name/collection.yaml` for the baseline collection and `[Smoke] name` / `[Contract] name` directories for generated assertion collections, with nested folder/request YAML files.
 - **Environment management**: Creates Postman environments per slug in `environments-json`, injects runtime URLs from `env-runtime-urls-json`, associates with system environments via Bifrost.
 - **Mock/Monitor creation**: Creates mock server from baseline collection, smoke monitor from smoke collection. Supports reuse via `mock-url` and `monitor-id` inputs. Monitor scheduling via `monitor-cron`.
 - **CI workflow generation**: Writes a Postman CLI-based smoke/contract test workflow. Controlled by `generate-ci-workflow` flag and `ci-workflow-path`.
@@ -47,7 +47,7 @@ npm run check:dist   # build + git diff --exit-code
 ```
 postman/
   collections/
-    [Baseline] name/collection.yaml
+    name/collection.yaml
     [Smoke] name/collection.yaml
     [Contract] name/collection.yaml
   environments/

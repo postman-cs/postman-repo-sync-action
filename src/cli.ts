@@ -184,6 +184,7 @@ export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.en
     'spec-id',
     'spec-path',
     'team-id',
+    'postman-region',
     'postman-stack'
   ];
 

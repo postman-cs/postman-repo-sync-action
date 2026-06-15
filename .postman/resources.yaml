@@ -2,14 +2,14 @@ workspace:
   id: ws-123
 localResources:
   collections:
-    - ../postman/collections/[Baseline] core-payments
+    - ../postman/collections/core-payments
     - ../postman/collections/[Smoke] core-payments
     - ../postman/collections/[Contract] core-payments
   environments:
     - ../postman/environments/prod.postman_environment.json
 cloudResources:
   collections:
-    ../postman/collections/[Baseline] core-payments: col-baseline
+    ../postman/collections/core-payments: col-baseline
     ../postman/collections/[Smoke] core-payments: col-smoke
     ../postman/collections/[Contract] core-payments: col-contract
   environments:

@@ -14,6 +14,8 @@ const actionPath = resolve(repoRoot, 'action.yml');
 const readmePath = resolve(repoRoot, 'README.md');
 
 const action = parse(readFileSync(actionPath, 'utf8'));
+const HIDDEN_INPUTS = new Set(['integration-backend', 'postman-stack']);
+const HIDDEN_OUTPUTS = new Set(['integration-backend']);
 
 function cell(value) {
   if (value === undefined || value === null || value === '') {
@@ -28,6 +30,7 @@ function renderInputs(inputs) {
     '| --- | --- | --- | --- |'
   ];
   for (const [name, def] of Object.entries(inputs)) {
+    if (HIDDEN_INPUTS.has(name)) continue;
     const required = def.required === true ? 'yes' : 'no';
     const fallback = def.default === undefined ? '' : `\`${cell(def.default) === '' ? '""' : cell(def.default)}\``;
     lines.push(`| \`${name}\` | ${cell(def.description)} | ${required} | ${fallback} |`);
@@ -38,6 +41,7 @@ function renderInputs(inputs) {
 function renderOutputs(outputs) {
   const lines = ['| Name | Description |', '| --- | --- |'];
   for (const [name, def] of Object.entries(outputs)) {
+    if (HIDDEN_OUTPUTS.has(name)) continue;
     lines.push(`| \`${name}\` | ${cell(def.description)} |`);
   }
   return lines.join('\n');

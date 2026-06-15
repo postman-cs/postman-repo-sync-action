@@ -1,5 +1,5 @@
 import { HttpError } from '../http-error.js';
-import { retry } from '../retry.js';
+import { retry, type RetryOptions } from '../retry.js';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 
@@ -16,6 +16,14 @@ type MonitorResponse = { monitor?: { uid?: unknown } };
 type MockResponse = {
   mock?: { uid?: unknown; mockUrl?: unknown; config?: { serverResponseId?: unknown } };
 };
+
+/**
+ * A 429 (throttle) or any 5xx is a transient backend condition worth retrying.
+ * A 4xx other than 429 is a client error and is never retried.
+ */
+function isTransientHttpError(error: unknown): boolean {
+  return error instanceof HttpError && (error.status === 429 || error.status >= 500);
+}
 
 export interface PostmanAssetsClientOptions {
   apiKey: string;
@@ -89,26 +97,73 @@ export class PostmanAssetsClient {
     }
   }
 
+  /**
+   * Shared retry policy for environment create/update. Mirrors
+   * requestWithCollectionRetry's backoff and retries only transient 429/5xx.
+   */
+  private environmentRetryOptions(): RetryOptions {
+    return {
+      maxAttempts: 5,
+      delayMs: 2000,
+      backoffMultiplier: 2,
+      maxDelayMs: 15000,
+      ...(this.retrySleep ? { sleep: this.retrySleep } : {}),
+      shouldRetry: isTransientHttpError
+    };
+  }
+
+  async listEnvironments(
+    workspaceId: string
+  ): Promise<Array<{ name: string; uid: string }>> {
+    const response = (await this.request(`/environments?workspace=${workspaceId}`)) as
+      | { environments?: Array<{ name?: unknown; uid?: unknown }> }
+      | null;
+    const items = Array.isArray(response?.environments) ? response.environments : [];
+    return items.map((item) => ({
+      name: String(item?.name ?? '').trim(),
+      uid: String(item?.uid ?? '').trim()
+    }));
+  }
+
   async createEnvironment(
     workspaceId: string,
     name: string,
     values: EnvironmentValue[]
   ): Promise<string> {
-    const response = await this.request(`/environments?workspace=${workspaceId}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
+    // Environment creation is a non-idempotent POST. A transient 429/5xx leaves
+    // the outcome ambiguous: the environment may already exist server-side. On
+    // every retry past the first attempt, reconcile by name within the workspace
+    // and adopt an already-created environment instead of POSTing a duplicate.
+    const targetName = name.trim();
+    let attempted = false;
+    return retry(async () => {
+      if (attempted) {
+        const existingUid = (
+          await this.listEnvironments(workspaceId).catch(() => [])
+        ).find((environment) => environment.name === targetName)?.uid;
+        if (existingUid) {
+          return existingUid;
         }
-      })
-    });
+      }
+      attempted = true;
+      const response = await this.request(`/environments?workspace=${workspaceId}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          environment: {
+            name,
+            values
+          }
+        })
+      });
 
-    const uid = String((response as { environment?: { uid?: unknown } } | null)?.environment?.uid || '').trim();
-    if (!uid) {
-      throw new Error('Environment create did not return a UID');
-    }
-    return uid;
+      const uid = String(
+        (response as { environment?: { uid?: unknown } } | null)?.environment?.uid || ''
+      ).trim();
+      if (!uid) {
+        throw new Error('Environment create did not return a UID');
+      }
+      return uid;
+    }, this.environmentRetryOptions());
   }
 
   async updateEnvironment(
@@ -116,15 +171,20 @@ export class PostmanAssetsClient {
     name: string,
     values: EnvironmentValue[]
   ): Promise<void> {
-    await this.request(`/environments/${uid}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
-        }
-      })
-    });
+    // PUT is idempotent, so a transient 429/5xx is safe to retry directly.
+    await retry(
+      () =>
+        this.request(`/environments/${uid}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            environment: {
+              name,
+              values
+            }
+          })
+        }),
+      this.environmentRetryOptions()
+    );
   }
 
 

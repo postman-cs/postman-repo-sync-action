@@ -13,15 +13,19 @@ function validateHttpsInstallUrl(url: string): string {
 }
 
 export function renderCiWorkflowTemplate(
-  options: { postmanCliInstallUrl?: string } = {}
+  options: { postmanCliInstallUrl?: string; postmanRegion?: string } = {}
 ): string {
   const rawUrl =
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
-  return buildCiWorkflowLines(installUrl).join('\n');
+  const postmanRegion = String(options.postmanRegion || '').trim() || 'us';
+  if (!['us', 'eu'].includes(postmanRegion)) {
+    throw new Error('postman-region must be one of: us, eu; got: ' + postmanRegion);
+  }
+  return buildCiWorkflowLines(installUrl, postmanRegion).join('\n');
 }
 
-function buildCiWorkflowLines(installUrl: string): string[] {
+function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
   return [
   'name: CI/CD Pipeline',
   'on:',
@@ -41,7 +45,8 @@ function buildCiWorkflowLines(installUrl: string): string[] {
   `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
   '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
   '      - name: Login to Postman CLI',
-  '        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}',
+  '        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}' +
+    (postmanRegion === 'eu' ? ' --region eu' : ''),
   '      - name: Resolve Postman Resource IDs',
   '        run: |',
   '          ruby <<\'RUBY\'',

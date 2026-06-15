@@ -57,8 +57,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     currentRef: 'feature/repo-sync',
     githubHeadRef: '',
     githubRefName: 'feature/repo-sync',
-    committerName: 'Postman CSE',
-    committerEmail: 'help@postman.com',
+    committerName: 'Postman',
+    committerEmail: 'support@postman.com',
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'postman-access-token',
     credentialPreflight: 'warn',
@@ -80,6 +80,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     specPath: '',
     teamId: '',
     repository: 'postman-cs/repo-sync-demo',
+    postmanRegion: 'us',
     postmanStack: 'prod',
     postmanApiBase: 'https://api.getpostman.com',
     postmanBifrostBase: 'https://bifrost-premium-https-v4.gw.postman.com',
@@ -230,6 +231,22 @@ describe('repo sync action', () => {
     expect(readActionInputs(enforceCore).credentialPreflight).toBe('enforce');
   });
 
+  it('passes postman-region through GitHub Action input resolution and allows token-only auth bootstrap', () => {
+    const { core, secrets } = createCoreStub({
+      'project-name': 'core-payments',
+      'postman-access-token': 'postman-access-token',
+      'postman-region': 'eu'
+    });
+
+    const inputs = readActionInputs(core);
+
+    expect(inputs.postmanApiKey).toBe('');
+    expect(inputs.postmanAccessToken).toBe('postman-access-token');
+    expect(inputs.postmanRegion).toBe('eu');
+    expect(inputs.postmanApiBase).toBe('https://api.eu.postman.com');
+    expect(secrets).toEqual(['postman-access-token']);
+  });
+
   it('requires ssl-client-key when ssl-client-cert is provided', () => {
     const { core } = createCoreStub({
       'project-name': 'core-payments',
@@ -261,7 +278,7 @@ describe('repo sync action', () => {
       createMonitor: vi.fn().mockResolvedValue('mon-123'),
       getCollection: vi
         .fn()
-        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
       getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
@@ -331,14 +348,14 @@ describe('repo sync action', () => {
     expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(true);
 
     const baselineCollection = loadYaml(
-      readFileSync('postman/collections/[Baseline] core-payments/collection.yaml', 'utf8')
+      readFileSync('postman/collections/core-payments/collection.yaml', 'utf8')
     ) as Record<string, unknown>;
     const folderYaml = loadYaml(
-      readFileSync('postman/collections/[Baseline] core-payments/Orders/folder.yaml', 'utf8')
+      readFileSync('postman/collections/core-payments/Orders/folder.yaml', 'utf8')
     ) as Record<string, unknown>;
     const nestedRequestYaml = loadYaml(
       readFileSync(
-        'postman/collections/[Baseline] core-payments/Orders/Create Order.request.yaml',
+        'postman/collections/core-payments/Orders/Create Order.request.yaml',
         'utf8'
       )
     ) as Record<string, unknown>;
@@ -366,7 +383,7 @@ describe('repo sync action', () => {
       workspace: { id: 'ws-123' },
       localResources: {
         collections: [
-          '../postman/collections/[Baseline] core-payments',
+          '../postman/collections/core-payments',
           '../postman/collections/[Smoke] core-payments',
           '../postman/collections/[Contract] core-payments'
         ],
@@ -378,7 +395,7 @@ describe('repo sync action', () => {
       },
       cloudResources: {
         collections: {
-          '../postman/collections/[Baseline] core-payments': 'col-baseline',
+          '../postman/collections/core-payments': 'col-baseline',
           '../postman/collections/[Smoke] core-payments': 'col-smoke',
           '../postman/collections/[Contract] core-payments': 'col-contract'
         },
@@ -396,7 +413,7 @@ describe('repo sync action', () => {
         syncSpecToCollection: [
           {
             spec: '../packages/sdk/openapi.json',
-            collection: '../postman/collections/[Baseline] core-payments'
+            collection: '../postman/collections/core-payments'
           },
           {
             spec: '../packages/sdk/openapi.json',
@@ -468,7 +485,7 @@ describe('repo sync action', () => {
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi
         .fn()
-        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
       getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
@@ -516,7 +533,7 @@ describe('repo sync action', () => {
     ) as ResourcesYamlShape;
 
     expect(resourcesYaml.cloudResources?.collections).toEqual({
-      '../postman/collections/[Baseline] core-payments': 'col-baseline-existing',
+      '../postman/collections/core-payments': 'col-baseline-existing',
       '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
       '../postman/collections/[Contract] core-payments': 'col-contract-existing'
     });
@@ -637,7 +654,7 @@ describe('repo sync action', () => {
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi
         .fn()
-        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
       getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
@@ -679,7 +696,7 @@ describe('repo sync action', () => {
     );
 
     expect(
-      existsSync('postman/collections/[Baseline] core-payments release-2026-03/collection.yaml')
+      existsSync('postman/collections/core-payments release-2026-03/collection.yaml')
     ).toBe(true);
     expect(
       existsSync('postman/collections/[Smoke] core-payments release-2026-03/collection.yaml')
@@ -834,7 +851,7 @@ describe('mock resolution paths', () => {
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-new', url: 'https://mock-new.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
-      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Baseline] core-payments')),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('core-payments')),
       getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
@@ -1297,7 +1314,7 @@ describe('repo-variable fallback resolution', () => {
         '  id: ws-from-file',
         'cloudResources:',
         '  collections:',
-        '    "../postman/collections/[Baseline] core-payments": col-base-file',
+        '    "../postman/collections/core-payments": col-base-file',
         '    "../postman/collections/[Smoke] core-payments": col-smoke-file',
         '    "../postman/collections/[Contract] core-payments": col-contract-file',
         ''
@@ -1316,6 +1333,36 @@ describe('repo-variable fallback resolution', () => {
     expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-file');
     expect(postman.getCollection).toHaveBeenCalledWith('col-contract-file');
     expect(postman.createEnvironment).toHaveBeenCalledWith('ws-from-file', expect.any(String), expect.any(Array));
+  });
+
+  it('resolves legacy baseline collection ids from .postman/resources.yaml', async () => {
+    const postman = makePostman();
+    const github = makeGithub();
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'workspace:',
+        '  id: ws-from-file',
+        'cloudResources:',
+        '  collections:',
+        '    "../postman/collections/[Baseline] core-payments": col-base-legacy',
+        '    "../postman/collections/[Smoke] core-payments": col-smoke-file',
+        '    "../postman/collections/[Contract] core-payments": col-contract-file',
+        ''
+      ].join('\n')
+    );
+
+    await runRepoSync(createInputs({
+      environments: ['prod'],
+      generateCiWorkflow: false,
+      workspaceId: '',
+      baselineCollectionId: '',
+      smokeCollectionId: '',
+      contractCollectionId: ''
+    }), makeDeps(postman, github));
+
+    expect(postman.getCollection).toHaveBeenCalledWith('col-base-legacy');
   });
 
   it('resolves environment ids from .postman/resources.yaml when input map is empty', async () => {
@@ -1361,7 +1408,7 @@ describe('repo-variable fallback resolution', () => {
     const postman = makePostman({
       getCollection: vi
         .fn()
-        .mockResolvedValueOnce(createCollectionFixture('[Baseline] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments'))
     });
@@ -1676,25 +1723,21 @@ describe('runAction credential preflight', () => {
     ).toBe(true);
   });
 
-  it('runAction with credential-preflight=off makes no /me/iapub probe', async () => {
+  it('runAction rejects credential-preflight=off instead of skipping identity checks', async () => {
     const events: string[] = [];
     vi.stubGlobal('fetch', createRunActionFetchRouter({ events }));
-    const { core, infos, outputs } = createRunActionCore(
+    const { core } = createRunActionCore(
       baseInputValues({ 'credential-preflight': 'off' }),
       events
     );
 
-    await runAction(core, createExecStub());
-
-    expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
-    expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(false);
-    expect(
-      events.filter((entry) => entry === 'fetch:GET https://api.getpostman.com/me')
-    ).toHaveLength(1);
-    expect(infos.some((line) => line.includes('postman: PMAK identity'))).toBe(false);
+    await expect(runAction(core, createExecStub())).rejects.toThrow(
+      /Unsupported credential-preflight/
+    );
+    expect(events).toHaveLength(0);
   });
 
-  it('reactive advice still rewrites a Bifrost UNAUTHENTICATED even when credential-preflight=off', async () => {
+  it('reactive advice still rewrites a Bifrost UNAUTHENTICATED with default preflight enabled', async () => {
     const events: string[] = [];
     vi.stubGlobal(
       'fetch',
@@ -1709,7 +1752,6 @@ describe('runAction credential preflight', () => {
     );
     const { core, warnings, outputs } = createRunActionCore(
       baseInputValues({
-        'credential-preflight': 'off',
         'system-env-map-json': '{"prod":"sys-prod"}'
       }),
       events
@@ -1726,6 +1768,6 @@ describe('runAction credential preflight', () => {
     expect(adviceWarning).toContain(
       'POST https://api.getpostman.com/service-account-tokens'
     );
-    expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(false);
+    expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(true);
   });
 });

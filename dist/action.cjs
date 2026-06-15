@@ -6,7 +6,11 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -8746,7 +8750,7 @@ var require_env_http_proxy_agent = __commonJS({
       "https:": 443
     };
     var experimentalWarned = false;
-    var EnvHttpProxyAgent = class extends DispatcherBase {
+    var EnvHttpProxyAgent2 = class extends DispatcherBase {
       #noProxyValue = null;
       #noProxyEntries = null;
       #opts = null;
@@ -8865,7 +8869,7 @@ var require_env_http_proxy_agent = __commonJS({
         return process.env.no_proxy ?? process.env.NO_PROXY ?? "";
       }
     };
-    module2.exports = EnvHttpProxyAgent;
+    module2.exports = EnvHttpProxyAgent2;
   }
 });
 
@@ -18538,7 +18542,7 @@ var require_undici = __commonJS({
     var BalancedPool = require_balanced_pool();
     var Agent3 = require_agent();
     var ProxyAgent2 = require_proxy_agent();
-    var EnvHttpProxyAgent = require_env_http_proxy_agent();
+    var EnvHttpProxyAgent2 = require_env_http_proxy_agent();
     var RetryAgent = require_retry_agent();
     var errors = require_errors();
     var util = require_util();
@@ -18561,7 +18565,7 @@ var require_undici = __commonJS({
     module2.exports.BalancedPool = BalancedPool;
     module2.exports.Agent = Agent3;
     module2.exports.ProxyAgent = ProxyAgent2;
-    module2.exports.EnvHttpProxyAgent = EnvHttpProxyAgent;
+    module2.exports.EnvHttpProxyAgent = EnvHttpProxyAgent2;
     module2.exports.RetryAgent = RetryAgent;
     module2.exports.RetryHandler = RetryHandler;
     module2.exports.DecoratorHandler = DecoratorHandler;
@@ -23840,6 +23844,13 @@ var POSTMAN_ENDPOINT_PROFILES = {
     iapubBaseUrl: "https://iapub.postman.co"
   }
 };
+function parsePostmanRegion(value) {
+  const normalized = String(value || "us").trim().toLowerCase();
+  if (normalized === "us" || normalized === "eu") {
+    return normalized;
+  }
+  throw new Error(`Unsupported postman-region "${value}". Supported values: us, eu`);
+}
 function parsePostmanStack(value) {
   const normalized = String(value || "prod").trim().toLowerCase();
   if (normalized === "prod" || normalized === "beta") {
@@ -23847,8 +23858,18 @@ function parsePostmanStack(value) {
   }
   throw new Error(`Unsupported postman-stack "${value}". Supported values: prod, beta`);
 }
-function resolvePostmanEndpointProfile(stack) {
-  return POSTMAN_ENDPOINT_PROFILES[stack];
+function resolvePostmanEndpointProfile(stack, region = "us") {
+  if (stack === "beta" && region !== "us") {
+    throw new Error("postman-region=eu is only supported with postman-stack=prod");
+  }
+  const profile = POSTMAN_ENDPOINT_PROFILES[stack];
+  if (region === "eu") {
+    return {
+      ...profile,
+      apiBaseUrl: "https://api.eu.postman.com"
+    };
+  }
+  return profile;
 }
 
 // src/lib/ci-workflow-template.ts
@@ -23865,9 +23886,13 @@ function validateHttpsInstallUrl(url) {
 function renderCiWorkflowTemplate(options = {}) {
   const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
-  return buildCiWorkflowLines(installUrl).join("\n");
+  const postmanRegion = String(options.postmanRegion || "").trim() || "us";
+  if (!["us", "eu"].includes(postmanRegion)) {
+    throw new Error("postman-region must be one of: us, eu; got: " + postmanRegion);
+  }
+  return buildCiWorkflowLines(installUrl, postmanRegion).join("\n");
 }
-function buildCiWorkflowLines(installUrl) {
+function buildCiWorkflowLines(installUrl, postmanRegion) {
   return [
     "name: CI/CD Pipeline",
     "on:",
@@ -23887,7 +23912,7 @@ function buildCiWorkflowLines(installUrl) {
     `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
     '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
     "      - name: Login to Postman CLI",
-    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}",
+    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}" + (postmanRegion === "eu" ? " --region eu" : ""),
     "      - name: Resolve Postman Resource IDs",
     "        run: |",
     "          ruby <<'RUBY'",
@@ -24250,6 +24275,382 @@ function detectRepoContext(input, env = process.env) {
   };
 }
 
+// node_modules/@postman-cse/automation-telemetry-core/dist/ci-context.js
+function norm(value) {
+  const trimmed = (value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : void 0;
+}
+function detectEventTrigger(env = process.env) {
+  const ghEvent = norm(env.GITHUB_EVENT_NAME)?.toLowerCase();
+  if (ghEvent) {
+    if (ghEvent === "push")
+      return "push";
+    if (ghEvent === "pull_request" || ghEvent === "pull_request_target")
+      return "pull_request";
+    if (ghEvent === "schedule")
+      return "schedule";
+    if (ghEvent === "workflow_dispatch" || ghEvent === "repository_dispatch")
+      return "manual";
+    return "other";
+  }
+  const glSource = norm(env.CI_PIPELINE_SOURCE)?.toLowerCase();
+  if (glSource) {
+    if (glSource === "push")
+      return "push";
+    if (glSource === "merge_request_event")
+      return "pull_request";
+    if (glSource === "schedule")
+      return "schedule";
+    if (glSource === "web" || glSource === "api" || glSource === "trigger" || glSource === "pipeline") {
+      return "manual";
+    }
+    return "other";
+  }
+  if (norm(env.BITBUCKET_PR_ID))
+    return "pull_request";
+  if (norm(env.CI) || norm(env.BUILD_BUILDID) || norm(env.JENKINS_URL) || norm(env.TEAMCITY_VERSION)) {
+    return "other";
+  }
+  return "unknown";
+}
+function detectRunnerOs(env = process.env) {
+  const runnerOs = norm(env.RUNNER_OS)?.toLowerCase();
+  if (runnerOs === "linux")
+    return "linux";
+  if (runnerOs === "macos")
+    return "macos";
+  if (runnerOs === "windows")
+    return "windows";
+  const platform2 = typeof process !== "undefined" ? process.platform : void 0;
+  if (platform2 === "linux")
+    return "linux";
+  if (platform2 === "darwin")
+    return "macos";
+  if (platform2 === "win32")
+    return "windows";
+  return "unknown";
+}
+function detectCiContext(env = process.env) {
+  const provider = detectCiProviderContext(env);
+  return {
+    ...provider,
+    eventTrigger: detectEventTrigger(env),
+    runnerOs: detectRunnerOs(env)
+  };
+}
+function detectCiProviderContext(env = process.env) {
+  if (norm(env.GITHUB_ACTIONS)) {
+    const runnerEnv = norm(env.RUNNER_ENVIRONMENT);
+    const runnerKind = runnerEnv === "github-hosted" ? "hosted" : runnerEnv === "self-hosted" ? "self-hosted" : "unknown";
+    return {
+      ciProvider: "github",
+      runId: norm(env.GITHUB_RUN_ID),
+      runnerKind
+    };
+  }
+  if (norm(env.GITLAB_CI)) {
+    return {
+      ciProvider: "gitlab",
+      runId: norm(env.CI_PIPELINE_ID) ?? norm(env.CI_PIPELINE_IID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.CIRCLECI)) {
+    return {
+      ciProvider: "circleci",
+      runId: norm(env.CIRCLE_WORKFLOW_ID) ?? norm(env.CIRCLE_BUILD_NUM),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.BUILDKITE)) {
+    const computeType = norm(env.BUILDKITE_COMPUTE_TYPE);
+    const runnerKind = computeType === "hosted" ? "hosted" : computeType === "self-hosted" ? "self-hosted" : "unknown";
+    return {
+      ciProvider: "buildkite",
+      runId: norm(env.BUILDKITE_BUILD_ID) ?? norm(env.BUILDKITE_BUILD_NUMBER),
+      runnerKind
+    };
+  }
+  if (norm(env.TF_BUILD)) {
+    return {
+      ciProvider: "azure",
+      runId: norm(env.BUILD_BUILDID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.CODEBUILD_BUILD_ID)) {
+    return {
+      ciProvider: "codebuild",
+      runId: norm(env.CODEBUILD_BUILD_ID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.BITBUCKET_BUILD_NUMBER)) {
+    return {
+      ciProvider: "bitbucket",
+      runId: norm(env.BITBUCKET_BUILD_NUMBER),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.TEAMCITY_VERSION)) {
+    return {
+      ciProvider: "teamcity",
+      runId: norm(env.BUILD_NUMBER),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.HARNESS_BUILD_ID)) {
+    return {
+      ciProvider: "harness",
+      runId: norm(env.HARNESS_EXECUTION_ID) ?? norm(env.HARNESS_BUILD_ID),
+      runnerKind: "unknown"
+    };
+  }
+  if (norm(env.JENKINS_URL)) {
+    return {
+      ciProvider: "jenkins",
+      runId: norm(env.BUILD_ID) ?? norm(env.BUILD_NUMBER) ?? norm(env.BUILD_TAG),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.ATC_EXTERNAL_URL) || norm(env.BUILD_ID) && norm(env.BUILD_PIPELINE_NAME)) {
+    return {
+      ciProvider: "concourse",
+      runId: norm(env.BUILD_ID) ?? norm(env.BUILD_NAME),
+      runnerKind: "self-hosted"
+    };
+  }
+  if (norm(env.CI)) {
+    return { ciProvider: "other", runnerKind: "unknown" };
+  }
+  return { ciProvider: "unknown", runnerKind: "unknown" };
+}
+
+// node_modules/@postman-cse/automation-telemetry-core/dist/repo-context.js
+function normalize2(value) {
+  const trimmed = (value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : void 0;
+}
+function normalizeRepoUrl2(url) {
+  const raw = normalize2(url);
+  if (!raw) {
+    return void 0;
+  }
+  const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  if (sshMatch) {
+    const host = sshMatch[1];
+    const path8 = sshMatch[2];
+    return `https://${host}/${path8}`;
+  }
+  return raw.replace(/\.git$/, "");
+}
+function parseProvider2(explicitProvider, repoUrl, env) {
+  const explicit = normalize2(explicitProvider)?.toLowerCase();
+  if (explicit === "github" || explicit === "gitlab" || explicit === "bitbucket" || explicit === "azure-devops") {
+    return explicit;
+  }
+  const url = (repoUrl ?? "").toLowerCase();
+  if (url.includes("github")) {
+    return "github";
+  }
+  if (url.includes("gitlab")) {
+    return "gitlab";
+  }
+  if (url.includes("bitbucket")) {
+    return "bitbucket";
+  }
+  if (url.includes("dev.azure.com") || url.includes("visualstudio.com")) {
+    return "azure-devops";
+  }
+  if (normalize2(env.GITHUB_REPOSITORY)) {
+    return "github";
+  }
+  if (normalize2(env.CI_PROJECT_PATH) || normalize2(env.GITLAB_CI)) {
+    return "gitlab";
+  }
+  if (normalize2(env.BITBUCKET_REPO_SLUG)) {
+    return "bitbucket";
+  }
+  if (normalize2(env.BUILD_REPOSITORY_URI)) {
+    return "azure-devops";
+  }
+  return "unknown";
+}
+function classifyRefKind(env = process.env) {
+  const githubRefType = normalize2(env.GITHUB_REF_TYPE)?.toLowerCase();
+  const githubRef = normalize2(env.GITHUB_REF);
+  const azureRef = normalize2(env.BUILD_SOURCEBRANCH);
+  if (githubRefType === "tag" || githubRef?.startsWith("refs/tags/") || normalize2(env.CI_COMMIT_TAG) || normalize2(env.BITBUCKET_TAG) || azureRef?.startsWith("refs/tags/")) {
+    return "tag";
+  }
+  const githubRefName = normalize2(env.GITHUB_REF_NAME);
+  const githubDefault = normalize2(env.GITHUB_DEFAULT_BRANCH);
+  if (githubRefName && githubDefault) {
+    return githubRefName === githubDefault ? "default-branch" : "branch";
+  }
+  const gitlabRef = normalize2(env.CI_COMMIT_REF_NAME);
+  const gitlabDefault = normalize2(env.CI_DEFAULT_BRANCH);
+  if (gitlabRef && gitlabDefault) {
+    return gitlabRef === gitlabDefault ? "default-branch" : "branch";
+  }
+  if (githubRefName || githubRef?.startsWith("refs/heads/") || gitlabRef || normalize2(env.BITBUCKET_BRANCH) || normalize2(env.BUILD_SOURCEBRANCHNAME) || azureRef?.startsWith("refs/heads/")) {
+    return "branch";
+  }
+  return "unknown";
+}
+function detectRepoContext2(input, env = process.env) {
+  const repoUrl = normalizeRepoUrl2(input.repoUrl) ?? normalizeRepoUrl2(env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}` : void 0) ?? normalizeRepoUrl2(env.CI_PROJECT_URL) ?? normalizeRepoUrl2(env.BITBUCKET_GIT_HTTP_ORIGIN) ?? normalizeRepoUrl2(env.BUILD_REPOSITORY_URI);
+  const repoSlug = normalize2(input.repoSlug) ?? normalize2(env.GITHUB_REPOSITORY) ?? normalize2(env.CI_PROJECT_PATH) ?? (env.BITBUCKET_WORKSPACE && env.BITBUCKET_REPO_SLUG ? normalize2(`${env.BITBUCKET_WORKSPACE}/${env.BITBUCKET_REPO_SLUG}`) : void 0) ?? normalize2(env.BUILD_REPOSITORY_NAME);
+  const ref = normalize2(input.ref) ?? normalize2(env.GITHUB_REF_NAME) ?? normalize2(env.CI_COMMIT_REF_NAME) ?? normalize2(env.BITBUCKET_BRANCH) ?? normalize2(env.BUILD_SOURCEBRANCHNAME);
+  const sha = normalize2(input.sha) ?? normalize2(env.GITHUB_SHA) ?? normalize2(env.CI_COMMIT_SHA) ?? normalize2(env.BITBUCKET_COMMIT) ?? normalize2(env.BUILD_SOURCEVERSION);
+  const provider = parseProvider2(input.gitProvider, repoUrl, env);
+  const refKind = classifyRefKind(env);
+  return {
+    provider,
+    repoUrl,
+    repoSlug,
+    ref,
+    sha,
+    refKind
+  };
+}
+
+// node_modules/@postman-cse/automation-telemetry-core/dist/telemetry.js
+var import_node_crypto = require("node:crypto");
+var import_undici2 = __toESM(require_undici(), 1);
+var SCHEMA_VERSION = 3;
+var DEFAULT_TIMEOUT_MS = 1500;
+var DEFAULT_ENDPOINT = "https://events.pm-cse.dev/v1/events";
+var proxyDispatcher;
+function getProxyDispatcher() {
+  return proxyDispatcher ??= new import_undici2.EnvHttpProxyAgent();
+}
+function resolveActionVersion(explicit) {
+  if (explicit) {
+    return explicit;
+  }
+  return "1.0.5" ? "1.0.5" : "unknown";
+}
+function telemetryDisabled(env) {
+  const flag = String(env.POSTMAN_ACTIONS_TELEMETRY ?? "").trim().toLowerCase();
+  if (flag === "off" || flag === "0" || flag === "false" || flag === "no") {
+    return true;
+  }
+  const dnt = String(env.DO_NOT_TRACK ?? "").trim().toLowerCase();
+  if (dnt && dnt !== "0" && dnt !== "false") {
+    return true;
+  }
+  return false;
+}
+function sha256(value) {
+  return (0, import_node_crypto.createHash)("sha256").update(value).digest("hex");
+}
+function accountTypeFromConsumer(consumerType) {
+  const t = (consumerType ?? "").trim().toLowerCase();
+  if (!t) {
+    return "unknown";
+  }
+  return t === "service_account" ? "service" : "user";
+}
+var noticeShown = false;
+function maybeNotice(logger) {
+  if (noticeShown || !logger) {
+    return;
+  }
+  noticeShown = true;
+  logger.info("note: postman-actions sends anonymous usage data (team id, action, CI provider, account type, run trigger, runner OS). Disable with POSTMAN_ACTIONS_TELEMETRY=off or DO_NOT_TRACK=1.");
+}
+function buildTelemetryEvent(params) {
+  const { action, actionVersion, teamId, accountType, outcome, env, now } = params;
+  const ci = detectCiContext(env);
+  const repo = detectRepoContext2({}, env);
+  const repoSlug = repo.repoSlug;
+  const repoSource = repoSlug ?? repo.repoUrl;
+  const owner = repoSlug && repoSlug.includes("/") ? repoSlug.split("/")[0] : void 0;
+  return {
+    schema_version: SCHEMA_VERSION,
+    event: "completion",
+    action,
+    action_version: actionVersion || "unknown",
+    team_id: teamId,
+    ci_provider: ci.ciProvider,
+    git_provider: repo.provider,
+    run_id: ci.runId,
+    runner_kind: ci.runnerKind,
+    repo_id: repoSource ? sha256(repoSource) : void 0,
+    org_id: owner ? sha256(owner) : void 0,
+    account_type: accountType,
+    event_trigger: ci.eventTrigger,
+    runner_os: ci.runnerOs,
+    ref_kind: repo.refKind,
+    outcome,
+    ts: now()
+  };
+}
+async function send(event, options) {
+  const env = options.env ?? process.env;
+  const endpoint = options.endpoint ?? env.POSTMAN_ACTIONS_TELEMETRY_ENDPOINT ?? DEFAULT_ENDPOINT;
+  const transport = options.transport ?? import_undici2.fetch;
+  const dispatcher = options.dispatcher ?? getProxyDispatcher();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  timer.unref?.();
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event),
+    signal: controller.signal
+  };
+  init.dispatcher = dispatcher;
+  try {
+    await transport(endpoint, init);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function createTelemetryContext(options) {
+  const env = options.env ?? process.env;
+  const now = options.now ?? Date.now;
+  const actionVersion = resolveActionVersion(options.actionVersion);
+  let teamId = "";
+  let accountType = "unknown";
+  let emitted = false;
+  return {
+    setTeamId(value) {
+      if (value) {
+        teamId = String(value);
+      }
+    },
+    setAccountType(consumerType) {
+      accountType = accountTypeFromConsumer(consumerType);
+    },
+    emitCompletion(outcome) {
+      if (emitted) {
+        return;
+      }
+      emitted = true;
+      try {
+        if (telemetryDisabled(env) || !teamId) {
+          return;
+        }
+        const event = buildTelemetryEvent({
+          action: options.action,
+          actionVersion,
+          teamId,
+          accountType,
+          outcome,
+          env,
+          now
+        });
+        maybeNotice(options.logger);
+        void send(event, options).catch(() => {
+        });
+      } catch {
+      }
+    }
+  };
+}
+
 // src/lib/http-error.ts
 function truncate(value, limit) {
   if (value.length <= limit) {
@@ -24441,9 +24842,6 @@ function formatIdentityLine(id, mask) {
   );
 }
 function crossCheckIdentities(args) {
-  if (args.mode === "off") {
-    return { ok: true, level: "ok", message: "" };
-  }
   const pmakTeamId = args.pmak?.teamId;
   const sessionTeamId = args.session?.teamId;
   if (pmakTeamId && sessionTeamId && pmakTeamId !== sessionTeamId) {
@@ -24482,9 +24880,6 @@ function crossCheckIdentities(args) {
   };
 }
 async function runCredentialPreflight(args) {
-  if (args.mode === "off") {
-    return;
-  }
   const mask = args.mask;
   const apiKey = String(args.postmanApiKey || "").trim();
   const accessToken = String(args.postmanAccessToken || "").trim();
@@ -24531,6 +24926,14 @@ async function runCredentialPreflight(args) {
   }
   if (session) {
     args.log.info(formatIdentityLine(session, mask));
+    const consumerType = session.consumerType?.trim();
+    if (consumerType && consumerType.toLowerCase() !== "service_account") {
+      args.log.warning(
+        mask(
+          `postman: deprecation warning - postman-access-token resolved to consumerType ${consumerType}. postman-cs/postman-resolve-service-token-action is the primary CI path for service-account access tokens. The Postman CLI credential store populated by \`postman login\` is a legacy fallback for migration only.`
+        )
+      );
+    }
   } else {
     args.log.warning(
       mask(
@@ -24831,7 +25234,7 @@ function createInternalIntegrationAdapter(options) {
 // src/contracts.ts
 var postmanRepoSyncActionContract = {
   name: "postman-repo-sync-action",
-  description: "Public customer preview contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.",
+  description: "Contract for syncing exported Postman assets into a repository and keeping workspace-link concerns separate from provisioning.",
   defaults: {
     integrationBackend: "bifrost",
     artifactDir: "postman",
@@ -24840,8 +25243,8 @@ var postmanRepoSyncActionContract = {
     specSyncMode: "update",
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,
-    committerName: "Postman CSE",
-    committerEmail: "help@postman.com"
+    committerName: "Postman",
+    committerEmail: "support@postman.com"
   },
   inputs: {
     "generate-ci-workflow": {
@@ -24962,26 +25365,31 @@ var postmanRepoSyncActionContract = {
     "committer-name": {
       description: "Git committer name for sync commits.",
       required: false,
-      default: "Postman CSE"
+      default: "Postman"
     },
     "committer-email": {
       description: "Git committer email for sync commits.",
       required: false,
-      default: "help@postman.com"
+      default: "support@postman.com"
     },
     "postman-api-key": {
       description: "Postman API key used for environment, mock, and monitor operations.",
       required: false
     },
     "postman-access-token": {
-      description: "Postman access token used for Bifrost and system environment association.",
+      description: "Postman access token used for workspace linking, system environment association, and generated API-key creation.",
       required: false
     },
+    "team-id": {
+      description: "Postman team ID resolved by postman-resolve-service-token-action for org-mode integration calls. Falls back to POSTMAN_TEAM_ID when omitted.",
+      required: false,
+      default: ""
+    },
     "credential-preflight": {
-      description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created; off skips the identity probes entirely (the reactive error guidance still applies). Promotion of the default to enforce is planned once the live e2e legs prove both directions.",
+      description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.",
       required: false,
       default: "warn",
-      allowedValues: ["enforce", "warn", "off"]
+      allowedValues: ["enforce", "warn"]
     },
     "github-token": {
       description: "GitHub token used for repo variable persistence and commits.",
@@ -24992,7 +25400,7 @@ var postmanRepoSyncActionContract = {
       required: false
     },
     "org-mode": {
-      description: "Whether the Postman team uses org-mode. When true, x-entity-team-id header is included in Bifrost proxy calls. Non-org teams must omit this header.",
+      description: "Whether the Postman team uses org-mode. When true, x-entity-team-id is included in Postman integration API calls. Non-org teams must omit this header.",
       required: false,
       default: "false"
     },
@@ -25024,8 +25432,14 @@ var postmanRepoSyncActionContract = {
       description: "Optional repo-root-relative path to the local spec file for resources/workflows metadata.",
       required: false
     },
+    "postman-region": {
+      description: "Postman data residency region for public API and Postman CLI calls. One of: us or eu.",
+      required: false,
+      default: "us",
+      allowedValues: ["us", "eu"]
+    },
     "postman-stack": {
-      description: "Postman stack profile.",
+      description: "Postman stack profile. Leave at the default unless Postman support directs otherwise.",
       required: false,
       default: "prod",
       allowedValues: ["prod", "beta"]
@@ -25033,7 +25447,7 @@ var postmanRepoSyncActionContract = {
   },
   outputs: {
     "integration-backend": {
-      description: "Resolved integration backend for the customer preview run."
+      description: "Resolved integration backend for the onboarding run."
     },
     "resolved-current-ref": {
       description: "Resolved push target based on current-ref semantics."
@@ -25063,10 +25477,10 @@ var postmanRepoSyncActionContract = {
   behavior: {
     retainedFromFinalize: [
       "Create or update Postman environments from runtime URLs.",
-      "Associate Postman environments to system environments through Bifrost.",
+      "Associate Postman environments to system environments through Postman integration APIs.",
       "Create mock servers and smoke monitors from generated collections.",
-      "Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `[Baseline] <name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.",
-      "Link the Postman workspace to the repository (GitHub or GitLab) through Bifrost.",
+      "Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `<name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.",
+      "Link the Postman workspace to the repository (GitHub or GitLab) through Postman integration APIs.",
       "Commit synced artifacts and push them back to the current checked out ref."
     ],
     removedFromFinalize: [
@@ -25125,6 +25539,9 @@ async function retry(operation, options = {}) {
 }
 
 // src/lib/postman/postman-assets-client.ts
+function isTransientHttpError(error2) {
+  return error2 instanceof HttpError && (error2.status === 429 || error2.status >= 500);
+}
 var PostmanAssetsClient = class {
   apiKey;
   baseUrl;
@@ -25178,32 +25595,70 @@ var PostmanAssetsClient = class {
       return null;
     }
   }
+  /**
+   * Shared retry policy for environment create/update. Mirrors
+   * requestWithCollectionRetry's backoff and retries only transient 429/5xx.
+   */
+  environmentRetryOptions() {
+    return {
+      maxAttempts: 5,
+      delayMs: 2e3,
+      backoffMultiplier: 2,
+      maxDelayMs: 15e3,
+      ...this.retrySleep ? { sleep: this.retrySleep } : {},
+      shouldRetry: isTransientHttpError
+    };
+  }
+  async listEnvironments(workspaceId) {
+    const response = await this.request(`/environments?workspace=${workspaceId}`);
+    const items = Array.isArray(response?.environments) ? response.environments : [];
+    return items.map((item) => ({
+      name: String(item?.name ?? "").trim(),
+      uid: String(item?.uid ?? "").trim()
+    }));
+  }
   async createEnvironment(workspaceId, name, values) {
-    const response = await this.request(`/environments?workspace=${workspaceId}`, {
-      method: "POST",
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
+    const targetName = name.trim();
+    let attempted = false;
+    return retry(async () => {
+      if (attempted) {
+        const existingUid = (await this.listEnvironments(workspaceId).catch(() => [])).find((environment) => environment.name === targetName)?.uid;
+        if (existingUid) {
+          return existingUid;
         }
-      })
-    });
-    const uid = String(response?.environment?.uid || "").trim();
-    if (!uid) {
-      throw new Error("Environment create did not return a UID");
-    }
-    return uid;
+      }
+      attempted = true;
+      const response = await this.request(`/environments?workspace=${workspaceId}`, {
+        method: "POST",
+        body: JSON.stringify({
+          environment: {
+            name,
+            values
+          }
+        })
+      });
+      const uid = String(
+        response?.environment?.uid || ""
+      ).trim();
+      if (!uid) {
+        throw new Error("Environment create did not return a UID");
+      }
+      return uid;
+    }, this.environmentRetryOptions());
   }
   async updateEnvironment(uid, name, values) {
-    await this.request(`/environments/${uid}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        environment: {
-          name,
-          values
-        }
-      })
-    });
+    await retry(
+      () => this.request(`/environments/${uid}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          environment: {
+            name,
+            values
+          }
+        })
+      }),
+      this.environmentRetryOptions()
+    );
   }
   /**
    * Monitor and mock creation reference a collection that may have been
@@ -25376,7 +25831,7 @@ var PostmanAssetsClient = class {
 };
 
 // src/lib/ssl-validation.ts
-var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
 function decodeBase64Pem(value, label) {
   const normalized = String(value || "").trim();
   if (!normalized) {
@@ -25402,7 +25857,7 @@ function validateCertMaterial(certBase64, keyBase64, passphrase) {
   const keyBuffer = decodeBase64Pem(keyBase64, "ssl-client-key");
   let certificate;
   try {
-    certificate = new import_node_crypto.X509Certificate(certBuffer);
+    certificate = new import_node_crypto2.X509Certificate(certBuffer);
   } catch (error2) {
     throw new Error(
       `Invalid client certificate: ${error2 instanceof Error ? error2.message : String(error2)}`,
@@ -25411,7 +25866,7 @@ function validateCertMaterial(certBase64, keyBase64, passphrase) {
   }
   let privateKey;
   try {
-    privateKey = (0, import_node_crypto.createPrivateKey)({
+    privateKey = (0, import_node_crypto2.createPrivateKey)({
       key: keyBuffer,
       passphrase,
       format: "pem"
@@ -25523,8 +25978,9 @@ function resolveInputs(env = process.env) {
   const systemEnvMap = parseJsonMap(getInput2("system-env-map-json", env) || "{}");
   const environmentUids = parseJsonMap(getInput2("environment-uids-json", env) || "{}");
   const envRuntimeUrls = parseJsonMap(getInput2("env-runtime-urls-json", env) || "{}");
+  const postmanRegion = parsePostmanRegion(getInput2("postman-region", env));
   const postmanStack = parsePostmanStack(getInput2("postman-stack", env));
-  const endpointProfile = resolvePostmanEndpointProfile(postmanStack);
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion);
   return {
     projectName: getInput2("project-name", env),
     workspaceId: getInput2("workspace-id", env),
@@ -25549,8 +26005,8 @@ function resolveInputs(env = process.env) {
     currentRef: getInput2("current-ref", env) || normalizeInputValue(env.GITHUB_REF),
     githubHeadRef: getInput2("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF),
     githubRefName: getInput2("github-ref-name", env) || normalizeInputValue(env.GITHUB_REF_NAME) || normalizeInputValue(repoContext.ref),
-    committerName: getInput2("committer-name", env) || "Postman CSE",
-    committerEmail: getInput2("committer-email", env) || "help@postman.com",
+    committerName: getInput2("committer-name", env) || "Postman",
+    committerEmail: getInput2("committer-email", env) || "support@postman.com",
     postmanApiKey: getInput2("postman-api-key", env),
     postmanAccessToken: getInput2("postman-access-token", env),
     credentialPreflight: parseCredentialPreflight(getInput2("credential-preflight", env)),
@@ -25570,6 +26026,7 @@ function resolveInputs(env = process.env) {
     sslExtraCaCerts: getInput2("ssl-extra-ca-certs", env),
     teamId: getInput2("team-id", env) || normalizeInputValue(env.POSTMAN_TEAM_ID),
     repository: getInput2("repository", env) || normalizeInputValue(env.GITHUB_REPOSITORY) || normalizeInputValue(repoContext.repoSlug),
+    postmanRegion,
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
@@ -25588,6 +26045,7 @@ function buildEnvironmentValues(envName, baseUrl) {
     { key: "AWS_SECRET_NAME", value: `api-credentials-${envName}`, type: "default" }
   ];
 }
+var LEGACY_BASELINE_COLLECTION_PREFIX = "[Baseline]";
 function readResourcesState() {
   try {
     return load((0, import_node_fs.readFileSync)(".postman/resources.yaml", "utf8"));
@@ -25602,6 +26060,12 @@ function findCloudResourceId(map, matcher) {
   const match = Object.entries(map).find(([filePath]) => matcher(filePath));
   return match?.[1];
 }
+function matchesCollectionDirectory(filePath, directoryName) {
+  return normalizeToPosix(filePath).replace(/\/+$/g, "").endsWith(`/collections/${directoryName}`);
+}
+function matchesBaselineCollectionResource(filePath, assetProjectName) {
+  return matchesCollectionDirectory(filePath, assetProjectName) || matchesCollectionDirectory(filePath, `${LEGACY_BASELINE_COLLECTION_PREFIX} ${assetProjectName}`);
+}
 function getEnvironmentUidsFromResources(resourcesState) {
   const cloudEnvironments = resourcesState?.cloudResources?.environments;
   if (!cloudEnvironments) {
@@ -25615,7 +26079,7 @@ function getEnvironmentUidsFromResources(resourcesState) {
   );
 }
 function normalizeToPosix(filePath) {
-  return filePath.split(path7.sep).join("/");
+  return filePath.split(path7.sep).join("/").replace(/\\/g, "/");
 }
 function isOpenApiSpecFile(filePath) {
   if (!(filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml"))) {
@@ -25713,7 +26177,7 @@ function createOutputs(inputs) {
 }
 function readActionInputs(actionCore) {
   const projectName = readInput(actionCore, "project-name", true);
-  const postmanApiKey = readInput(actionCore, "postman-api-key", true);
+  const postmanApiKey = readInput(actionCore, "postman-api-key");
   const postmanAccessToken = readInput(actionCore, "postman-access-token");
   const githubToken = readInput(actionCore, "github-token");
   const ghFallbackToken = readInput(actionCore, "gh-fallback-token");
@@ -25721,7 +26185,7 @@ function readActionInputs(actionCore) {
   const sslClientKey = readInput(actionCore, "ssl-client-key");
   const sslClientPassphrase = readInput(actionCore, "ssl-client-passphrase");
   const sslExtraCaCerts = readInput(actionCore, "ssl-extra-ca-certs");
-  actionCore.setSecret(postmanApiKey);
+  if (postmanApiKey) actionCore.setSecret(postmanApiKey);
   if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
   if (githubToken) actionCore.setSecret(githubToken);
   if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
@@ -25760,8 +26224,8 @@ function readActionInputs(actionCore) {
     INPUT_CURRENT_REF: readInput(actionCore, "current-ref"),
     INPUT_GITHUB_HEAD_REF: readInput(actionCore, "github-head-ref"),
     INPUT_GITHUB_REF_NAME: readInput(actionCore, "github-ref-name"),
-    INPUT_COMMITTER_NAME: readInput(actionCore, "committer-name") || "Postman CSE",
-    INPUT_COMMITTER_EMAIL: readInput(actionCore, "committer-email") || "help@postman.com",
+    INPUT_COMMITTER_NAME: readInput(actionCore, "committer-name") || "Postman",
+    INPUT_COMMITTER_EMAIL: readInput(actionCore, "committer-email") || "support@postman.com",
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, "credential-preflight") || "warn",
@@ -25781,6 +26245,7 @@ function readActionInputs(actionCore) {
     INPUT_SSL_EXTRA_CA_CERTS: sslExtraCaCerts,
     INPUT_TEAM_ID: readInput(actionCore, "team-id") || process.env.POSTMAN_TEAM_ID,
     INPUT_REPOSITORY: readInput(actionCore, "repository") || process.env.GITHUB_REPOSITORY,
+    INPUT_POSTMAN_REGION: readInput(actionCore, "postman-region") || "us",
     INPUT_POSTMAN_STACK: readInput(actionCore, "postman-stack") || "prod",
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
@@ -25883,6 +26348,9 @@ function ensureDir(path8) {
   (0, import_node_fs.mkdirSync)(path8, { recursive: true });
 }
 function getCollectionDirectoryName(kind, projectName) {
+  if (kind === "Baseline") {
+    return projectName;
+  }
   return `[${kind}] ${projectName}`;
 }
 var VOLATILE_KEYS = /* @__PURE__ */ new Set([
@@ -25912,8 +26380,8 @@ function stripVolatileFields(obj) {
   }
   return obj;
 }
-function writeJsonFile(path8, content, normalize2 = false) {
-  const data = normalize2 ? stripVolatileFields(content) : content;
+function writeJsonFile(path8, content, normalize3 = false) {
+  const data = normalize3 ? stripVolatileFields(content) : content;
   (0, import_node_fs.writeFileSync)(path8, JSON.stringify(data, null, 2));
 }
 function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId) {
@@ -26066,7 +26534,8 @@ function renderCiWorkflow(inputs) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
   return renderCiWorkflowTemplate({
-    postmanCliInstallUrl: inputs.postmanCliInstallUrl
+    postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+    postmanRegion: inputs.postmanRegion
   });
 }
 function createRepoSummary(outputs, envUids, pushed) {
@@ -26123,6 +26592,20 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
   };
 }
 async function runRepoSync(inputs, dependencies) {
+  const telemetry = createTelemetryContext({ action: "postman-repo-sync-action", logger: dependencies.core });
+  telemetry.setTeamId(dependencies.teamId);
+  try {
+    const result = await runRepoSyncInner(inputs, dependencies);
+    telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
+    telemetry.emitCompletion("success");
+    return result;
+  } catch (error2) {
+    telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
+    telemetry.emitCompletion("failure");
+    throw error2;
+  }
+}
+async function runRepoSyncInner(inputs, dependencies) {
   const outputs = createOutputs(inputs);
   const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
   const releaseLabel = deriveReleaseLabel(inputs);
@@ -26138,7 +26621,7 @@ async function runRepoSync(inputs, dependencies) {
     }
     const cloudCollections = resourcesState.cloudResources?.collections;
     if (!inputs.baselineCollectionId) {
-      inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Baseline]")) || "";
+      inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || "";
       if (inputs.baselineCollectionId) {
         dependencies.core.info("Resolved baseline-collection-id from .postman/resources.yaml");
       }
@@ -26428,6 +26911,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     secretMasker: masker
   }) : void 0;
   return {
+    teamId: resolved.teamId,
     core: factories.core,
     postman,
     internalIntegration,
