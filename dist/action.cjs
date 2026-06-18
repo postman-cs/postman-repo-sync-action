@@ -23883,13 +23883,17 @@ function validateHttpsInstallUrl(url) {
   }
   return url;
 }
-function renderCiWorkflowTemplate(options = {}) {
-  const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
-  const installUrl = validateHttpsInstallUrl(rawUrl);
-  const postmanRegion = String(options.postmanRegion || "").trim() || "us";
+function resolvePostmanRegion(postmanRegionOption) {
+  const postmanRegion = String(postmanRegionOption || "").trim() || "us";
   if (!["us", "eu"].includes(postmanRegion)) {
     throw new Error("postman-region must be one of: us, eu; got: " + postmanRegion);
   }
+  return postmanRegion;
+}
+function renderCiWorkflowTemplate(options = {}) {
+  const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  const installUrl = validateHttpsInstallUrl(rawUrl);
+  const postmanRegion = resolvePostmanRegion(options.postmanRegion);
   return buildCiWorkflowLines(installUrl, postmanRegion).join("\n");
 }
 function buildCiWorkflowLines(installUrl, postmanRegion) {
@@ -23990,7 +23994,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
   ];
 }
 var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
-function buildAdoCiWorkflowLines(installUrl) {
+function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
   return [
     "name: CI/CD Pipeline",
     "trigger:",
@@ -24013,7 +24017,7 @@ function buildAdoCiWorkflowLines(installUrl) {
     "    displayName: Install Postman CLI",
     "    env:",
     `      POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
-    '  - script: postman login --with-api-key "$POSTMAN_API_KEY"',
+    '  - script: postman login --with-api-key "$POSTMAN_API_KEY"' + (postmanRegion === "eu" ? " --region eu" : ""),
     "    displayName: Login to Postman CLI",
     "    env:",
     "      POSTMAN_API_KEY: $(POSTMAN_API_KEY)",
@@ -24033,6 +24037,9 @@ function buildAdoCiWorkflowLines(installUrl) {
     '      mkdir -p "$(Agent.TempDirectory)/postman-ssl"',
     '      printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.crt"',
     '      printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.key"',
+    `      if [ "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" = '$(POSTMAN_SSL_EXTRA_CA_CERTS_B64)' ]; then`,
+    "        POSTMAN_SSL_EXTRA_CA_CERTS_B64=''",
+    "      fi",
     '      if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
     '        printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/ca.crt"',
     "      fi",
@@ -24043,6 +24050,12 @@ function buildAdoCiWorkflowLines(installUrl) {
     "      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)",
     "      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)",
     "  - script: |",
+    `      if [ "$CI_ENVIRONMENT" = '$(CI_ENVIRONMENT)' ]; then`,
+    "        CI_ENVIRONMENT=''",
+    "      fi",
+    `      if [ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = '$(POSTMAN_SSL_CLIENT_PASSPHRASE)' ]; then`,
+    "        POSTMAN_SSL_CLIENT_PASSPHRASE=''",
+    "      fi",
     '      CMD=(postman collection run "$(POSTMAN_SMOKE_COLLECTION_UID)"',
     '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
     "        --report-events",
@@ -24063,6 +24076,12 @@ function buildAdoCiWorkflowLines(installUrl) {
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
     "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
     "  - script: |",
+    `      if [ "$CI_ENVIRONMENT" = '$(CI_ENVIRONMENT)' ]; then`,
+    "        CI_ENVIRONMENT=''",
+    "      fi",
+    `      if [ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = '$(POSTMAN_SSL_CLIENT_PASSPHRASE)' ]; then`,
+    "        POSTMAN_SSL_CLIENT_PASSPHRASE=''",
+    "      fi",
     '      CMD=(postman collection run "$(POSTMAN_CONTRACT_COLLECTION_UID)"',
     '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
     "        --report-events",
@@ -24088,7 +24107,8 @@ function buildAdoCiWorkflowLines(installUrl) {
 function getCiWorkflowTemplate(provider, options = {}) {
   if (provider === "azure-devops") {
     const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
-    return buildAdoCiWorkflowLines(validateHttpsInstallUrl(rawUrl)).join("\n");
+    const postmanRegion = resolvePostmanRegion(options.postmanRegion);
+    return buildAdoCiWorkflowLines(validateHttpsInstallUrl(rawUrl), postmanRegion).join("\n");
   }
   return renderCiWorkflowTemplate(options);
 }
@@ -26805,7 +26825,8 @@ function renderCiWorkflow(inputs) {
   }
   if (inputs.provider === "azure-devops") {
     return getCiWorkflowTemplate(inputs.provider, {
-      postmanCliInstallUrl: inputs.postmanCliInstallUrl
+      postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+      postmanRegion: inputs.postmanRegion
     });
   }
   return renderCiWorkflowTemplate({

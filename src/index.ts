@@ -1063,7 +1063,8 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
   }
   if (inputs.provider === 'azure-devops') {
     return getCiWorkflowTemplate(inputs.provider, {
-      postmanCliInstallUrl: inputs.postmanCliInstallUrl
+      postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+      postmanRegion: inputs.postmanRegion
     });
   }
   return renderCiWorkflowTemplate({

@@ -213,5 +213,32 @@ describe('renderCiWorkflowTemplate', () => {
       persistCredentials: true
     });
     expect(ciWorkflow).toContain('--env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}"');
+    expect(ciWorkflow).toContain(
+      'if [ "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" = \'$(POSTMAN_SSL_EXTRA_CA_CERTS_B64)\' ]; then'
+    );
+    expect(ciWorkflow).toContain(
+      'if [ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = \'$(POSTMAN_SSL_CLIENT_PASSPHRASE)\' ]; then'
+    );
+    expect(ciWorkflow).toContain('if [ "$CI_ENVIRONMENT" = \'$(CI_ENVIRONMENT)\' ]; then');
+  });
+
+  it('passes the configured Postman region to Azure DevOps CLI login', () => {
+    const ciWorkflow = getCiWorkflowTemplate('azure-devops', { postmanRegion: 'eu' });
+    const parsed = parse(ciWorkflow);
+    const loginStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Login to Postman CLI'
+    );
+
+    expect(loginStep.script).toBe('postman login --with-api-key "$POSTMAN_API_KEY" --region eu');
+
+    const usWorkflow = getCiWorkflowTemplate('azure-devops', { postmanRegion: 'us' });
+    const usLogin = parse(usWorkflow).steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Login to Postman CLI'
+    );
+
+    expect(usLogin.script).toBe('postman login --with-api-key "$POSTMAN_API_KEY"');
+    expect(() => getCiWorkflowTemplate('azure-devops', { postmanRegion: 'ap' })).toThrow(
+      /postman-region/
+    );
   });
 });
