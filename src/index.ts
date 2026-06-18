@@ -52,6 +52,8 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  flowId: string;
+  flowName: string;
   collectionSyncMode: 'refresh' | 'version';
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
@@ -298,6 +300,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     baselineCollectionId: getInput('baseline-collection-id', env),
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
+    flowId: getInput('flow-id', env),
+    flowName: getInput('flow-name', env),
     specId: getInput('spec-id', env),
     specPath: getInput('spec-path', env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
@@ -375,6 +379,7 @@ type PostmanResourcesState = {
   cloudResources?: {
     collections?: CloudResourceMap;
     environments?: CloudResourceMap;
+    flows?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
 };
@@ -586,6 +591,8 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_FLOW_ID: readInput(actionCore, 'flow-id'),
+    INPUT_FLOW_NAME: readInput(actionCore, 'flow-name'),
     INPUT_SPEC_ID: readInput(actionCore, 'spec-id'),
     INPUT_SPEC_PATH: readInput(actionCore, 'spec-path'),
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
@@ -799,10 +806,23 @@ function writeJsonFile(path: string, content: unknown, normalize = false): void 
   writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
+function sanitizePathSegment(value: string): string {
+  return value
+    .trim()
+    .split('')
+    .map((char) => (char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char) ? '-' : char))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .replace(/-+/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+    .slice(0, 120) || 'flow';
+}
+
 function buildResourcesManifest(
   workspaceId: string,
   collectionMap: Record<string, string>,
   envMap: Record<string, string>,
+  flowMap: Record<string, string>,
   artifactDir: string,
   localSpecRefs: string[],
   mappedSpecRef?: string,
@@ -832,6 +852,12 @@ function buildResourcesManifest(
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
+  }
+
+  const flowEntries = Object.entries(flowMap);
+  if (flowEntries.length > 0) {
+    localResources.flows = flowEntries.map(([flowPath]) => flowPath);
+    cloudResources.flows = flowMap;
   }
 
   if (localSpecRefs.length > 0) {
@@ -923,6 +949,7 @@ async function exportArtifacts(
   }
 
   const manifestCollections: Record<string, string> = {};
+  const manifestFlows: Record<string, string> = {};
   const discoveredSpecs = scanLocalSpecReferences();
   const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
 
@@ -962,10 +989,27 @@ async function exportArtifacts(
     );
   }
 
+  if (inputs.flowId) {
+    const flowName = inputs.flowName || `[Smoke] ${inputs.projectName} happy path`;
+    const flowFilePath = `${flowsDir}/${sanitizePathSegment(flowName)}.postman_flow.yaml`;
+    writeFileSync(flowFilePath, dumpYaml({
+      name: flowName,
+      id: inputs.flowId,
+      type: 'native-postman-flow',
+      workspaceId: inputs.workspaceId
+    }, {
+      lineWidth: -1,
+      noRefs: true,
+      sortKeys: false
+    }));
+    manifestFlows[`../${flowFilePath}`] = inputs.flowId;
+  }
+
   writeFileSync('.postman/resources.yaml', buildResourcesManifest(
     inputs.workspaceId,
     manifestCollections,
     envUids,
+    manifestFlows,
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpec?.configRelativePath,

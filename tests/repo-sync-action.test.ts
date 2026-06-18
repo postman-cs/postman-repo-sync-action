@@ -28,6 +28,7 @@ import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-in
 type ResourcesYamlShape = {
   cloudResources?: {
     collections?: Record<string, string>;
+    flows?: Record<string, string>;
   };
 };
 
@@ -38,6 +39,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    flowId: '',
+    flowName: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
     releaseLabel: undefined,
@@ -536,6 +539,53 @@ describe('repo sync action', () => {
       '../postman/collections/core-payments': 'col-baseline-existing',
       '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
       '../postman/collections/[Contract] core-payments': 'col-contract-existing'
+    });
+  });
+
+  it('writes native Flow state into artifacts and resources.yaml when flow-id is supplied', async () => {
+    const postman = {
+      createEnvironment: vi.fn(),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: [],
+        generateCiWorkflow: false,
+        repoWriteMode: 'none',
+        flowId: 'flow-123',
+        flowName: '[Smoke] Core Payments happy path'
+      }),
+      {
+        core: createCoreStub().core,
+        postman
+      }
+    );
+
+    const flowYaml = loadYaml(
+      readFileSync('postman/flows/[Smoke] Core Payments happy path.postman_flow.yaml', 'utf8')
+    ) as Record<string, unknown>;
+    const resourcesYaml = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+
+    expect(flowYaml).toMatchObject({
+      name: '[Smoke] Core Payments happy path',
+      id: 'flow-123',
+      type: 'native-postman-flow',
+      workspaceId: 'ws-123'
+    });
+    expect(resourcesYaml.cloudResources?.flows).toEqual({
+      '../postman/flows/[Smoke] Core Payments happy path.postman_flow.yaml': 'flow-123'
     });
   });
 

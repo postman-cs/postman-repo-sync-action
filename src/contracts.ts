@@ -100,6 +100,14 @@ export const postmanRepoSyncActionContract: {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
     },
+    'flow-id': {
+      description: 'Native Postman Flow ID to persist into .postman/resources.yaml.',
+      required: false
+    },
+    'flow-name': {
+      description: 'Native Postman Flow name used for the exported flow metadata artifact.',
+      required: false
+    },
     'collection-sync-mode': {
       description: 'Collection sync lifecycle mode (refresh or version).',
       required: false,

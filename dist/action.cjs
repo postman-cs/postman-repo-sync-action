@@ -25282,6 +25282,14 @@ var postmanRepoSyncActionContract = {
       description: "Contract collection ID used for exported artifacts.",
       required: false
     },
+    "flow-id": {
+      description: "Native Postman Flow ID to persist into .postman/resources.yaml.",
+      required: false
+    },
+    "flow-name": {
+      description: "Native Postman Flow name used for the exported flow metadata artifact.",
+      required: false
+    },
     "collection-sync-mode": {
       description: "Collection sync lifecycle mode (refresh or version).",
       required: false,
@@ -25987,6 +25995,8 @@ function resolveInputs(env = process.env) {
     baselineCollectionId: getInput2("baseline-collection-id", env),
     smokeCollectionId: getInput2("smoke-collection-id", env),
     contractCollectionId: getInput2("contract-collection-id", env),
+    flowId: getInput2("flow-id", env),
+    flowName: getInput2("flow-name", env),
     specId: getInput2("spec-id", env),
     specPath: getInput2("spec-path", env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput2("collection-sync-mode", env) || "refresh"),
@@ -26206,6 +26216,8 @@ function readActionInputs(actionCore) {
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, "baseline-collection-id"),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, "smoke-collection-id"),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, "contract-collection-id"),
+    INPUT_FLOW_ID: readInput(actionCore, "flow-id"),
+    INPUT_FLOW_NAME: readInput(actionCore, "flow-name"),
     INPUT_SPEC_ID: readInput(actionCore, "spec-id"),
     INPUT_SPEC_PATH: readInput(actionCore, "spec-path"),
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, "collection-sync-mode") || "refresh",
@@ -26384,7 +26396,10 @@ function writeJsonFile(path8, content, normalize3 = false) {
   const data = normalize3 ? stripVolatileFields(content) : content;
   (0, import_node_fs.writeFileSync)(path8, JSON.stringify(data, null, 2));
 }
-function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId) {
+function sanitizePathSegment2(value) {
+  return value.trim().split("").map((char) => char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char) ? "-" : char).join("").replace(/\s+/g, " ").replace(/-+/g, "-").replace(/^[.\s-]+|[.\s-]+$/g, "").slice(0, 120) || "flow";
+}
+function buildResourcesManifest(workspaceId, collectionMap, envMap, flowMap, artifactDir, localSpecRefs, mappedSpecRef, specId) {
   const manifest = {
     workspace: { id: workspaceId }
   };
@@ -26404,6 +26419,11 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir,
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
+  }
+  const flowEntries = Object.entries(flowMap);
+  if (flowEntries.length > 0) {
+    localResources.flows = flowEntries.map(([flowPath]) => flowPath);
+    cloudResources.flows = flowMap;
   }
   if (localSpecRefs.length > 0) {
     localResources.specs = localSpecRefs;
@@ -26477,6 +26497,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
     ensureDir(".github/workflows");
   }
   const manifestCollections = {};
+  const manifestFlows = {};
   const discoveredSpecs = scanLocalSpecReferences();
   const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
   if (inputs.baselineCollectionId) {
@@ -26510,10 +26531,26 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
       true
     );
   }
+  if (inputs.flowId) {
+    const flowName = inputs.flowName || `[Smoke] ${inputs.projectName} happy path`;
+    const flowFilePath = `${flowsDir}/${sanitizePathSegment2(flowName)}.postman_flow.yaml`;
+    (0, import_node_fs.writeFileSync)(flowFilePath, dump({
+      name: flowName,
+      id: inputs.flowId,
+      type: "native-postman-flow",
+      workspaceId: inputs.workspaceId
+    }, {
+      lineWidth: -1,
+      noRefs: true,
+      sortKeys: false
+    }));
+    manifestFlows[`../${flowFilePath}`] = inputs.flowId;
+  }
   (0, import_node_fs.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
     inputs.workspaceId,
     manifestCollections,
     envUids,
+    manifestFlows,
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpec?.configRelativePath,
