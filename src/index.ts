@@ -261,12 +261,22 @@ function normalizeReleaseLabel(value: string): string {
   return cleaned;
 }
 
-function deriveReleaseLabel(inputs: Pick<ResolvedInputs, 'releaseLabel' | 'githubRefName'>): string {
+function deriveReleaseLabel(
+  inputs: Pick<
+    ResolvedInputs,
+    'currentRef' | 'githubHeadRef' | 'githubRefName' | 'releaseLabel'
+  >
+): string {
   const explicit = normalizeReleaseLabel(inputs.releaseLabel || '');
   if (explicit) {
     return explicit;
   }
-  return normalizeReleaseLabel(inputs.githubRefName);
+  return normalizeReleaseLabel(resolveCurrentRef({
+    currentRef: inputs.currentRef,
+    githubHeadRef: inputs.githubHeadRef,
+    githubRefName: inputs.githubRefName,
+    repoWriteMode: 'commit-and-push'
+  }));
 }
 
 function createAssetProjectName(

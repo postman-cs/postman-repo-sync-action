@@ -124,7 +124,7 @@ describe('postman-repo-sync-action contract', () => {
   it('resolves Azure DevOps provider defaults from pipeline environment', () => {
     const inputs = resolveInputs({
       INPUT_PROJECT_NAME: 'core-payments',
-      BUILD_REPOSITORY_URI: 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo',
+      BUILD_REPOSITORY_URI: 'git@ssh.dev.azure.com:v3/postman/CSE/repo-sync-demo',
       BUILD_REPOSITORY_NAME: 'repo-sync-demo',
       BUILD_SOURCEBRANCH: 'refs/heads/feature/ado-sync',
       BUILD_SOURCEBRANCHNAME: 'ado-sync',

@@ -23996,7 +23996,6 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
 var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
 function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
   return [
-    "name: CI/CD Pipeline",
     "trigger:",
     "  branches:",
     "    include:",
@@ -24007,7 +24006,7 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     "    branches:",
     "      include:",
     "        - main",
-    "    always: false",
+    "    always: true",
     "pool:",
     "  vmImage: ubuntu-latest",
     "steps:",
@@ -24037,9 +24036,16 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     '      mkdir -p "$(Agent.TempDirectory)/postman-ssl"',
     '      printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.crt"',
     '      printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.key"',
-    `      if [ "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" = '$(POSTMAN_SSL_EXTRA_CA_CERTS_B64)' ]; then`,
-    "        POSTMAN_SSL_EXTRA_CA_CERTS_B64=''",
-    "      fi",
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var POSTMAN_SSL_EXTRA_CA_CERTS_B64",
     '      if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
     '        printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/ca.crt"',
     "      fi",
@@ -24050,14 +24056,19 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     "      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)",
     "      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)",
     "  - script: |",
-    `      if [ "$CI_ENVIRONMENT" = '$(CI_ENVIRONMENT)' ]; then`,
-    "        CI_ENVIRONMENT=''",
-    "      fi",
-    `      if [ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = '$(POSTMAN_SSL_CLIENT_PASSPHRASE)' ]; then`,
-    "        POSTMAN_SSL_CLIENT_PASSPHRASE=''",
-    "      fi",
-    '      CMD=(postman collection run "$(POSTMAN_SMOKE_COLLECTION_UID)"',
-    '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var CI_ENVIRONMENT",
+    "      normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE",
+    '      CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
+    '        -e "$POSTMAN_ENVIRONMENT_UID"',
     "        --report-events",
     '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
     '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
@@ -24076,14 +24087,19 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
     "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
     "  - script: |",
-    `      if [ "$CI_ENVIRONMENT" = '$(CI_ENVIRONMENT)' ]; then`,
-    "        CI_ENVIRONMENT=''",
-    "      fi",
-    `      if [ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = '$(POSTMAN_SSL_CLIENT_PASSPHRASE)' ]; then`,
-    "        POSTMAN_SSL_CLIENT_PASSPHRASE=''",
-    "      fi",
-    '      CMD=(postman collection run "$(POSTMAN_CONTRACT_COLLECTION_UID)"',
-    '        -e "$(POSTMAN_ENVIRONMENT_UID)"',
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var CI_ENVIRONMENT",
+    "      normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE",
+    '      CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
+    '        -e "$POSTMAN_ENVIRONMENT_UID"',
     "        --report-events",
     '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
     '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
@@ -24235,18 +24251,41 @@ function buildPushTokenOrder(options) {
 function parseHttpsRemote(rawUrl) {
   const trimmed = String(rawUrl || "").trim();
   const sshMatch = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
-  const normalized = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : trimmed;
+  let normalized = sshMatch ? normalizeSshRemote(sshMatch[1], sshMatch[2]) : trimmed;
   const url = new URL(normalized);
-  url.username = "";
-  url.password = "";
-  url.hash = "";
-  return url;
+  if (url.hostname === "ssh.dev.azure.com") {
+    normalized = normalizeAzureReposSshPath(url.pathname.replace(/^\/+/, ""));
+  }
+  const parsed = new URL(normalized);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.hash = "";
+  return parsed;
+}
+function normalizeSshRemote(host, remotePath) {
+  if (host === "ssh.dev.azure.com") {
+    return normalizeAzureReposSshPath(remotePath);
+  }
+  return `https://${host}/${remotePath}`;
+}
+function normalizeAzureReposSshPath(remotePath) {
+  const segments = remotePath.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "v3") {
+    return `https://ssh.dev.azure.com/${remotePath}`;
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join("/")}`;
+}
+function normalizeRemotePathname(pathname) {
+  return pathname.replace(/\/+$/g, "");
 }
 function withoutGitSuffix(pathname) {
-  return pathname.endsWith(".git") ? pathname.slice(0, -4) : pathname;
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith(".git") ? normalized.slice(0, -4) : normalized;
 }
 function withGitSuffix(pathname) {
-  return pathname.endsWith(".git") ? pathname : `${pathname}.git`;
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith(".git") ? normalized : `${normalized}.git`;
 }
 function formatUrl(url, pathname = url.pathname) {
   return `${url.protocol}//${url.host}${pathname}${url.search}`;
@@ -24454,9 +24493,30 @@ function normalizeRepoUrl(url) {
   if (sshMatch) {
     const host = sshMatch[1];
     const path9 = sshMatch[2];
+    if (host === "ssh.dev.azure.com") {
+      return normalizeAzureReposSshPath2(path9);
+    }
     return `https://${host}/${path9}`;
   }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.hostname === "ssh.dev.azure.com") {
+      return normalizeAzureReposSshPath2(parsed.pathname.replace(/^\/+/, ""));
+    }
+  } catch {
+  }
   return raw.replace(/\.git$/, "");
+}
+function normalizeAzureReposSshPath2(remotePath) {
+  const segments = remotePath.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "v3") {
+    return `https://ssh.dev.azure.com/${remotePath}`.replace(/\.git$/, "");
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join("/")}`.replace(
+    /\.git$/,
+    ""
+  );
 }
 function parseProvider(explicitProvider, repoUrl, env) {
   const explicit = normalize(explicitProvider)?.toLowerCase();
@@ -26200,7 +26260,12 @@ function deriveReleaseLabel(inputs) {
   if (explicit) {
     return explicit;
   }
-  return normalizeReleaseLabel(inputs.githubRefName);
+  return normalizeReleaseLabel(resolveCurrentRef({
+    currentRef: inputs.currentRef,
+    githubHeadRef: inputs.githubHeadRef,
+    githubRefName: inputs.githubRefName,
+    repoWriteMode: "commit-and-push"
+  }));
 }
 function createAssetProjectName(inputs, releaseLabel) {
   if ((inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version") && releaseLabel) {

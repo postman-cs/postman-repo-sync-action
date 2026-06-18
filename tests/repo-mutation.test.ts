@@ -190,6 +190,44 @@ describe('repo mutation helpers', () => {
     expect(decodeURIComponent(adoUrl.password)).toBe('ado token');
     expect(adoUrl.host).toBe('dev.azure.com');
     expect(adoUrl.pathname).toBe('/postman/CSE/_git/repo-sync-demo');
+
+    const adoSshUrl = new URL(
+      buildAuthenticatedRemoteUrl(
+        'azure-devops',
+        'unused/repo',
+        'ado token',
+        'git@ssh.dev.azure.com:v3/postman/CSE/repo-sync-demo'
+      )
+    );
+    expect(adoSshUrl.protocol).toBe('https:');
+    expect(adoSshUrl.username).toBe('anything');
+    expect(decodeURIComponent(adoSshUrl.password)).toBe('ado token');
+    expect(adoSshUrl.host).toBe('dev.azure.com');
+    expect(adoSshUrl.pathname).toBe('/postman/CSE/_git/repo-sync-demo');
+  });
+
+  it('normalizes trailing slashes before adding .git to token remotes', () => {
+    expect(
+      new URL(
+        buildAuthenticatedRemoteUrl(
+          'github',
+          'unused/repo',
+          'github-token',
+          'https://github.com/postman-cs/repo-sync-demo/'
+        )
+      ).pathname
+    ).toBe('/postman-cs/repo-sync-demo.git');
+
+    expect(
+      new URL(
+        buildAuthenticatedRemoteUrl(
+          'gitlab',
+          'unused/repo',
+          'gitlab-token',
+          'https://gitlab.com/postman-cs/repo-sync-demo.git/'
+        )
+      ).pathname
+    ).toBe('/postman-cs/repo-sync-demo.git');
   });
 
   it('resolves the current ref with branch-safe semantics', () => {

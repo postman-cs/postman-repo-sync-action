@@ -680,7 +680,7 @@ describe('repo sync action', () => {
     );
   });
 
-  it('creates release-labeled collection directories for versioned exports', async () => {
+  it('derives release-labeled collection directories from full branch refs', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -706,7 +706,8 @@ describe('repo sync action', () => {
         environments: ['prod'],
         generateCiWorkflow: false,
         collectionSyncMode: 'version',
-        releaseLabel: 'release-2026-03'
+        currentRef: 'refs/heads/release/customer-onboarding',
+        githubRefName: 'customer-onboarding'
       }),
       {
         core: createCoreStub().core,
@@ -730,13 +731,17 @@ describe('repo sync action', () => {
     );
 
     expect(
-      existsSync('postman/collections/core-payments release-2026-03/collection.yaml')
+      existsSync('postman/collections/core-payments release-customer-onboarding/collection.yaml')
     ).toBe(true);
     expect(
-      existsSync('postman/collections/[Smoke] core-payments release-2026-03/collection.yaml')
+      existsSync(
+        'postman/collections/[Smoke] core-payments release-customer-onboarding/collection.yaml'
+      )
     ).toBe(true);
     expect(
-      existsSync('postman/collections/[Contract] core-payments release-2026-03/collection.yaml')
+      existsSync(
+        'postman/collections/[Contract] core-payments release-customer-onboarding/collection.yaml'
+      )
     ).toBe(true);
   });
 

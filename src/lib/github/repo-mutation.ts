@@ -75,20 +75,46 @@ export function buildPushTokenOrder(
 function parseHttpsRemote(rawUrl: string): URL {
   const trimmed = String(rawUrl || '').trim();
   const sshMatch = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
-  const normalized = sshMatch ? `https://${sshMatch[1]}/${sshMatch[2]}` : trimmed;
+  let normalized = sshMatch ? normalizeSshRemote(sshMatch[1], sshMatch[2]) : trimmed;
   const url = new URL(normalized);
-  url.username = '';
-  url.password = '';
-  url.hash = '';
-  return url;
+  if (url.hostname === 'ssh.dev.azure.com') {
+    normalized = normalizeAzureReposSshPath(url.pathname.replace(/^\/+/, ''));
+  }
+  const parsed = new URL(normalized);
+  parsed.username = '';
+  parsed.password = '';
+  parsed.hash = '';
+  return parsed;
+}
+
+function normalizeSshRemote(host: string, remotePath: string): string {
+  if (host === 'ssh.dev.azure.com') {
+    return normalizeAzureReposSshPath(remotePath);
+  }
+  return `https://${host}/${remotePath}`;
+}
+
+function normalizeAzureReposSshPath(remotePath: string): string {
+  const segments = remotePath.split('/').filter(Boolean);
+  if (segments.length < 4 || segments[0] !== 'v3') {
+    return `https://ssh.dev.azure.com/${remotePath}`;
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join('/')}`;
+}
+
+function normalizeRemotePathname(pathname: string): string {
+  return pathname.replace(/\/+$/g, '');
 }
 
 function withoutGitSuffix(pathname: string): string {
-  return pathname.endsWith('.git') ? pathname.slice(0, -4) : pathname;
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith('.git') ? normalized.slice(0, -4) : normalized;
 }
 
 function withGitSuffix(pathname: string): string {
-  return pathname.endsWith('.git') ? pathname : `${pathname}.git`;
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith('.git') ? normalized : `${normalized}.git`;
 }
 
 function formatUrl(url: URL, pathname = url.pathname): string {
