@@ -12,7 +12,7 @@ jobs:
     name: Postman API Contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Verify GET /me
         env:
           PMAK: ${{ secrets.SMOKE_ORG_API_KEY }}
