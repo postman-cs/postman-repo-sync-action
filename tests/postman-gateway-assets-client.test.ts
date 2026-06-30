@@ -41,6 +41,23 @@ function buildClient(fetchImpl: typeof fetch, opts: { apiKey?: string; accessTok
 }
 
 describe('PostmanGatewayAssetsClient', () => {
+  // owner + 5-part uuid = 6 hyphen segments (see data/collections uid-helper)
+  const PUBLIC_UID = '10490519-12345678-abcd-ef01-2345-678901234567';
+  const MODEL_ID = '12345678-abcd-ef01-2345-678901234567';
+
+  it('createMock normalizes a public collection uid to model id on the wire', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' })
+    );
+    const { assets } = buildClient(fetchImpl);
+
+    await assets.createMock('ws-1', 'm', PUBLIC_UID, PUBLIC_UID);
+
+    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    expect((env.body as Record<string, unknown>).collection).toBe(MODEL_ID);
+    expect((env.body as Record<string, unknown>).environment).toBe(MODEL_ID);
+  });
+
   it('createMock sends the live-probed bare body via the mock service and parses id/url', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1' })
@@ -71,6 +88,46 @@ describe('PostmanGatewayAssetsClient', () => {
       { uid: 'm1', name: 'a', collection: 'col-1', mockUrl: 'https://m1.mock', environment: '' }
     ]);
     expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe('/mocks?workspace=ws-1');
+  });
+
+  it('createMonitor normalizes a public collection uid to model id in collection.id', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ meta: { action: 'create' }, data: { id: 'mon-uuid', name: 'mon' } })
+    );
+    const { assets } = buildClient(fetchImpl);
+
+    await assets.createMonitor('ws-1', 'mon', PUBLIC_UID, PUBLIC_UID, '0 5 * * 1');
+
+    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    expect(env.body).toEqual({
+      name: 'mon',
+      type: 'collection-based',
+      collection: { id: MODEL_ID },
+      schedule: { cronPattern: '0 5 * * 1', timeZone: 'UTC' },
+      environment: { id: MODEL_ID }
+    });
+  });
+
+  it('findMockByCollection matches when list holds model id and caller passes public uid', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse([{ id: 'm1', name: 'a', collection: MODEL_ID, url: 'https://m1.mock' }])
+    );
+    const { assets } = buildClient(fetchImpl);
+    await expect(assets.findMockByCollection(PUBLIC_UID)).resolves.toEqual({
+      uid: 'm1',
+      mockUrl: 'https://m1.mock'
+    });
+  });
+
+  it('findMonitorByCollection matches when list holds model id and caller passes public uid', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ data: [{ id: 'mon1', name: 'm', active: true, collection: { id: MODEL_ID } }] })
+    );
+    const { assets } = buildClient(fetchImpl);
+    await expect(assets.findMonitorByCollection(PUBLIC_UID)).resolves.toEqual({
+      uid: 'mon1',
+      name: 'm'
+    });
   });
 
   it('createMonitor sends the monitorsV2 schema (collection object + cronPattern/timeZone) and parses data.id', async () => {

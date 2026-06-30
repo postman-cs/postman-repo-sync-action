@@ -1,121 +1,372 @@
 /**
- * Live WRITE probe for the gateway mock/monitor services: locks the request
- * path + body shape and the response envelope for create/run/delete so the
- * PostmanGatewayAssetsClient can parse them. Creates one mock and one monitor,
- * captures the exact response JSON, then deletes both. Sandbox-only (team
- * 10490519, wipeable). Run:
+ * Live WRITE probe for gateway mock + monitor services against the same path
+ * e2e uses: mint access token → disposable workspace → spec upload → gateway
+ * collection generation → sync env import → PostmanGatewayAssetsClient
+ * createMock/createMonitor (public uid in, model id on the wire) → teardown.
+ *
+ * Unlike the old probe, this does NOT bind to pre-existing workspace/collection
+ * list entries — it creates a fresh spec-generated collection so ACS permission
+ * + id-space behavior matches bootstrap → repo-sync e2e.
+ *
+ * Sandbox-only (team 10490519, wipeable). Run:
  *   set -a && source ../../.env && set +a
  *   POSTMAN_API_KEY="$POSTMAN_E2E_API_KEY_NON_ORG_MODE" \
  *     node --experimental-strip-types scripts/live-write-probe.ts
  */
-const API = 'https://api.getpostman.com';
-const BIFROST = 'https://bifrost-premium-https-v4.gw.postman.com';
+import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
+import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
+import { PostmanGatewayAssetsClient } from '../src/lib/postman/postman-gateway-assets-client.js';
+import { POSTMAN_ENDPOINT_PROFILES } from '../src/lib/postman/base-urls.js';
+import { HttpError } from '../src/lib/http-error.js';
 
-async function mint(apiKey: string): Promise<string> {
-  const r = await fetch(`${API}/service-account-tokens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-    body: JSON.stringify({ apiKey })
-  });
-  if (!r.ok) throw new Error(`mint failed ${r.status}`);
-  const p = (await r.json()) as Record<string, unknown>;
-  const direct = typeof p.access_token === 'string' ? p.access_token : '';
-  const session = p.session && typeof p.session === 'object'
-    ? (p.session as Record<string, unknown>).token : undefined;
-  const t = direct || (typeof session === 'string' ? session : '');
-  if (!t) throw new Error('no token in mint response');
-  return t;
+const API = POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl;
+
+type JsonRecord = Record<string, unknown>;
+
+function snippet(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return String(text ?? '').slice(0, 240).replace(/\s+/g, ' ');
 }
 
-async function gw(
-  token: string, teamId: string, service: string, method: string, path: string, body?: unknown
-): Promise<{ status: number; json: unknown }> {
-  const r = await fetch(`${BIFROST}/ws/proxy`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-access-token': token, ...(teamId ? { 'x-entity-team-id': teamId } : {}) },
-    body: JSON.stringify({ service, method, path, ...(body !== undefined ? { body } : {}) })
-  });
-  const text = await r.text();
-  let json: unknown;
-  try { json = JSON.parse(text); } catch { json = text.slice(0, 300); }
-  return { status: r.status, json };
+/** Public uid (6 hyphen groups) → bare model id (5 groups); mirrors PostmanGatewayAssetsClient. */
+function toModelId(uid: string): string {
+  const trimmed = String(uid ?? '').trim();
+  const parts = trimmed.split('-');
+  return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
 }
 
-function show(label: string, res: { status: number; json: unknown }): void {
-  console.log(`\n[${res.status}] ${label}\n${JSON.stringify(res.json, null, 2).slice(0, 900)}`);
-}
-
-async function main(): Promise<void> {
-  const apiKey = process.env.POSTMAN_API_KEY || process.env.POSTMAN_E2E_API_KEY_NON_ORG_MODE || '';
-  if (!apiKey) { console.log('[skip] no key'); return; }
-  const token = await mint(apiKey);
-  const me = await (await fetch(`${API}/me`, { headers: { 'X-Api-Key': apiKey } })).json() as Record<string, unknown>;
-  const teamId = String((me.user as Record<string, unknown>)?.teamId ?? '');
-  const wsResp = await (await fetch(`${API}/workspaces`, { headers: { 'X-Api-Key': apiKey } })).json() as Record<string, unknown>;
-  const workspaces = Array.isArray(wsResp.workspaces) ? wsResp.workspaces : [];
-  const wsId = String((workspaces[0] as Record<string, unknown>)?.id ?? '');
-  const colResp = await (await fetch(`${API}/collections?workspace=${wsId}`, { headers: { 'X-Api-Key': apiKey } })).json() as Record<string, unknown>;
-  const collections = Array.isArray(colResp.collections) ? colResp.collections : [];
-  const colUid = String((collections[0] as Record<string, unknown>)?.uid ?? '');
-  console.log(`[setup] team ${teamId} ws ${wsId} col ${colUid || '<none>'}`);
-  if (!colUid) { console.log('[skip] no collection to bind'); return; }
-
-  // --- MOCK create / list / delete ---
-  const mockName = `probe-mock-${teamId}`;
-  const mockCreate = await gw(token, teamId, 'mock', 'post', `/mocks?workspace=${wsId}`, {
-    mock: { name: mockName, collection: colUid, private: false }
-  });
-  show('mock CREATE (body {mock:{...}})', mockCreate);
-  // try the bare-body variant only if wrapped failed
-  let mockUid = extractUid(mockCreate.json);
-  if (!mockUid) {
-    const alt = await gw(token, teamId, 'mock', 'post', `/mocks?workspace=${wsId}`, {
-      name: mockName, collection: colUid, private: false
-    });
-    show('mock CREATE (bare body)', alt);
-    mockUid = extractUid(alt.json);
-  }
-  const mockList = await gw(token, teamId, 'mock', 'get', `/mocks?workspace=${wsId}`);
-  show('mock LIST', mockList);
-  if (mockUid) {
-    show('mock DELETE', await gw(token, teamId, 'mock', 'delete', `/mocks/${mockUid}`));
-  }
-
-  // --- MONITOR create / list / run / delete ---
-  const monName = `probe-mon-${teamId}`;
-  const monCreate = await gw(token, teamId, 'monitorsV2', 'post', `/monitors?workspace=${wsId}`, {
-    monitor: { name: monName, collection: colUid, schedule: { cron: '0 0 * * 0', timezone: 'UTC' } }
-  });
-  show('monitor CREATE (body {monitor:{...}})', monCreate);
-  let monUid = extractUid(monCreate.json);
-  if (!monUid) {
-    const alt = await gw(token, teamId, 'monitorsV2', 'post', `/monitors?workspace=${wsId}`, {
-      name: monName, collection: colUid, schedule: { cron: '0 0 * * 0', timezone: 'UTC' }
-    });
-    show('monitor CREATE (bare body)', alt);
-    monUid = extractUid(alt.json);
-  }
-  const monList = await gw(token, teamId, 'monitorsV2', 'get', `/monitors?workspace=${wsId}`);
-  show('monitor LIST', monList);
-  if (monUid) {
-    show('monitor RUN', await gw(token, teamId, 'monitorsV2', 'post', `/monitors/${monUid}/run`));
-    show('monitor DELETE', await gw(token, teamId, 'monitorsV2', 'delete', `/monitors/${monUid}`));
-  }
-}
-
-function extractUid(json: unknown): string {
-  if (!json || typeof json !== 'object') return '';
-  const o = json as Record<string, unknown>;
-  const data = (o.data && typeof o.data === 'object') ? o.data as Record<string, unknown> : undefined;
-  const mock = (o.mock && typeof o.mock === 'object') ? o.mock as Record<string, unknown> : undefined;
-  const mon = (o.monitor && typeof o.monitor === 'object') ? o.monitor as Record<string, unknown> : undefined;
-  for (const rec of [data, mock, mon, o]) {
-    if (rec) {
-      const uid = rec.uid ?? rec.id;
-      if (typeof uid === 'string' && uid.trim()) return uid.trim();
-    }
+function resolveCollectionUid(entries: JsonRecord[]): string {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const uid = String(
+      entry?.collection ?? entry?.collectionId ?? entry?.id ?? entry?.uid ?? ''
+    ).trim();
+    if (uid) return uid;
   }
   return '';
 }
 
-main().catch((e) => { console.error(e instanceof Error ? e.stack : String(e)); process.exitCode = 1; });
+const SPEC_CONTENT = [
+  'openapi: 3.0.3',
+  'info:',
+  '  title: Write Probe API',
+  '  version: 1.0.0',
+  'paths:',
+  '  /ping:',
+  '    get:',
+  '      summary: Ping',
+  '      operationId: ping',
+  '      responses:',
+  "        '200':",
+  '          description: OK'
+].join('\n');
+
+async function gwRaw(
+  gateway: AccessTokenGatewayClient,
+  service: string,
+  method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+  path: string,
+  body?: unknown
+): Promise<{ status: number; json: JsonRecord | null; text: string }> {
+  const response = await gateway.request({ service, method, path, ...(body !== undefined ? { body } : {}) });
+  const text = await response.text().catch(() => '');
+  let json: JsonRecord | null;
+  try {
+    json = text.trim() ? (JSON.parse(text) as JsonRecord) : null;
+  } catch {
+    json = null;
+  }
+  return { status: response.status, json, text };
+}
+
+async function deleteWorkspace(apiKey: string, workspaceId: string): Promise<void> {
+  try {
+    const r = await fetch(`${API}/workspaces/${workspaceId}`, {
+      method: 'DELETE',
+      headers: { 'X-Api-Key': apiKey }
+    });
+    console.log(`  [teardown] DELETE /workspaces/${workspaceId} -> ${r.status}`);
+  } catch (error) {
+    console.log(
+      `  [teardown] workspace ${workspaceId} delete failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+async function main(): Promise<void> {
+  const apiKey = process.env.POSTMAN_API_KEY || process.env.POSTMAN_E2E_API_KEY_NON_ORG_MODE || '';
+  if (!apiKey) {
+    console.log('[skip] No POSTMAN_API_KEY / POSTMAN_E2E_API_KEY_NON_ORG_MODE set; skipping write probe.');
+    return;
+  }
+
+  const provider = new AccessTokenProvider({ apiKey, apiBaseUrl: API });
+  await provider.refresh();
+  console.log('[setup] minted access token');
+
+  const gateway = new AccessTokenGatewayClient({ tokenProvider: provider });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const workspaceName = `write-probe-${stamp}`;
+
+  let workspaceId: string;
+  let publicCollectionUid: string;
+  let mockUid = '';
+  let monitorUid = '';
+  const createdWorkspaces = new Set<string>();
+  let failed = false;
+
+  const fail = (label: string, detail: string): void => {
+    failed = true;
+    console.error(`[FAIL] ${label}: ${detail}`);
+  };
+
+  try {
+    console.log('\n== setup: disposable workspace ==');
+    const wsCreate = await gwRaw(gateway, 'workspaces', 'post', '/workspaces', {
+      name: workspaceName,
+      visibilityStatus: 'personal'
+    });
+    workspaceId = String((wsCreate.json?.data as JsonRecord | undefined)?.id ?? wsCreate.json?.id ?? '').trim();
+    if (!workspaceId) {
+      fail('workspace create', `status ${wsCreate.status} :: ${snippet(wsCreate.text)}`);
+      return;
+    }
+    createdWorkspaces.add(workspaceId);
+    console.log(`[setup] workspace ${workspaceId}`);
+
+    const vis = await gwRaw(gateway, 'workspaces', 'put', `/workspaces/${workspaceId}/visibility`, {
+      visibilityStatus: 'team'
+    });
+    if (vis.status >= 400) {
+      fail('workspace visibility', `status ${vis.status} :: ${snippet(vis.text)}`);
+      return;
+    }
+
+    console.log('\n== setup: spec + gateway collection generation (e2e path) ==');
+    const specCreate = await gwRaw(
+      gateway,
+      'specification',
+      'post',
+      `/specifications?containerType=workspace&containerId=${workspaceId}`,
+      {
+        name: 'Write Probe API',
+        type: 'OPENAPI:3.0',
+        files: [{ path: 'index.yaml', content: SPEC_CONTENT, type: 'ROOT' }]
+      }
+    );
+    const specId = String((specCreate.json?.data as JsonRecord | undefined)?.id ?? specCreate.json?.id ?? '').trim();
+    if (!specId) {
+      fail('spec create', `status ${specCreate.status} :: ${snippet(specCreate.text)}`);
+      return;
+    }
+    console.log(`[setup] spec ${specId}`);
+
+    const gen = await gwRaw(gateway, 'specification', 'post', `/specifications/${specId}/collections`, {
+      name: 'Write Probe Collection',
+      options: { requestNameSource: 'Fallback', folderStrategy: 'Tags' }
+    });
+    const taskId = String((gen.json?.data as JsonRecord | undefined)?.taskId ?? '').trim();
+    console.log(`  [generate taskId] ${taskId || '<none>'} (status ${gen.status})`);
+
+    if (taskId) {
+      for (let i = 0; i < 30; i += 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const task = await gateway.requestJson<JsonRecord>({
+          service: 'specification',
+          method: 'get',
+          path: '/tasks',
+          query: { entityId: specId, entityType: 'specification', type: 'collection-generation' }
+        });
+        const status = String((task?.data as JsonRecord | undefined)?.[taskId] ?? '').toLowerCase();
+        if (i === 0 || (status && status !== 'in-progress' && status !== 'pending' && status !== 'queued')) {
+          console.log(`  [task ${taskId}] ${status || 'unknown'}`);
+        }
+        if (status && status !== 'in-progress' && status !== 'pending' && status !== 'queued') {
+          break;
+        }
+      }
+    }
+
+    const specCols = await gateway.requestJson<JsonRecord>({
+      service: 'specification',
+      method: 'get',
+      path: `/specifications/${specId}/collections`
+    });
+    const colEntries = Array.isArray(specCols?.data) ? (specCols.data as JsonRecord[]) : [];
+    publicCollectionUid = resolveCollectionUid(colEntries);
+    if (!publicCollectionUid) {
+      fail('collection resolve', `no uid in spec collections list :: ${snippet(specCols)}`);
+      return;
+    }
+    const modelId = toModelId(publicCollectionUid);
+    console.log(`[setup] collection publicUid=${publicCollectionUid} modelId=${modelId}`);
+
+    const assets = new PostmanGatewayAssetsClient({ gateway, workspaceId });
+
+    console.log('\n== collection read probe matrix (getCollection candidates; never PMAK) ==');
+    const readRows: Array<{ label: string; service: string; method: 'get' | 'post'; path: string; body?: unknown }> = [
+      { label: 'A collection GET /collections/:uid (full)', service: 'collection', method: 'get', path: `/collections/${publicCollectionUid}` },
+      { label: 'B collection GET /collections/:modelId', service: 'collection', method: 'get', path: `/collections/${modelId}` },
+      { label: 'C collection GET /v3/collections/:modelId/export', service: 'collection', method: 'get', path: `/v3/collections/${modelId}/export` },
+      { label: 'C2 collection GET /v3/collections/:uid/export', service: 'collection', method: 'get', path: `/v3/collections/${publicCollectionUid}/export` },
+      { label: 'D sync GET /collection/:uid/sync?since_id=0', service: 'sync', method: 'get', path: `/collection/${publicCollectionUid}/sync?since_id=0` },
+      { label: 'D2 sync GET /collection/:modelId/sync?since_id=0', service: 'sync', method: 'get', path: `/collection/${modelId}/sync?since_id=0` },
+      { label: 'E sync GET /collection/:uid?populate=true', service: 'sync', method: 'get', path: `/collection/${publicCollectionUid}?populate=true` },
+      { label: 'F sync POST /list/collection?workspace=:ws', service: 'sync', method: 'post', path: `/list/collection?workspace=${workspaceId}` }
+    ];
+    for (const row of readRows) {
+      try {
+        const r = await gwRaw(gateway, row.service, row.method, row.path, row.body);
+        const ok = r.status >= 200 && r.status < 300;
+        console.log(`  [${r.status}${ok ? ' OK' : ''}] ${row.label} :: ${snippet(r.text)}`);
+      } catch (error) {
+        const status = error instanceof HttpError ? error.status : 0;
+        console.log(`  [${status || 'ERR'}] ${row.label} :: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    console.log('\n== getCollection: gateway v3 export (production path) ==');
+    try {
+      const v3 = await assets.getCollection(publicCollectionUid);
+      const items = Array.isArray((v3 as JsonRecord | null)?.items) ? (v3 as JsonRecord).items : [];
+      console.log(`  [ok] getCollection returned v3 IR with ${items.length} top-level item(s)`);
+    } catch (error) {
+      fail('getCollection', error instanceof Error ? error.message : String(error));
+    }
+
+    console.log('\n== setup: sync environment import ==');
+    const envUid = await assets.createEnvironment(workspaceId, 'probe-env', [
+      { key: 'baseUrl', value: 'https://example.com', enabled: true }
+    ]);
+    console.log(`[setup] env uid ${envUid}`);
+
+    console.log('\n== env update via sync PUT /environment/:uid (changed value) ==');
+    try {
+      await assets.updateEnvironment(envUid, 'probe-env', [
+        { key: 'baseUrl', value: 'https://upserted.example.com', enabled: true }
+      ]);
+      console.log('  [ok] updateEnvironment completed');
+      const fetched = await assets.getEnvironment(envUid);
+      const fetchedValues = (fetched as JsonRecord | null)?.values;
+      console.log(`  [get] after update values=${snippet(fetchedValues)}`);
+    } catch (error) {
+      fail('updateEnvironment', error instanceof Error ? error.message : String(error));
+    }
+
+    console.log('\n== id-space regression (raw gateway, optional diagnostic) ==');
+    const mockNeg = await gwRaw(gateway, 'mock', 'post', `/mocks?workspace=${workspaceId}`, {
+      name: `probe-neg-mock-${stamp}`,
+      collection: publicCollectionUid,
+      private: false,
+      environment: toModelId(envUid)
+    }).catch((error: unknown) => {
+      const status = error instanceof HttpError ? error.status : 0;
+      return { status, json: null, text: error instanceof Error ? error.message : String(error) };
+    });
+    console.log(
+      `  [${mockNeg.status}] mock CREATE with public uid in collection (expect 403) :: ${snippet(mockNeg.text)}`
+    );
+    if (mockNeg.status < 400) {
+      console.warn('  [warn] negative control passed unexpectedly — backend may have changed id-space rules');
+    }
+
+    const monNeg = await gwRaw(gateway, 'monitorsV2', 'post', `/monitors?workspace=${workspaceId}`, {
+      name: `probe-neg-mon-${stamp}`,
+      type: 'collection-based',
+      collection: { id: publicCollectionUid },
+      environment: envUid ? { id: toModelId(envUid) } : undefined,
+      schedule: { cronPattern: '0 0 * * 0', timeZone: 'UTC' }
+    }).catch((error: unknown) => {
+      const status = error instanceof HttpError ? error.status : 0;
+      return { status, json: null, text: error instanceof Error ? error.message : String(error) };
+    });
+    console.log(
+      `  [${monNeg.status}] monitor CREATE with public uid in collection.id (expect 403) :: ${snippet(monNeg.text)}`
+    );
+    if (monNeg.status < 400) {
+      console.warn('  [warn] monitor negative control passed unexpectedly — backend may have changed id-space rules');
+    }
+
+    console.log('\n== mock: PostmanGatewayAssetsClient (production path) ==');
+    try {
+      const mock = await assets.createMock(
+        workspaceId,
+        `probe-mock-${stamp}`,
+        publicCollectionUid,
+        envUid
+      );
+      mockUid = mock.uid;
+      console.log(`  [ok] createMock uid=${mock.uid} url=${mock.url}`);
+    } catch (error) {
+      fail('createMock', error instanceof Error ? error.message : String(error));
+    }
+
+    const mocks = await assets.listMocks();
+    console.log(`  [ok] listMocks count=${mocks.length}`);
+    const foundMock = await assets.findMockByCollection(publicCollectionUid);
+    if (!foundMock?.uid) {
+      fail('findMockByCollection', 'did not rediscover mock by public uid');
+    } else {
+      console.log(`  [ok] findMockByCollection uid=${foundMock.uid}`);
+    }
+
+    console.log('\n== monitor: PostmanGatewayAssetsClient (production path) ==');
+    try {
+      monitorUid = await assets.createMonitor(
+        workspaceId,
+        `probe-mon-${stamp}`,
+        publicCollectionUid,
+        envUid,
+        '0 0 * * 0'
+      );
+      console.log(`  [ok] createMonitor uid=${monitorUid}`);
+    } catch (error) {
+      fail('createMonitor', error instanceof Error ? error.message : String(error));
+    }
+
+    const monitors = await assets.listMonitors();
+    console.log(`  [ok] listMonitors count=${monitors.length}`);
+    const foundMonitor = await assets.findMonitorByCollection(publicCollectionUid);
+    if (!foundMonitor?.uid) {
+      fail('findMonitorByCollection', 'did not rediscover monitor by public uid');
+    } else {
+      console.log(`  [ok] findMonitorByCollection uid=${foundMonitor.uid}`);
+    }
+
+    if (monitorUid) {
+      try {
+        await assets.runMonitor(monitorUid);
+        console.log(`  [ok] runMonitor ${monitorUid}`);
+      } catch (error) {
+        fail('runMonitor', error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    console.log('\n== cleanup: delete mock + monitor before workspace teardown ==');
+    if (mockUid) {
+      const del = await gwRaw(gateway, 'mock', 'delete', `/mocks/${mockUid}`);
+      console.log(`  [${del.status}] DELETE mock ${mockUid}`);
+    }
+    if (monitorUid) {
+      const del = await gwRaw(gateway, 'monitorsV2', 'delete', `/monitors/${monitorUid}`);
+      console.log(`  [${del.status}] DELETE monitor ${monitorUid}`);
+    }
+  } finally {
+    console.log('\n[teardown] deleting created workspaces...');
+    for (const id of createdWorkspaces) {
+      await deleteWorkspace(apiKey, id);
+    }
+  }
+
+  if (failed) {
+    process.exitCode = 1;
+    console.error('\n[result] write probe FAILED');
+  } else {
+    console.log('\n[result] write probe complete.');
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exitCode = 1;
+});

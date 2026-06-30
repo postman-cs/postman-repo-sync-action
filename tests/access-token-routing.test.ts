@@ -146,29 +146,16 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
     expect(String(proxied.path)).toContain('/environment/import?workspace=ws-123');
   });
 
-  it('falls back to the PMAK client for all asset ops when no access token is present', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (url) => {
-      const u = String(url);
-      if (u.includes('/mocks')) {
-        return jsonResponse({ mock: { uid: 'mock-pmak', mockUrl: 'https://m.pmak' } });
-      }
-      return jsonResponse({}, { status: 500 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
+  it('hard-errors (no PMAK asset fallback) when no access token is present', () => {
+    // C1: PMAK exists only to mint the access token. With no access token there
+    // is no asset path at all — repo-sync refuses to route asset ops through PMAK.
     const { factory } = factories();
-    const deps = createRepoSyncDependencies(
-      createInputs({ postmanAccessToken: '' }),
-      { apiKey: 'pmak-test', teamId: '10490519' },
-      factory
-    );
-
-    const result = await deps.postman.createMock('ws-123', 'm', 'col-1', '');
-    expect(result.uid).toBe('mock-pmak');
-
-    const call = fetchMock.mock.calls[0];
-    expect(String(call[0])).toContain('https://api.getpostman.com/mocks?workspace=ws-123');
-    const headers = (call[1] as RequestInit).headers as Record<string, string>;
-    expect(headers['X-Api-Key']).toBe('pmak-test');
+    expect(() =>
+      createRepoSyncDependencies(
+        createInputs({ postmanAccessToken: '' }),
+        { apiKey: 'pmak-test', teamId: '10490519' },
+        factory
+      )
+    ).toThrow(/postman-access-token is required/);
   });
 });

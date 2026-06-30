@@ -347,11 +347,17 @@ describe('repo sync action', () => {
     expect(existsSync('postman/specs')).toBe(true);
     expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(true);
 
+    // Canonical Collection v3 layout (official @postman libs): the collection
+    // and folders are `.resources/definition.yaml` ($kind: collection); there is
+    // no legacy `collection.yaml`/`folder.yaml`/`type:` dialect.
     const baselineCollection = loadYaml(
-      readFileSync('postman/collections/core-payments/collection.yaml', 'utf8')
+      readFileSync('postman/collections/core-payments/.resources/definition.yaml', 'utf8')
     ) as Record<string, unknown>;
     const folderYaml = loadYaml(
-      readFileSync('postman/collections/core-payments/Orders/folder.yaml', 'utf8')
+      readFileSync(
+        'postman/collections/core-payments/Orders/.resources/definition.yaml',
+        'utf8'
+      )
     ) as Record<string, unknown>;
     const nestedRequestYaml = loadYaml(
       readFileSync(
@@ -368,12 +374,13 @@ describe('repo sync action', () => {
       unknown
     >;
 
-    expect(baselineCollection.type).toBe('collection');
-    expect(baselineCollection.items).toEqual([
-      { ref: './List Payments.request.yaml' },
-      { ref: './Orders/folder.yaml' }
-    ]);
-    expect(folderYaml.items).toEqual([{ ref: './Create Order.request.yaml' }]);
+    expect(baselineCollection.$kind).toBe('collection');
+    expect(baselineCollection.type).toBeUndefined();
+    expect(
+      existsSync('postman/collections/core-payments/List Payments.request.yaml')
+    ).toBe(true);
+    expect(folderYaml.$kind).toBe('collection');
+    expect(nestedRequestYaml.$kind).toBe('http-request');
     expect(nestedRequestYaml.method).toBe('POST');
     expect(nestedRequestYaml.body).toEqual({
       type: 'json',
@@ -696,13 +703,19 @@ describe('repo sync action', () => {
     );
 
     expect(
-      existsSync('postman/collections/core-payments release-2026-03/collection.yaml')
+      existsSync(
+        'postman/collections/core-payments release-2026-03/.resources/definition.yaml'
+      )
     ).toBe(true);
     expect(
-      existsSync('postman/collections/[Smoke] core-payments release-2026-03/collection.yaml')
+      existsSync(
+        'postman/collections/[Smoke] core-payments release-2026-03/.resources/definition.yaml'
+      )
     ).toBe(true);
     expect(
-      existsSync('postman/collections/[Contract] core-payments release-2026-03/collection.yaml')
+      existsSync(
+        'postman/collections/[Contract] core-payments release-2026-03/.resources/definition.yaml'
+      )
     ).toBe(true);
   });
 
@@ -1605,6 +1618,41 @@ describe('runAction credential preflight', () => {
         return custom ?? json({ ok: true });
       }
       if (url === 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy') {
+        // Gateway proxy envelope: {service, method, path, body?}. Env/mock/monitor
+        // asset ops are access-token gateway-only (PMAK is never used for data),
+        // so branch on the proxied service+path to return the right uid shapes.
+        let proxied: { service?: string; path?: string } = {};
+        try {
+          proxied = JSON.parse(String(init?.body ?? '{}'));
+        } catch {
+          /* ignore */
+        }
+        const service = String(proxied.service ?? '');
+        const proxyPath = String(proxied.path ?? '');
+        // All gateway ops share the /ws/proxy URL; record service+path so
+        // ordering/negative assertions can target a specific asset op.
+        options.events.push(`proxy:${method} ${service} ${proxyPath}`);
+        if (service === 'sync') {
+          if (proxyPath.includes('/environment/import')) {
+            return json({ data: { uid: '123-env-prod-uid' } });
+          }
+          if (/\/environment\/[^/]+\/sync/.test(proxyPath)) {
+            return json({
+              entities: [{ data: { id: 'env-prod', name: 'core-payments - prod', values: [] } }]
+            });
+          }
+          if (proxyPath.includes('/list/environment')) {
+            return json({ data: [] });
+          }
+          // PUT /environment/:id (update) and any other sync op.
+          return json({ data: { ok: true } });
+        }
+        if (service === 'mock') {
+          return json({ data: { uid: 'mock-123', url: 'https://mock-123.mock.pstmn.io' } });
+        }
+        if (service === 'monitorsV2') {
+          return json({ data: { id: 'monitor-123', uid: 'monitor-123' } });
+        }
         return json({ data: { ok: true } });
       }
       throw new Error(`Unrouted fetch in runAction test: ${method} ${url}`);
@@ -1627,7 +1675,7 @@ describe('runAction credential preflight', () => {
       entry.startsWith('info:postman: access-token session identity')
     );
     const createEnvironmentIndex = events.findIndex((entry) =>
-      entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
+      entry.startsWith('proxy:POST sync /environment/import')
     );
     expect(pmakLineIndex).toBeGreaterThanOrEqual(0);
     expect(sessionLineIndex).toBeGreaterThan(pmakLineIndex);
@@ -1687,9 +1735,7 @@ describe('runAction credential preflight', () => {
     expect(message).toContain('10490519');
     expect(message).toContain('13347347');
     expect(
-      events.some((entry) =>
-        entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
-      )
+      events.some((entry) => entry.startsWith('proxy:POST sync /environment/import'))
     ).toBe(false);
   });
 
@@ -1717,9 +1763,7 @@ describe('runAction credential preflight', () => {
     expect(note).toContain('10490519');
     expect(note).toContain('13347347');
     expect(
-      events.some((entry) =>
-        entry.startsWith('fetch:POST https://api.getpostman.com/environments?workspace=')
-      )
+      events.some((entry) => entry.startsWith('proxy:POST sync /environment/import'))
     ).toBe(true);
   });
 

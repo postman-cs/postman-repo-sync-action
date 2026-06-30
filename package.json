@@ -39,6 +39,8 @@
     "@actions/core": "^3.0.1",
     "@actions/exec": "^3.0.0",
     "@postman-cse/automation-telemetry-core": "^0.2.0",
+    "@postman/runtime.models": "^1.11.1",
+    "@postman/v3.export": "^0.2.25",
     "js-yaml": "^4.1.1",
     "undici": "^6.24.0"
   },

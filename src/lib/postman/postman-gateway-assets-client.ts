@@ -7,7 +7,8 @@ type JsonRecord = Record<string, unknown>;
 /**
  * Access-token-primary asset client for the routes whose gateway shapes were
  * locked by a live probe against the sandbox (see scripts/live-auth-probe.ts and
- * live-write-probe.ts):
+ * live-write-probe.ts — spec-generated collection + sync env, not pre-existing
+ * workspace list entries):
  *
  *   - `mock` service: POST/GET/DELETE /mocks (bare body, bare-array list,
  *     bare object with `id` + `url`).
@@ -21,9 +22,10 @@ type JsonRecord = Record<string, unknown>;
  * and find all go through this client, so the persisted ids round-trip.
  *
  * Routes the probe proved unavailable through this bifrost — the `environment`
- * service (invalidServiceError) and `collection` reads by public uid
- * (RESOURCE_NOT_FOUND) — stay on the PMAK client and are NOT implemented here;
- * the facade routes them to PMAK.
+ * service (invalidServiceError) and the v2 `collection` reads by public uid
+ * (RESOURCE_NOT_FOUND) — are NOT wired here. Collection reads use the verified
+ * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
+ * reads/updates use the `sync` service. PMAK is never used for any asset op.
  */
 export class PostmanGatewayAssetsClient {
   private readonly gateway: AccessTokenGatewayClient;
@@ -49,6 +51,25 @@ export class PostmanGatewayAssetsClient {
     if (!record) return '';
     const id = record.uid ?? record.id;
     return typeof id === 'string' ? id.trim() : String(id ?? '').trim();
+  }
+
+  /**
+   * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
+   * model id (`<uuid>`, 5 groups). The gateway mock/monitor services proxy to
+   * mock-api / monitoring-api, whose ACS permission lookup keys off the model id
+   * the app sends (postman-app MockCreateContainer GETs the collection and uses
+   * `.id`; data/collections uid-helper `decomposeUID` drops the owner prefix).
+   * Passing the public uid straight through makes the lookup miss and the create
+   * 403 ("request access from the collection editor"). Bare ids and other shapes
+   * pass through unchanged so the helper is idempotent.
+   */
+  private toModelId(uid: string): string {
+    const trimmed = String(uid ?? '').trim();
+    const parts = trimmed.split('-');
+    // `decomposeUID` drops the owner prefix when there are >= 6 hyphen groups
+    // (`<owner>-<uuid>`); bare ids and other shapes pass through unchanged so
+    // the helper is idempotent.
+    return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
   }
 
   private isTransient(error: unknown): boolean {
@@ -103,6 +124,43 @@ export class PostmanGatewayAssetsClient {
   }
 
   /**
+   * Update an existing environment through the sync service.
+   * `PUT /environment/:uid` (service `sync`) is the verified update route
+   * (live-probed 2026-06-30: 200 with `meta.action: "update"`). Import is
+   * create-only — importing an existing model id 400s with `instanceFoundError`
+   * — so updates must go through PUT, not import-upsert. The path uid is the
+   * environment's bare model id (the public uid's tail); the body carries the
+   * new name/values.
+   */
+  async updateEnvironment(
+    uid: string,
+    name: string,
+    values: Array<{ key: string; value: string; type?: string; enabled?: boolean }>
+  ): Promise<void> {
+    const id = this.toModelId(uid);
+    const body: JsonRecord = {
+      id,
+      name,
+      values: values.map((v) => ({
+        key: v.key,
+        value: v.value,
+        type: v.type ?? 'default',
+        enabled: v.enabled ?? true
+      }))
+    };
+    await retry(
+      () =>
+        this.gateway.requestJson<JsonRecord>({
+          service: 'sync',
+          method: 'put',
+          path: `/environment/${id}`,
+          body
+        }),
+      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
+    );
+  }
+
+  /**
    * Fetch one environment's data through the sync service.
    * GET /environment/:uid/sync?since_id=0 -> { entities:[{ data }] }; the env body
    * is the first entity's `data` (mirrors the PMAK client's `environment` object).
@@ -111,7 +169,7 @@ export class PostmanGatewayAssetsClient {
     const response = await this.gateway.requestJson<JsonRecord>({
       service: 'sync',
       method: 'get',
-      path: `/environment/${uid}/sync?since_id=0`
+      path: `/environment/${this.toModelId(uid)}/sync?since_id=0`
     });
     const entities = Array.isArray(response?.entities) ? (response.entities as unknown[]) : [];
     const first = this.asRecord(entities[0]);
@@ -136,6 +194,33 @@ export class PostmanGatewayAssetsClient {
       .map((e) => ({ name: String(e.name ?? ''), uid: this.idOf(e) }));
   }
 
+  // --- collection read (service: collection, v3 export) ---
+  //
+  // The gateway `collection` service does NOT serve spec-generated uids on the
+  // v2 `/collections/:uid` path (404 RESOURCE_NOT_FOUND, live-probed). It DOES
+  // serve `GET /v3/collections/:id/export`, which returns the canonical v3
+  // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
+  // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
+  // Both the full public uid and the bare model id are accepted on the path.
+
+  /**
+   * Fetch a collection's v3 IR through the gateway v3 export endpoint.
+   * Returns the `data.collection` object (canonical v3 shape with `$kind`
+   * discriminators, `items`, `variables`, `references`). Caller writes it to
+   * disk via `convertAndSplitV3Collection`. PMAK is never used for collection
+   * reads.
+   */
+  async getCollection(uid: string): Promise<unknown> {
+    const id = this.toModelId(uid);
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${id}/export`
+    });
+    const data = this.asRecord(response?.data);
+    return data?.collection ?? null;
+  }
+
   // --- mocks (service: mock) ---
 
   async createMock(
@@ -145,11 +230,13 @@ export class PostmanGatewayAssetsClient {
     environmentUid: string
   ): Promise<{ uid: string; url: string }> {
     const ws = workspaceId || this.workspaceId;
+    const collection = this.toModelId(collectionUid);
+    const environment = this.toModelId(environmentUid);
     const body: JsonRecord = {
       name,
-      collection: collectionUid,
+      collection,
       private: false,
-      ...(environmentUid ? { environment: environmentUid } : {})
+      ...(environment ? { environment } : {})
     };
     const response = await retry(
       () =>
@@ -202,7 +289,7 @@ export class PostmanGatewayAssetsClient {
       await this.gateway.requestJson<JsonRecord>({
         service: 'mock',
         method: 'get',
-        path: `/mocks/${uid}`
+        path: `/mocks/${this.toModelId(uid)}`
       });
       return true;
     } catch {
@@ -214,7 +301,11 @@ export class PostmanGatewayAssetsClient {
     collectionUid: string
   ): Promise<{ uid: string; mockUrl: string } | null> {
     const mocks = await this.listMocks();
-    const match = mocks.find((m) => m.collection === collectionUid);
+    // The gateway list returns bare model ids; the caller passes a public uid.
+    // Compare on the model id so rediscovery works regardless of which id-space
+    // each side is in.
+    const want = this.toModelId(collectionUid);
+    const match = mocks.find((m) => this.toModelId(m.collection) === want);
     return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
   }
 
@@ -229,12 +320,14 @@ export class PostmanGatewayAssetsClient {
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
     const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
+    const collectionId = this.toModelId(collectionUid);
+    const environmentId = this.toModelId(environmentUid);
     const body: JsonRecord = {
       name,
       type: 'collection-based',
-      collection: { id: collectionUid },
+      collection: { id: collectionId },
       schedule: { cronPattern: effectiveCron, timeZone: 'UTC' },
-      ...(environmentUid ? { environment: { id: environmentUid } } : {})
+      ...(environmentId ? { environment: { id: environmentId } } : {})
     };
     const response = await retry(
       () =>
@@ -284,7 +377,7 @@ export class PostmanGatewayAssetsClient {
       await this.gateway.requestJson<JsonRecord>({
         service: 'monitorsV2',
         method: 'get',
-        path: `/monitors/${uid}`
+        path: `/monitors/${this.toModelId(uid)}`
       });
       return true;
     } catch {
@@ -296,7 +389,8 @@ export class PostmanGatewayAssetsClient {
     collectionUid: string
   ): Promise<{ uid: string; name: string } | null> {
     const monitors = await this.listMonitors();
-    const match = monitors.find((m) => m.collectionUid === collectionUid);
+    const want = this.toModelId(collectionUid);
+    const match = monitors.find((m) => this.toModelId(m.collectionUid) === want);
     return match ? { uid: match.uid, name: match.name } : null;
   }
 

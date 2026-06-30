@@ -12,7 +12,7 @@ import {
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
-import { convertAndSplitCollection } from './postman-v3/converter.js';
+import { convertAndSplitAnyCollection } from './postman-v3/converter.js';
 import { renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext } from './lib/repo/context.js';
@@ -934,29 +934,23 @@ async function exportArtifacts(
   const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
 
   if (inputs.baselineCollectionId) {
-    const col = stripVolatileFields(
-      await dependencies.postman.getCollection(inputs.baselineCollectionId)
-    );
+    const col = await dependencies.postman.getCollection(inputs.baselineCollectionId);
     const dirName = getCollectionDirectoryName('Baseline', assetProjectName);
-    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
+    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.baselineCollectionId;
   }
   if (inputs.smokeCollectionId) {
-    const col = stripVolatileFields(
-      await dependencies.postman.getCollection(inputs.smokeCollectionId)
-    );
+    const col = await dependencies.postman.getCollection(inputs.smokeCollectionId);
     const dirName = getCollectionDirectoryName('Smoke', assetProjectName);
-    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
+    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.smokeCollectionId;
   }
   if (inputs.contractCollectionId) {
-    const col = stripVolatileFields(
-      await dependencies.postman.getCollection(inputs.contractCollectionId)
-    );
+    const col = await dependencies.postman.getCollection(inputs.contractCollectionId);
     const dirName = getCollectionDirectoryName('Contract', assetProjectName);
-    await convertAndSplitCollection(col as Parameters<typeof convertAndSplitCollection>[0], `${collectionsDir}/${dirName}`);
+    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
     manifestCollections[`../${collectionsDir}/${dirName}`] =
       inputs.contractCollectionId;
   }
@@ -1386,8 +1380,13 @@ export async function resolvePostmanApiKeyAndTeamId(
   }
 
 
-  // Auto-detect org-mode when not explicitly set.
-  if (!inputs.orgMode && apiKey) {
+  // Auto-detect org-mode when not explicitly set. The onboarding pipeline
+  // supplies `team-id` (from resolve-service-token) + `postman-access-token`;
+  // in that case org-mode must come from explicit pipeline wiring, not from
+  // PMAK `getTeams()` enumeration — PMAK is not a team-scope source for
+  // downstream actions. Only standalone runs (no access token / no team-id)
+  // fall back to the PMAK `/teams` auto-detect for backward compatibility.
+  if (!inputs.orgMode && apiKey && !(inputs.postmanAccessToken && inputs.teamId)) {
     try {
       const client = new PostmanAssetsClient({
         apiKey,
@@ -1422,6 +1421,10 @@ export async function resolvePostmanApiKeyAndTeamId(
     } catch {
       // Non-fatal: if detection fails, orgMode stays false (header omitted) which is safe
     }
+  } else if (!inputs.orgMode && inputs.postmanAccessToken && inputs.teamId) {
+    actionCore.info(
+      'Org-mode not set explicitly; relying on Bifrost to infer team context from the access token (POSTMAN_TEAM_ID unset). Set org-mode explicitly for org-mode teams.'
+    );
   }
 
   return { apiKey, teamId };
@@ -1449,84 +1452,63 @@ export function createRepoSyncDependencies(
   ]);
   const masker = mutableMasker.mask;
 
-  const pmakClient = new PostmanAssetsClient({
+  // Access-token-ONLY asset routing. The onboarding pipeline mints the access
+  // token in `postman-resolve-service-token-action`; PMAK exists only at that
+  // mint boundary and for `AccessTokenProvider` re-mint — never as an asset
+  // fallback. Every asset op here (env create/get/update, collection read,
+  // mock, monitor) goes through the gateway `x-access-token` client. A missing
+  // token is a hard error (run resolve-service-token), and a gateway failure
+  // surfaces instead of silently routing through PMAK — a PMAK detour would
+  // hide gateway bugs (the exact mask that let the mock 403 fester).
+  if (!inputs.postmanAccessToken) {
+    throw new Error(
+      'postman-access-token is required. Run postman-resolve-service-token-action before repo-sync; PMAK is not used for asset operations.'
+    );
+  }
+  const tokenProvider = new AccessTokenProvider({
+    accessToken: inputs.postmanAccessToken,
     apiKey: resolved.apiKey,
-    baseUrl: inputs.postmanApiBase,
+    apiBaseUrl: inputs.postmanApiBase,
+    onToken: (token) => {
+      factories.core.setSecret(token);
+      mutableMasker.add(token);
+    }
+  });
+  const gateway = new AccessTokenGatewayClient({
+    tokenProvider,
     bifrostBaseUrl: inputs.postmanBifrostBase,
+    teamId: resolved.teamId,
+    orgMode: inputs.orgMode,
     secretMasker: masker
   });
-
-  // Access-token-primary routing. When an access token is present, the mock and
-  // monitor asset ops run through the Bifrost gateway (x-access-token, with
-  // single-flight re-mint via AccessTokenProvider) using the live-probed
-  // `mock` / `monitorsV2` service envelopes. Environment create/get also run
-  // gateway-primary via the `sync` service (the env service name behind this
-  // bifrost is `sync`, not `environment`; re-probed 2026-06-30), each with a PMAK
-  // fallback. Environment update and `collection` reads stay PMAK: update has no
-  // verified gateway shape and `collection` reads 404 on the public uid.
-  // getMe/getTeams (resolve phase) are PMAK by design.
-  let tokenProvider: AccessTokenProvider | undefined;
-  let postman: RepoSyncDependencies['postman'] = pmakClient;
-  if (inputs.postmanAccessToken) {
-    tokenProvider = new AccessTokenProvider({
-      accessToken: inputs.postmanAccessToken,
-      apiKey: resolved.apiKey,
-      apiBaseUrl: inputs.postmanApiBase,
-      onToken: (token) => {
-        factories.core.setSecret(token);
-        mutableMasker.add(token);
-      }
-    });
-    const gateway = new AccessTokenGatewayClient({
-      tokenProvider,
-      bifrostBaseUrl: inputs.postmanBifrostBase,
-      teamId: resolved.teamId,
-      orgMode: inputs.orgMode,
-      secretMasker: masker
-    });
-    const gatewayAssets = new PostmanGatewayAssetsClient({
-      gateway,
-      workspaceId: inputs.workspaceId
-    });
-    // Prefer the gateway; on failure fall back to PMAK when a key is present,
-    // otherwise rethrow (access-token-only runs surface the gateway error).
-    const hasPmak = Boolean(inputs.postmanApiKey);
-    const prefer = async <T>(label: string, gatewayFn: () => Promise<T>, pmakFn: () => Promise<T>): Promise<T> => {
-      try {
-        return await gatewayFn();
-      } catch (error) {
-        if (!hasPmak) throw error;
-        factories.core.warning(
-          `postman: gateway ${label} failed; falling back to the API key. ${error instanceof Error ? error.message : String(error)}`
-        );
-        return pmakFn();
-      }
-    };
-    postman = {
-      // Gateway-primary via the `sync` service (live-probed), PMAK fallback:
-      createEnvironment: (workspaceId, name, values) =>
-        prefer(
-          'environment create',
-          () => gatewayAssets.createEnvironment(workspaceId, name, values),
-          () => pmakClient.createEnvironment(workspaceId, name, values)
-        ),
-      getEnvironment: (uid) =>
-        prefer('environment get', () => gatewayAssets.getEnvironment(uid), () => pmakClient.getEnvironment(uid)),
-      // PMAK-only (no verified gateway shape / non-asset identity):
-      updateEnvironment: pmakClient.updateEnvironment.bind(pmakClient),
-      getCollection: pmakClient.getCollection.bind(pmakClient),
-      // Gateway, access-token-primary (live-probed mock + monitorsV2 services):
-      createMock: gatewayAssets.createMock.bind(gatewayAssets),
-      listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
-      mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
-      findMockByCollection: gatewayAssets.findMockByCollection.bind(gatewayAssets),
-      createMonitor: gatewayAssets.createMonitor.bind(gatewayAssets),
-      listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
-      monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
-      findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
-      runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets)
-    };
-  }
+  const gatewayAssets = new PostmanGatewayAssetsClient({
+    gateway,
+    workspaceId: inputs.workspaceId
+  });
+  const postman: RepoSyncDependencies['postman'] = {
+    // Environments via the `sync` service (live-probed): import (create), GET
+    // /environment/:id/sync (read), PUT /environment/:id (update). No PMAK.
+    createEnvironment: gatewayAssets.createEnvironment.bind(gatewayAssets),
+    getEnvironment: gatewayAssets.getEnvironment.bind(gatewayAssets),
+    updateEnvironment: gatewayAssets.updateEnvironment.bind(gatewayAssets),
+    // Collection read via the v3 export endpoint — returns canonical v3 IR,
+    // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
+    // collection reads.
+    getCollection: gatewayAssets.getCollection.bind(gatewayAssets),
+    // Mocks + monitors via the `mock` / `monitorsV2` services. The gateway
+    // client normalizes the collection to its bare model id, which the
+    // mock/monitor ACS permission lookup keys off (a public uid here 403s with
+    // "request access from the collection editor").
+    createMock: gatewayAssets.createMock.bind(gatewayAssets),
+    listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
+    mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
+    findMockByCollection: gatewayAssets.findMockByCollection.bind(gatewayAssets),
+    createMonitor: gatewayAssets.createMonitor.bind(gatewayAssets),
+    listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
+    monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
+    findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
+    runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets)
+  };
 
   const repoMutation =
     repository &&
@@ -1547,19 +1529,17 @@ export function createRepoSyncDependencies(
         })
       : undefined;
 
-  const internalIntegration = inputs.postmanAccessToken
-    ? createInternalIntegrationAdapter({
-        accessToken: inputs.postmanAccessToken,
-        // Live accessor so a gateway-triggered re-mint propagates to the
-        // governance / workspace-link / identity Bifrost calls too.
-        ...(tokenProvider ? { getAccessToken: () => tokenProvider.current() } : {}),
-        backend: inputs.integrationBackend,
-        bifrostBaseUrl: inputs.postmanBifrostBase,
-        orgMode: inputs.orgMode,
-        teamId: resolved.teamId,
-        secretMasker: masker
-      })
-    : undefined;
+  const internalIntegration = createInternalIntegrationAdapter({
+    accessToken: inputs.postmanAccessToken,
+    // Live accessor so a gateway-triggered re-mint propagates to the
+    // governance / workspace-link / identity Bifrost calls too.
+    getAccessToken: () => tokenProvider.current(),
+    backend: inputs.integrationBackend,
+    bifrostBaseUrl: inputs.postmanBifrostBase,
+    orgMode: inputs.orgMode,
+    teamId: resolved.teamId,
+    secretMasker: masker
+  });
 
   return {
     teamId: resolved.teamId,
