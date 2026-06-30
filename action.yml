@@ -104,13 +104,13 @@ inputs:
     required: false
     default: support@postman.com
   postman-api-key:
-    description: Postman API key used for environment, mock, and monitor operations.
+    description: Postman API key (PMAK). Used only to mint/re-mint the access token (via postman-resolve-service-token-action) and for the Postman CLI spec-lint login. Asset operations (environments, collections, mocks, monitors) run on the access-token gateway and do not use the PMAK. Optional when a valid postman-access-token is supplied; required only for the CLI lint path.
     required: false
   postman-access-token:
-    description: Postman access token used for workspace linking, system environment association, and generated API-key creation.
-    required: false
+    description: Postman access token minted by postman-resolve-service-token-action. Required for all asset operations (environment create/get/update, collection read, mock, monitor) which run through the access-token gateway. Also used for workspace linking, system environment association, and generated API-key creation. Without it the action fails fast — PMAK is not an asset-routing fallback.
+    required: true
   team-id:
-    description: Postman team ID resolved by postman-resolve-service-token-action for org-mode integration calls. Falls back to POSTMAN_TEAM_ID when omitted.
+    description: Postman team ID resolved by postman-resolve-service-token-action. Primary team scope for all downstream actions; included as x-entity-team-id in org-mode Bifrost calls. Falls back to POSTMAN_TEAM_ID when omitted. Set explicitly for org-mode teams.
     required: false
     default: ""
   credential-preflight:

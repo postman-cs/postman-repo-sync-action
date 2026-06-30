@@ -63,7 +63,7 @@ describe('error advice', () => {
     expect(advised?.message).toContain('POST https://api.getpostman.com/service-account-tokens');
   });
 
-  it('403 "You are not authorized to perform this action" with workspace-team-id context -> "...GET https://api.getpostman.com/teams lists valid sub-team ids..."', () => {
+  it('403 "You are not authorized to perform this action" with workspace-team-id context -> sub-team (squad) guidance', () => {
     const advised = adviseFromHttpError(
       bifrostHttpError(403, '{"error":{"message":"You are not authorized to perform this action"}}'),
       createContext({ workspaceTeamId: '132109' })
@@ -72,7 +72,7 @@ describe('error advice', () => {
     expect(advised).toBeDefined();
     expect(advised?.message).toContain('403');
     expect(advised?.message).toContain('workspace-team-id 132109');
-    expect(advised?.message).toContain('GET https://api.getpostman.com/teams');
+    expect(advised?.message).toContain('a sub-team (squad) of the token\'s parent org');
   });
 
   it('403 valid-token-wrong-team (preflight memo says parent orgs differ) -> cross-team message naming both teams and the session roles/consumerType when known', () => {
@@ -91,7 +91,7 @@ describe('error advice', () => {
       'postman: Bifrost refused system environment association with 403 while the access token is valid ' +
         '(it resolved to team 13347347, roles [collection-editor], consumerType service_account at preflight). ' +
         "The token's identity lacks permission for this endpoint, or workspace-team-id 132109 names a sub-team it cannot act in. " +
-        "Verify the token's role and that workspace-team-id / POSTMAN_TEAM_ID matches a sub-team from GET https://api.getpostman.com/teams."
+        "Verify the token's role and that workspace-team-id / POSTMAN_TEAM_ID matches a sub-team (squad) of the token's parent org."
     );
   });
 

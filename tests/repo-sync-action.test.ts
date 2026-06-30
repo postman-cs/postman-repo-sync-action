@@ -937,10 +937,12 @@ describe('org-mode auto-detection', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    __resetIdentityMemo();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    __resetIdentityMemo();
   });
 
   function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -950,42 +952,108 @@ describe('org-mode auto-detection', () => {
     });
   }
 
-  it('sets orgMode=true when teams have shared organizationId matching teamId', async () => {
+  function orgModeFetchRouter(opts: {
+    meStatus?: number;
+    meBody?: unknown;
+    sessionTeam?: number | string;
+    sessionDomain?: string;
+    squadsStatus?: number;
+    squadsBody?: unknown;
+  }): typeof fetch {
+    const json = (body: unknown, status = 200) => jsonResponse(body, { status });
+    return vi.fn<typeof fetch>().mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
+
+      // ums squads gateway envelope. createApiKey is stubbed at the file level,
+      // so the only /ws/proxy caller in these tests is the squads probe.
+      if (urlStr === 'https://bifrost-premium-https-v4.gw.postman.com/ws/proxy') {
+        return json(opts.squadsBody ?? { data: [] }, opts.squadsStatus ?? 200);
+      }
+
+      if (urlStr === 'https://api.getpostman.com/me') {
+        if (opts.meStatus && opts.meStatus !== 200) {
+          return json({ error: { name: 'AuthenticationError' } }, opts.meStatus);
+        }
+        return jsonResponse(opts.meBody ?? { user: { id: 'u1', name: 'Test' } });
+      }
+
+      if (urlStr === 'https://iapub.postman.co/api/sessions/current') {
+        return jsonResponse({
+          identity: {
+            team: opts.sessionTeam ?? 10490519,
+            ...(opts.sessionDomain ? { domain: opts.sessionDomain } : {})
+          },
+          consumerType: 'service_account'
+        });
+      }
+
+      return new Response('', { status: 404 });
+    });
+  }
+
+  it('sets orgMode=true when ums squads returns a non-empty squad list (org-mode team)', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
       warning: vi.fn()
     };
-    const mockFetch = vi.fn<typeof fetch>();
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
-    const createdApiKey = 'pmak-generated-1';
 
-    globalThis.fetch = mockFetch;
-
-    mockFetch.mockImplementation(async (input: string | URL | Request) => {
-      const urlStr = input instanceof Request ? input.url : String(input);
-
-      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
-        return jsonResponse({ apikey: { key: createdApiKey } });
+    globalThis.fetch = orgModeFetchRouter({
+      meBody: { user: { id: 'u1', name: 'Test', teamId: 13347347 } },
+      sessionTeam: 13347347,
+      sessionDomain: 'field-services-v12-demo',
+      squadsBody: {
+        data: [
+          { id: 's1', name: 'Squad A', organizationId: '13347347' },
+          { id: 's2', name: 'Squad B', organizationId: '13347347' },
+          { id: 's3', name: 'Squad C', organizationId: '13347347' }
+        ]
       }
+    });
 
-      if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 99900 } });
-      }
+    const { createSecretMasker } = await import('../src/lib/secrets.js');
+    const masker = createSecretMasker(['pmak-test']);
 
-      if (urlStr.includes('/teams')) {
-        return jsonResponse({
-          data: [
-            { id: 99901, name: 'Sub Team A', handle: 'sub-a', organizationId: 99900 },
-            { id: 99902, name: 'Sub Team B', handle: 'sub-b', organizationId: 99900 },
-            { id: 99903, name: 'Sub Team C', handle: 'sub-c', organizationId: 99900 }
-          ]
-        });
-      }
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-valid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '',
+      orgMode: false,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
 
-      return new Response('', { status: 404 });
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.teamId).toBe('13347347');
+    expect(inputs.orgMode).toBe(true);
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected via ums squads'));
+  });
+
+  it('leaves orgMode=false when ums squads returns 400 "Squad feature is not available" (non-org team)', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsStatus: 400,
+      squadsBody: { error: { message: 'Squad feature is not available for your team.' } }
     });
 
     const { createSecretMasker } = await import('../src/lib/secrets.js');
@@ -1008,117 +1076,41 @@ describe('org-mode auto-detection', () => {
       { persistGeneratedApiKeySecret: true, env: {} }
     );
 
-    expect(result.teamId).toBe('99900');
-    expect(inputs.orgMode).toBe(true);
-  });
-
-  it('leaves orgMode=false when getTeams() throws (detection failure is non-fatal)', async () => {
-    const actionCore = {
-      info: vi.fn(),
-      setSecret: vi.fn(),
-      warning: vi.fn()
-    };
-
-    const localExecLike = {
-      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
-    };
-
-    const createdApiKey = 'pmak-generated-2';
-
-    let fetchCallCount = 0;
-    globalThis.fetch = vi.fn<typeof fetch>().mockImplementation(async (url) => {
-      const urlStr = String(url);
-      fetchCallCount++;
-
-      if (fetchCallCount === 1 && urlStr.includes('/me')) {
-        return new Response('', { status: 401 });
-      }
-
-      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
-        return jsonResponse({ apikey: { key: createdApiKey } });
-      }
-
-      if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 99901 } });
-      }
-
-      if (urlStr.includes('/teams')) {
-        throw new Error('Network error fetching teams');
-      }
-
-      return new Response('', { status: 404 });
-    });
-
-    const { createSecretMasker } = await import('../src/lib/secrets.js');
-    const masker = createSecretMasker(['pmak-test']);
-
-    const inputs = createInputs({
-      postmanApiKey: 'pmak-invalid',
-      postmanAccessToken: 'postman-access-token',
-      teamId: '',
-      orgMode: false,
-      githubToken: 'github-token',
-      ghFallbackToken: ''
-    });
-
-    const result = await resolvePostmanApiKeyAndTeamId(
-      inputs,
-      actionCore,
-      localExecLike,
-      masker,
-      { persistGeneratedApiKeySecret: true, env: {} }
-    );
-
-    expect(result.teamId).toBe('99901');
+    expect(result.teamId).toBe('10490519');
     expect(inputs.orgMode).toBe(false);
     expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+    // The expected non-org 400 must not surface as a detection-failure warning.
+    expect(actionCore.warning).not.toHaveBeenCalledWith(
+      expect.stringContaining('Org-mode auto-detection via ums squads failed')
+    );
   });
 
-  it('sets orgMode=true when a service-account PMAK returns exactly one sub-team carrying organizationId', async () => {
-    // Real-world service-account key case: GET /teams returns a single team,
-    // but that team's organizationId is non-null because the parent account is
-    // org-mode. Previously orgMode only flipped when teams.length > 1, so these
-    // keys issued Bifrost calls without x-entity-team-id and silently failed.
+  it('sets orgMode=true when ums squads returns a single squad (org-mode service account)', async () => {
+    // Real-world service-account case: the parent account is org-mode, so ums
+    // squads returns a non-empty list (here one squad). A 200 with any squads
+    // means org-mode; the legacy per-team organizationId check is gone.
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
       warning: vi.fn()
     };
-    const mockFetch = vi.fn<typeof fetch>();
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
-    const createdApiKey = 'pmak-generated-3';
 
-    globalThis.fetch = mockFetch;
-
-    mockFetch.mockImplementation(async (input: string | URL | Request) => {
-      const urlStr = input instanceof Request ? input.url : String(input);
-
-      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
-        return jsonResponse({ apikey: { key: createdApiKey } });
+    globalThis.fetch = orgModeFetchRouter({
+      meBody: { user: { id: 'u1', name: 'Test', teamId: 83498 } },
+      sessionTeam: 83498,
+      squadsBody: {
+        data: [{ id: 's1', name: 'jared-service-account-test', organizationId: '987442' }]
       }
-
-      if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 83498 } });
-      }
-
-      if (urlStr.includes('/teams')) {
-        return jsonResponse({
-          data: [
-            { id: 83498, name: 'jared-service-account-test', handle: 'jaredserviceaccounttest', organizationId: 987442 }
-          ]
-        });
-      }
-
-      return new Response('', { status: 404 });
     });
 
     const { createSecretMasker } = await import('../src/lib/secrets.js');
     const masker = createSecretMasker(['pmak-test']);
 
     const inputs = createInputs({
-      postmanApiKey: 'pmak-invalid',
+      postmanApiKey: 'pmak-valid',
       postmanAccessToken: 'postman-access-token',
       teamId: '',
       orgMode: false,
@@ -1136,39 +1128,25 @@ describe('org-mode auto-detection', () => {
 
     expect(result.teamId).toBe('83498');
     expect(inputs.orgMode).toBe(true);
-    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
-    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('987442'));
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected via ums squads'));
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('83498'));
   });
 
-  it('sets orgMode=true from teams even when /me does not provide a teamId', async () => {
+  it('sets orgMode=true from ums squads even when /me does not provide a teamId (teamId from session identity)', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
       warning: vi.fn()
     };
-    const mockFetch = vi.fn<typeof fetch>();
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
 
-    globalThis.fetch = mockFetch;
-
-    mockFetch.mockImplementation(async (input: string | URL | Request) => {
-      const urlStr = input instanceof Request ? input.url : String(input);
-
-      if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test' } });
-      }
-
-      if (urlStr.includes('/teams')) {
-        return jsonResponse({
-          data: [
-            { id: 83498, name: 'jared-service-account-test', handle: 'jaredserviceaccounttest', organizationId: 987442 }
-          ]
-        });
-      }
-
-      return new Response('', { status: 404 });
+    globalThis.fetch = orgModeFetchRouter({
+      meBody: { user: { id: 'u1', name: 'Test' } },
+      sessionTeam: 83498,
+      sessionDomain: 'demo',
+      squadsBody: { data: [{ id: 's1', name: 'squad-1', organizationId: '987442' }] }
     });
 
     const { createSecretMasker } = await import('../src/lib/secrets.js');
@@ -1191,47 +1169,26 @@ describe('org-mode auto-detection', () => {
       { persistGeneratedApiKeySecret: false, env: {} }
     );
 
-    expect(result.teamId).toBe('');
+    expect(result.teamId).toBe('83498');
     expect(inputs.orgMode).toBe(true);
-    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+    expect(actionCore.info).toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected via ums squads'));
   });
 
-  it('leaves orgMode=false when the single team has a null organizationId (non-org account)', async () => {
-    // Negative case: a solo team whose organizationId is null is authoritatively
-    // not org-mode. Auto-detection must not flip orgMode on for these accounts.
+  it('leaves orgMode=false when ums squads returns a non-400 error (detection failure is non-fatal)', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
       warning: vi.fn()
     };
-    const mockFetch = vi.fn<typeof fetch>();
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
-    const createdApiKey = 'pmak-generated-4';
 
-    globalThis.fetch = mockFetch;
-
-    mockFetch.mockImplementation(async (input: string | URL | Request) => {
-      const urlStr = input instanceof Request ? input.url : String(input);
-
-      if (urlStr.includes('bifrost-premium-https-v4.gw.postman.com')) {
-        return jsonResponse({ apikey: { key: createdApiKey } });
-      }
-
-      if (urlStr.includes('/me')) {
-        return jsonResponse({ user: { id: 'u1', name: 'Test', teamId: 12345 } });
-      }
-
-      if (urlStr.includes('/teams')) {
-        return jsonResponse({
-          data: [
-            { id: 12345, name: 'solo-team', handle: 'soloteam', organizationId: null }
-          ]
-        });
-      }
-
-      return new Response('', { status: 404 });
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsStatus: 500,
+      squadsBody: { error: { message: 'UnexpectedError' } }
     });
 
     const { createSecretMasker } = await import('../src/lib/secrets.js');
@@ -1254,9 +1211,12 @@ describe('org-mode auto-detection', () => {
       { persistGeneratedApiKeySecret: true, env: {} }
     );
 
-    expect(result.teamId).toBe('12345');
+    expect(result.teamId).toBe('10490519');
     expect(inputs.orgMode).toBe(false);
     expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
+    expect(actionCore.warning).toHaveBeenCalledWith(
+      expect.stringContaining('Org-mode auto-detection via ums squads failed')
+    );
   });
 });
 
@@ -1596,9 +1556,6 @@ describe('runAction credential preflight', () => {
           }
         );
       }
-      if (url === 'https://api.getpostman.com/teams') {
-        return json({ data: [] });
-      }
       if (
         url.startsWith('https://api.getpostman.com/environments?workspace=') &&
         method === 'POST'
@@ -1632,6 +1589,16 @@ describe('runAction credential preflight', () => {
         // All gateway ops share the /ws/proxy URL; record service+path so
         // ordering/negative assertions can target a specific asset op.
         options.events.push(`proxy:${method} ${service} ${proxyPath}`);
+        if (service === 'ums') {
+          // Org-mode auto-detection probe. These preflight-focused tests use
+          // the non-org sandbox team (10490519), so ums squads answers with
+          // the expected non-org 400 — orgMode stays false, matching the
+          // prior PMAK /teams empty-data behavior.
+          return json(
+            { error: { message: 'Squad feature is not available for your team.' } },
+            400
+          );
+        }
         if (service === 'sync') {
           if (proxyPath.includes('/environment/import')) {
             return json({ data: { uid: '123-env-prod-uid' } });

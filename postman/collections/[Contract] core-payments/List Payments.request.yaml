@@ -1,7 +1,6 @@
-type: http
-name: List Payments
-url: '{{baseUrl}}/payments?status=active'
+$kind: http-request
+url: "{{baseUrl}}/payments?status=active"
 method: GET
 queryParams:
-  - key: status
-    value: active
+  status: active
+order: 1000

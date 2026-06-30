@@ -44,7 +44,7 @@ function forbiddenAdvice(ctx: ErrorAdviceContext): string {
   return (
     `postman: Bifrost refused ${ctx.operation || 'this operation'} with 403${sessionDetail}. ` +
     `The token's identity lacks permission for this endpoint${teamClause}. ` +
-    "Verify the token's role and that workspace-team-id / POSTMAN_TEAM_ID matches a sub-team from GET https://api.getpostman.com/teams."
+    "Verify the token's role and that workspace-team-id / POSTMAN_TEAM_ID matches a sub-team (squad) of the token's parent org."
   );
 }
 

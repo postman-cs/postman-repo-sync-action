@@ -308,43 +308,6 @@ export class PostmanAssetsClient {
     return this.request('/me', { method: 'GET' }) as Promise<Record<string, unknown> | null>;
   }
 
-  async getAutoDerivedTeamId(): Promise<string | undefined> {
-    try {
-      const data = await this.getMe();
-      const user = data?.user;
-      if (user && typeof user === 'object' && 'teamId' in user && user.teamId) {
-        return String(user.teamId);
-      }
-    } catch {
-      // ignore
-    }
-    return undefined;
-  }
-
-  async getTeams(): Promise<Array<{ id: number; name: string; handle: string; organizationId?: number }>> {
-    const data = await this.request('/teams');
-    const teams = data?.data ?? [];
-    return Array.isArray(teams)
-      ? teams
-          .filter((t): t is Record<string, unknown> => {
-            return (
-              typeof t === 'object' &&
-              t !== null &&
-              'id' in t &&
-              t.id != null &&
-              'name' in t &&
-              String(t.name).trim().length > 0
-            );
-          })
-          .map((t) => ({
-            id: Number(t.id),
-            name: String(t.name),
-            handle: String(t.handle ?? ''),
-            ...((t.organizationId ?? null) != null ? { organizationId: Number(t.organizationId) } : {})
-          }))
-      : [];
-  }
-
   async listMonitors(): Promise<Array<{uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string}>> {
     const response = await this.request('/monitors');
     const monitors = response?.monitors ?? [];

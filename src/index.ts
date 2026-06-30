@@ -30,9 +30,11 @@ import {
 } from './lib/postman/base-urls.js';
 import {
   getMemoizedSessionIdentity,
+  resolveSessionIdentity,
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
+import { HttpError } from './lib/http-error.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets-client.js';
@@ -1292,6 +1294,15 @@ export async function resolvePostmanApiKeyAndTeamId(
   let teamId = inputs.teamId;
   let keyValid = false;
 
+  // The PMAK is only the access-token re-mint source (and, when none is
+  // supplied, the createApiKey path below mints one for the generated CI's
+  // `postman login --with-api-key`). Proactively validating it via `GET /me`
+  // is NOT an identity fallback — team scope comes from the iapub session
+  // identity below — it is a credential-validity check that preserves the
+  // known-intended createApiKey reuse-vs-mint decision (don't mint a fresh
+  // PMAK and overwrite the GitHub secret when the supplied one is usable) and
+  // surfaces an invalid PMAK early. The session identity cannot validate the
+  // PMAK, so this getMe is not redundant with it.
   if (apiKey) {
     const tempClient = new PostmanAssetsClient({
       apiKey,
@@ -1302,9 +1313,6 @@ export async function resolvePostmanApiKeyAndTeamId(
       const me = await tempClient.getMe();
       if (me && me.user) {
         keyValid = true;
-        if (!teamId && typeof me.user === 'object' && 'teamId' in me.user && me.user.teamId) {
-          teamId = String(me.user.teamId);
-        }
       }
     } catch (error: unknown) {
       if (
@@ -1340,16 +1348,6 @@ export async function resolvePostmanApiKeyAndTeamId(
     apiKey = await internalIntegration.createApiKey(keyName);
     actionCore.setSecret(apiKey);
 
-    if (!teamId) {
-       const tempClient = new PostmanAssetsClient({
-         apiKey,
-         baseUrl: inputs.postmanApiBase,
-         secretMasker: masker
-       });
-       const autoTeamId = await tempClient.getAutoDerivedTeamId();
-       if (autoTeamId) teamId = autoTeamId;
-    }
-
     if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
       actionCore.info('Persisting new Postman API key to GitHub repository secrets...');
       const ghToken = inputs.ghFallbackToken || inputs.githubToken;
@@ -1380,50 +1378,77 @@ export async function resolvePostmanApiKeyAndTeamId(
   }
 
 
-  // Auto-detect org-mode when not explicitly set. The onboarding pipeline
-  // supplies `team-id` (from resolve-service-token) + `postman-access-token`;
-  // in that case org-mode must come from explicit pipeline wiring, not from
-  // PMAK `getTeams()` enumeration — PMAK is not a team-scope source for
-  // downstream actions. Only standalone runs (no access token / no team-id)
-  // fall back to the PMAK `/teams` auto-detect for backward compatibility.
-  if (!inputs.orgMode && apiKey && !(inputs.postmanAccessToken && inputs.teamId)) {
+  // Resolve team scope from the access-token session identity (iapub
+  // /api/sessions/current — live-proven 200 for service-account tokens in both
+  // non-org and org-mode teams, 2026-06-30). This replaces the legacy PMAK
+  // `GET /me` / `getAutoDerivedTeamId` teamId derivation — no PMAK identity
+  // call is needed for team scope. `resolveSessionIdentity` is memoized, so
+  // when the credential preflight already ran (runAction / runCli) this is
+  // free; when `resolvePostmanApiKeyAndTeamId` is called directly it resolves
+  // on demand, and updates the memoized session identity as a side effect
+  // (feeding reactive error advice).
+  if (!teamId && inputs.postmanAccessToken) {
+    const session =
+      getMemoizedSessionIdentity() ??
+      (await resolveSessionIdentity({
+        iapubBaseUrl: inputs.postmanIapubBase,
+        accessToken: inputs.postmanAccessToken
+      }));
+    if (session?.teamId) {
+      teamId = String(session.teamId);
+    }
+  }
+
+  // Auto-detect org-mode when not explicitly set, via the access-token gateway:
+  // `ums GET /api/teams/<orgTeamId>/squads?settings=true&userRoles=true`
+  // (live-proven 200 for org-mode SA 2026-06-30; `<orgTeamId>` is the session
+  // team). A 200 with a non-empty squad list means the parent account is
+  // org-mode; a 400 "Squad feature is not available for your team." is the
+  // expected non-org signal (mirrors the legacy PMAK non-org 400). This
+  // replaces the PMAK `GET /teams` enumeration — no PMAK identity call remains
+  // here. The probe needs an access token (gateway envelope) and a team id
+  // (path parameter from the session identity above).
+  if (!inputs.orgMode && inputs.postmanAccessToken && teamId) {
     try {
-      const client = new PostmanAssetsClient({
+      const tokenProvider = new AccessTokenProvider({
+        accessToken: inputs.postmanAccessToken,
         apiKey,
-        baseUrl: inputs.postmanApiBase,
+        apiBaseUrl: inputs.postmanApiBase
+      });
+      // orgMode:false so x-entity-team-id is omitted on the probe — Bifrost
+      // infers team context from the access token; the team id rides in the
+      // path. configureTeamContext is intentionally not called.
+      const gateway = new AccessTokenGatewayClient({
+        tokenProvider,
+        bifrostBaseUrl: inputs.postmanBifrostBase,
         secretMasker: masker
       });
-      const teams = await client.getTeams();
-      if (teams.length > 1 && teams.every(t => t.organizationId == null)) {
-        actionCore.warning(
-          'GET /teams returned multiple teams but none include organizationId. ' +
-          'Org-mode auto-detection may be degraded due to an upstream API change. ' +
-          'Set org-mode and team-id explicitly if Bifrost calls fail.'
-        );
-      }
-      // Org-mode is a property of the account, not of the key's scope. Any team
-      // carrying a non-null organizationId means the parent account is org-mode,
-      // even if the PMAK is scoped to a single sub-team (typical for service
-      // accounts). Bifrost calls for those keys still require x-entity-team-id.
-      if (teams.some(t => t.organizationId != null)) {
+      const squads = await gateway.getSquads(teamId);
+      if (squads.length > 0) {
         inputs.orgMode = true;
-        const orgIds = new Set(
-          teams.filter(t => t.organizationId != null).map(t => t.organizationId)
-        );
-        const orgDescriptor =
-          orgIds.size === 1
-            ? `org ${[...orgIds][0]}`
-            : `orgs ${[...orgIds].join(', ')}`;
         actionCore.info(
-          `Org-mode auto-detected (${teams.length} sub-team${teams.length === 1 ? '' : 's'} under ${orgDescriptor}). x-entity-team-id will be included in Bifrost calls.`
+          `Org-mode auto-detected via ums squads (${squads.length} squad${squads.length === 1 ? '' : 's'} for team ${teamId}). x-entity-team-id will be included in Bifrost calls.`
         );
       }
-    } catch {
-      // Non-fatal: if detection fails, orgMode stays false (header omitted) which is safe
+    } catch (error: unknown) {
+      // 400 "Squad feature is not available for your team." is the expected
+      // non-org signal — leave orgMode false silently. Any other failure is
+      // non-fatal: orgMode stays false (header omitted) which is safe, but
+      // surface it so an org-mode team that failed to probe can be fixed by
+      // setting org-mode explicitly.
+      const isNonOrgSquads =
+        error instanceof HttpError &&
+        error.status === 400 &&
+        /squad feature is not available/i.test(error.responseBody);
+      if (!isNonOrgSquads) {
+        actionCore.warning(
+          `Org-mode auto-detection via ums squads failed (non-fatal; set org-mode explicitly if Bifrost calls fail): ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
-  } else if (!inputs.orgMode && inputs.postmanAccessToken && inputs.teamId) {
+  } else if (!inputs.orgMode && inputs.postmanAccessToken) {
     actionCore.info(
-      'Org-mode not set explicitly; relying on Bifrost to infer team context from the access token (POSTMAN_TEAM_ID unset). Set org-mode explicitly for org-mode teams.'
+      'Org-mode not set explicitly and ums squads auto-detection skipped (no team id resolved from the session identity); relying on Bifrost to infer team context from the access token. Set org-mode and team-id explicitly for org-mode teams.'
     );
   }
 

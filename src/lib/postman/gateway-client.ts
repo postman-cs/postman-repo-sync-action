@@ -133,6 +133,38 @@ export class AccessTokenGatewayClient {
     }
   }
 
+  /**
+   * Enumerate org-mode sub-teams (squads) for `orgTeamId` via the `ums` service.
+   * Route: `GET /api/teams/:orgTeamId/squads?settings=true&userRoles=true`
+   * (live-proven 200 for org-mode service-account tokens 2026-06-30). This is
+   * the access-token equivalent of PMAK `GET /teams`: a 200 with a non-empty
+   * squad list means the parent account is org-mode; a non-org team answers
+   * `400 "Squad feature is not available for your team."` (mirrors the legacy
+   * PMAK non-org 400). `orgTeamId` is `session.identity.team` from iapub
+   * `/api/sessions/current`. The team id rides in the path; `x-entity-team-id`
+   * is omitted (Bifrost infers team context from the access token), so call
+   * this with a gateway client constructed `orgMode: false`. Throws HttpError
+   * on non-2xx — the caller interprets the 400 as the expected non-org signal.
+   */
+  async getSquads(
+    orgTeamId: string
+  ): Promise<Array<{ id: string; name: string; organizationId?: string }>> {
+    const teamId = encodeURIComponent(String(orgTeamId || '').trim());
+    const payload = await this.requestJson<{ data?: unknown }>({
+      service: 'ums',
+      method: 'get',
+      path: `/api/teams/${teamId}/squads?settings=true&userRoles=true`
+    });
+    const squads = Array.isArray(payload?.data) ? payload.data : [];
+    return squads
+      .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null && 'id' in s && s.id != null)
+      .map((s) => ({
+        id: String(s.id),
+        name: String(s.name ?? ''),
+        ...((s.organizationId ?? null) != null ? { organizationId: String(s.organizationId) } : {})
+      }));
+  }
+
   private toHttpError(
     request: GatewayRequest,
     response: Response,
