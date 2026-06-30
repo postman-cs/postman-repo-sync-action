@@ -10,16 +10,22 @@ type JsonRecord = Record<string, unknown>;
  * live-write-probe.ts — spec-generated collection + sync env, not pre-existing
  * workspace list entries):
  *
- *   - `mock` service: POST/GET/DELETE /mocks (bare body, bare-array list,
- *     bare object with `id` + `url`).
- *   - `monitorsV2` service: POST/GET/DELETE /monitors and POST /monitors/:id/run
- *     ({ name, type:'collection-based', collection:{ id }, schedule?:{ cronPattern,
- *     timeZone } } -> { meta, data:{ id, ... } }; list -> { data:[...] }).
+ *   - `mock` service: POST/GET/DELETE /mocks (bare body `{ name, collection,
+ *     private, environment? }`, bare-array or `{data:[...]}` list, bare object
+ *     with `id` + `url`).
+ *   - `monitors` service — collection-based monitors are jobTemplates, NOT the
+ *     `monitorsV2` uptime path: POST /jobTemplates (body `{ name, collection,
+ *     options, notifications, retry, schedule, distribution, environment? }` ->
+ *     `{ meta, data:{ id, ... } }`), GET /jobTemplates?workspace=&_etc=true ->
+ *     `{ data:[...] }`, GET /collections/:collectionUid/jobTemplates?_etc=true
+ *     (monitors for one collection), POST /jobTemplates/:id/jobs (run).
  *
- * These gateway services proxy to monitoring-api / mock-api and use a bare-uuid
- * id namespace (the public REST API returns prefixed 45-char uids). Within one
- * run the routing facade is internally consistent: create, list, exists, run,
- * and find all go through this client, so the persisted ids round-trip.
+ * Both services proxy to mock-api / monitoring-api, which key collection access
+ * off the PUBLIC uid (`<owner>-<uuid>`), exactly as the public REST API — NOT the
+ * bare model id. Live-verified 2026-06-30: mock/monitor create with the public
+ * uid -> 200/201; with the bare model id -> 403 ("request access from the
+ * collection editor" / "need read access to this collection"). So `collection`
+ * is the public uid passed straight through, as a flat string (never `{ id }`).
  *
  * Routes the probe proved unavailable through this bifrost — the `environment`
  * service (invalidServiceError) and the v2 `collection` reads by public uid
@@ -55,20 +61,16 @@ export class PostmanGatewayAssetsClient {
 
   /**
    * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
-   * model id (`<uuid>`, 5 groups). The gateway mock/monitor services proxy to
-   * mock-api / monitoring-api, whose ACS permission lookup keys off the model id
-   * the app sends (postman-app MockCreateContainer GETs the collection and uses
-   * `.id`; data/collections uid-helper `decomposeUID` drops the owner prefix).
-   * Passing the public uid straight through makes the lookup miss and the create
-   * 403 ("request access from the collection editor"). Bare ids and other shapes
-   * pass through unchanged so the helper is idempotent.
+   * model id (`<uuid>`, 5 groups), mirroring `decomposeUID`. Used ONLY for the
+   * bare-id namespaces: the `sync` environment routes (`/environment/:id/...`)
+   * and the entity-id GETs (mock/jobTemplate ids are already bare uuids, so this
+   * is a no-op there). It is NOT applied to collection references on mock/monitor
+   * create — those key off the full public uid (see class doc). Bare ids and
+   * other shapes pass through unchanged so the helper is idempotent.
    */
   private toModelId(uid: string): string {
     const trimmed = String(uid ?? '').trim();
     const parts = trimmed.split('-');
-    // `decomposeUID` drops the owner prefix when there are >= 6 hyphen groups
-    // (`<owner>-<uuid>`); bare ids and other shapes pass through unchanged so
-    // the helper is idempotent.
     return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
   }
 
@@ -85,9 +87,16 @@ export class PostmanGatewayAssetsClient {
 
   /**
    * Create/upsert an environment through the sync service.
-   * POST /environment/import?workspace=:ws { id:<uuid>, name, values } -> { data:{ uid } }.
-   * The id is generated once and reused across retries so the import is
-   * idempotent (a retry upserts the same environment instead of duplicating it).
+   * POST /environment/import?workspace=:ws { id:<uuid>, name, values } ->
+   * { data:{ id:<bare uuid>, owner } }. The id is generated once and reused
+   * across retries so the import is idempotent (a retry upserts the same
+   * environment instead of duplicating it).
+   *
+   * Returns the PUBLIC uid (`<owner>-<uuid>`), not the bare model id the sync
+   * import echoes: mock/monitor create reference the environment by its public
+   * uid (live-verified 2026-06-30 — the bare id 403s mock / 400s monitor
+   * "environment is not a valid ID"), matching what `/list/environment` returns.
+   * The sync read/update routes re-derive the bare id via `toModelId`.
    */
   async createEnvironment(
     workspaceId: string,
@@ -116,11 +125,15 @@ export class PostmanGatewayAssetsClient {
         }),
       { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
     );
-    const uid = this.idOf(this.dataOf(response));
-    if (!uid) {
+    const data = this.dataOf(response);
+    const bareId = this.idOf(data);
+    if (!bareId) {
       throw new Error('Environment import did not return a UID');
     }
-    return uid;
+    const owner = String(data?.owner ?? '').trim();
+    // Public uid is `<owner>-<uuid>`; skip the prefix if the import already
+    // echoed a public uid or no owner is present.
+    return owner && !bareId.startsWith(`${owner}-`) ? `${owner}-${bareId}` : bareId;
   }
 
   /**
@@ -230,8 +243,8 @@ export class PostmanGatewayAssetsClient {
     environmentUid: string
   ): Promise<{ uid: string; url: string }> {
     const ws = workspaceId || this.workspaceId;
-    const collection = this.toModelId(collectionUid);
-    const environment = this.toModelId(environmentUid);
+    const collection = String(collectionUid ?? '').trim();
+    const environment = String(environmentUid ?? '').trim();
     const body: JsonRecord = {
       name,
       collection,
@@ -301,15 +314,34 @@ export class PostmanGatewayAssetsClient {
     collectionUid: string
   ): Promise<{ uid: string; mockUrl: string } | null> {
     const mocks = await this.listMocks();
-    // The gateway list returns bare model ids; the caller passes a public uid.
-    // Compare on the model id so rediscovery works regardless of which id-space
-    // each side is in.
-    const want = this.toModelId(collectionUid);
-    const match = mocks.find((m) => this.toModelId(m.collection) === want);
+    // Both sides are public uids (`<owner>-<uuid>`): the mock list echoes the
+    // `collection` uid it was created with, and the caller passes the same uid.
+    const want = String(collectionUid ?? '').trim();
+    const match = mocks.find((m) => m.collection === want);
     return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
   }
 
-  // --- monitors (service: monitorsV2) ---
+  // --- monitors (service: monitors; collection-based = jobTemplates) ---
+
+  /** Map raw jobTemplate records to the facade shape; `collection` is a flat public uid. */
+  private mapJobTemplates(items: unknown[]): Array<{
+    uid: string;
+    name: string;
+    active: boolean;
+    collectionUid: string;
+    environmentUid: string;
+  }> {
+    return items
+      .map((raw) => this.asRecord(raw))
+      .filter((m): m is JsonRecord => m !== null)
+      .map((m) => ({
+        uid: this.idOf(m),
+        name: String(m.name ?? ''),
+        active: m.active !== false,
+        collectionUid: String(m.collection ?? ''),
+        environmentUid: String(m.environment ?? '')
+      }));
+  }
 
   async createMonitor(
     workspaceId: string,
@@ -320,21 +352,27 @@ export class PostmanGatewayAssetsClient {
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
     const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
-    const collectionId = this.toModelId(collectionUid);
-    const environmentId = this.toModelId(environmentUid);
+    const collection = String(collectionUid ?? '').trim();
+    const environment = String(environmentUid ?? '').trim();
+    // Canonical app `constructMonitor` body (MonitorFormComponent): `collection`
+    // is the flat public uid, and the request carries the full options/notifications/
+    // retry/distribution envelope monitoring-api validates against.
     const body: JsonRecord = {
       name,
-      type: 'collection-based',
-      collection: { id: collectionId },
+      collection,
+      options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
+      notifications: { onFailure: [], onError: [] },
+      retry: {},
       schedule: { cronPattern: effectiveCron, timeZone: 'UTC' },
-      ...(environmentId ? { environment: { id: environmentId } } : {})
+      distribution: null,
+      ...(environment ? { environment } : {})
     };
     const response = await retry(
       () =>
         this.gateway.requestJson<JsonRecord>({
-          service: 'monitorsV2',
+          service: 'monitors',
           method: 'post',
-          path: `/monitors?workspace=${ws}`,
+          path: `/jobTemplates?workspace=${ws}`,
           body
         }),
       { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
@@ -349,35 +387,22 @@ export class PostmanGatewayAssetsClient {
   async listMonitors(): Promise<
     Array<{ uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string }>
   > {
+    // `_etc=true` exposes the `_health` projection; the monitors land under `data`.
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'monitorsV2',
+      service: 'monitors',
       method: 'get',
-      path: `/monitors?workspace=${this.workspaceId}`
+      path: `/jobTemplates?workspace=${this.workspaceId}&_etc=true`
     });
     const data = response?.data;
-    const items = Array.isArray(data) ? data : [];
-    return items
-      .map((raw) => this.asRecord(raw))
-      .filter((m): m is JsonRecord => m !== null)
-      .map((m) => {
-        const collection = this.asRecord(m.collection);
-        const environment = this.asRecord(m.environment);
-        return {
-          uid: this.idOf(m),
-          name: String(m.name ?? ''),
-          active: m.active !== false,
-          collectionUid: collection ? String(collection.id ?? '') : String(m.collection ?? ''),
-          environmentUid: environment ? String(environment.id ?? '') : String(m.environment ?? '')
-        };
-      });
+    return this.mapJobTemplates(Array.isArray(data) ? data : []);
   }
 
   async monitorExists(uid: string): Promise<boolean> {
     try {
       await this.gateway.requestJson<JsonRecord>({
-        service: 'monitorsV2',
+        service: 'monitors',
         method: 'get',
-        path: `/monitors/${this.toModelId(uid)}`
+        path: `/jobTemplates/${uid}?_etc=true`
       });
       return true;
     } catch {
@@ -388,17 +413,25 @@ export class PostmanGatewayAssetsClient {
   async findMonitorByCollection(
     collectionUid: string
   ): Promise<{ uid: string; name: string } | null> {
-    const monitors = await this.listMonitors();
-    const want = this.toModelId(collectionUid);
-    const match = monitors.find((m) => this.toModelId(m.collectionUid) === want);
-    return match ? { uid: match.uid, name: match.name } : null;
+    // Monitors for one collection: GET /collections/:collectionUid/jobTemplates.
+    // The collection ref is the public uid passed straight through.
+    const want = String(collectionUid ?? '').trim();
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'monitors',
+      method: 'get',
+      path: `/collections/${want}/jobTemplates?_etc=true`
+    });
+    const data = response?.data;
+    const monitors = this.mapJobTemplates(Array.isArray(data) ? data : []);
+    const match = monitors.find((m) => m.collectionUid === want) ?? monitors[0];
+    return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
   async runMonitor(uid: string): Promise<void> {
     await this.gateway.requestJson<JsonRecord>({
-      service: 'monitorsV2',
+      service: 'monitors',
       method: 'post',
-      path: `/monitors/${uid}/run`
+      path: `/jobTemplates/${uid}/jobs`
     });
   }
 }

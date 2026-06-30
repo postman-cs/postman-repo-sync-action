@@ -1495,10 +1495,10 @@ export function createRepoSyncDependencies(
     // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
     // collection reads.
     getCollection: gatewayAssets.getCollection.bind(gatewayAssets),
-    // Mocks + monitors via the `mock` / `monitorsV2` services. The gateway
-    // client normalizes the collection to its bare model id, which the
-    // mock/monitor ACS permission lookup keys off (a public uid here 403s with
-    // "request access from the collection editor").
+    // Mocks via the `mock` service, collection-based monitors via the `monitors`
+    // service (jobTemplates). Both reference the collection by its full public
+    // uid (the gateway services key access off it, exactly like the public REST
+    // API); the bare model id 403s "request access from the collection editor".
     createMock: gatewayAssets.createMock.bind(gatewayAssets),
     listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
     mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
