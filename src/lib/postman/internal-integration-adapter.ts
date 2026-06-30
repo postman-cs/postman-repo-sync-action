@@ -11,6 +11,14 @@ export interface GovernanceAssociation {
 
 export interface InternalIntegrationAdapterOptions {
   accessToken: string;
+  /**
+   * Live token accessor. When present, the adapter reads the access token
+   * through it on every request instead of capturing `accessToken`, so a
+   * mid-run single-flight re-mint (AccessTokenProvider) propagates to the
+   * governance / workspace-link / identity Bifrost calls. Defaults to the
+   * static `accessToken` when omitted.
+   */
+  getAccessToken?: () => string;
   backend: string;
   bifrostBaseUrl?: string;
   fetchImpl?: typeof fetch;
@@ -58,6 +66,7 @@ function extractDuplicateWorkspaceId(body: string): string | undefined {
 
 class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly accessToken: string;
+  private readonly getAccessToken?: () => string;
   private readonly bifrostBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly orgMode: boolean;
@@ -67,6 +76,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
 
   constructor(options: InternalIntegrationAdapterOptions) {
     this.accessToken = String(options.accessToken || '').trim();
+    this.getAccessToken = options.getAccessToken;
     this.bifrostBaseUrl = String(
       options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, '');
@@ -81,11 +91,16 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       options.secretMasker ?? createSecretMasker([this.accessToken]);
   }
 
+  /** Live access token: re-minted value when a provider accessor is wired, else the captured one. */
+  private currentToken(): string {
+    return this.getAccessToken ? String(this.getAccessToken() || '').trim() : this.accessToken;
+  }
+
   /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
   private bifrostHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-access-token': this.accessToken
+      'x-access-token': this.currentToken()
     };
     if (this.teamId && this.orgMode) {
       headers['x-entity-team-id'] = this.teamId;
@@ -98,7 +113,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     const session = getMemoizedSessionIdentity();
     return {
       operation,
-      hasAccessToken: Boolean(this.accessToken),
+      hasAccessToken: Boolean(this.currentToken()),
       sessionTeamId: session?.teamId,
       sessionRoles: session?.roles,
       sessionConsumerType: session?.consumerType,
@@ -115,12 +130,13 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       return;
     }
 
+    const token = this.currentToken();
     const response = await this.fetchImpl(
       `${this.workerBaseUrl}/api/internal/system-envs/associate`,
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -137,10 +153,10 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        secretValues: [this.accessToken],
+        secretValues: [token],
         url: `${this.workerBaseUrl}/api/internal/system-envs/associate`
       });
       const advised = adviseFromHttpError(
@@ -208,7 +224,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: headers,
-        secretValues: [this.accessToken],
+        secretValues: [this.currentToken()],
         url,
         ...(consumedBody !== undefined ? { responseBody: consumedBody } : {})
       });
@@ -323,7 +339,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       const httpErr = await HttpError.fromResponse(response, {
         method: 'POST',
         requestHeaders: headers,
-        secretValues: [this.accessToken],
+        secretValues: [this.currentToken()],
         url
       });
       const advised = adviseFromHttpError(httpErr, this.adviceContext('API key generation'));

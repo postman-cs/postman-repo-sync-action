@@ -22168,6 +22168,18 @@ function redactSecrets(input, secretValues, replacement = REDACTED) {
 function createSecretMasker(secretValues, replacement = REDACTED) {
   return (input) => redactSecrets(input, secretValues, replacement);
 }
+function createMutableSecretMasker(initialSecretValues = [], replacement = REDACTED) {
+  const secrets = normalizeSecretValues(initialSecretValues);
+  return {
+    mask: (input) => redactSecrets(input, secrets, replacement),
+    add(value) {
+      const normalized = String(value ?? "").trim();
+      if (normalized && !secrets.includes(normalized)) {
+        secrets.push(normalized);
+      }
+    }
+  };
+}
 function headerEntries(headers) {
   if (headers instanceof Headers) {
     return Array.from(headers.entries());
@@ -23121,6 +23133,7 @@ function extractDuplicateWorkspaceId(body) {
 }
 var BifrostInternalIntegrationAdapter = class {
   accessToken;
+  getAccessToken;
   bifrostBaseUrl;
   fetchImpl;
   orgMode;
@@ -23129,6 +23142,7 @@ var BifrostInternalIntegrationAdapter = class {
   workerBaseUrl;
   constructor(options) {
     this.accessToken = String(options.accessToken || "").trim();
+    this.getAccessToken = options.getAccessToken;
     this.bifrostBaseUrl = String(
       options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
     ).replace(/\/+$/, "");
@@ -23140,11 +23154,15 @@ var BifrostInternalIntegrationAdapter = class {
     ).replace(/\/+$/, "");
     this.secretMasker = options.secretMasker ?? createSecretMasker([this.accessToken]);
   }
+  /** Live access token: re-minted value when a provider accessor is wired, else the captured one. */
+  currentToken() {
+    return this.getAccessToken ? String(this.getAccessToken() || "").trim() : this.accessToken;
+  }
   /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
   bifrostHeaders() {
     const headers = {
       "Content-Type": "application/json",
-      "x-access-token": this.accessToken
+      "x-access-token": this.currentToken()
     };
     if (this.teamId && this.orgMode) {
       headers["x-entity-team-id"] = this.teamId;
@@ -23156,7 +23174,7 @@ var BifrostInternalIntegrationAdapter = class {
     const session = getMemoizedSessionIdentity();
     return {
       operation,
-      hasAccessToken: Boolean(this.accessToken),
+      hasAccessToken: Boolean(this.currentToken()),
       sessionTeamId: session?.teamId,
       sessionRoles: session?.roles,
       sessionConsumerType: session?.consumerType,
@@ -23168,12 +23186,13 @@ var BifrostInternalIntegrationAdapter = class {
     if (associations.length === 0) {
       return;
     }
+    const token = this.currentToken();
     const response = await this.fetchImpl(
       `${this.workerBaseUrl}/api/internal/system-envs/associate`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -23189,10 +23208,10 @@ var BifrostInternalIntegrationAdapter = class {
       const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: {
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json"
         },
-        secretValues: [this.accessToken],
+        secretValues: [token],
         url: `${this.workerBaseUrl}/api/internal/system-envs/associate`
       });
       const advised = adviseFromHttpError(
@@ -23239,7 +23258,7 @@ var BifrostInternalIntegrationAdapter = class {
       const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: headers,
-        secretValues: [this.accessToken],
+        secretValues: [this.currentToken()],
         url,
         ...consumedBody !== void 0 ? { responseBody: consumedBody } : {}
       });
@@ -23311,7 +23330,7 @@ var BifrostInternalIntegrationAdapter = class {
       const httpErr = await HttpError.fromResponse(response, {
         method: "POST",
         requestHeaders: headers,
-        secretValues: [this.accessToken],
+        secretValues: [this.currentToken()],
         url
       });
       const advised = adviseFromHttpError(httpErr, this.adviceContext("API key generation"));
@@ -23930,6 +23949,368 @@ var PostmanAssetsClient = class {
     const mocks = await this.listMocks();
     const match = mocks.find((m) => m.collection === collectionUid);
     return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
+  }
+};
+
+// src/lib/postman/postman-gateway-assets-client.ts
+var PostmanGatewayAssetsClient = class {
+  gateway;
+  workspaceId;
+  constructor(options) {
+    this.gateway = options.gateway;
+    this.workspaceId = String(options.workspaceId || "").trim();
+  }
+  asRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value;
+  }
+  /** monitorsV2/mock create responses nest the entity under `data`, or return it bare. */
+  dataOf(envelope) {
+    if (!envelope) return null;
+    return this.asRecord(envelope.data) ?? envelope;
+  }
+  idOf(record) {
+    if (!record) return "";
+    const id = record.uid ?? record.id;
+    return typeof id === "string" ? id.trim() : String(id ?? "").trim();
+  }
+  isTransient(error) {
+    return error instanceof HttpError && (error.status === 429 || error.status >= 500);
+  }
+  // --- mocks (service: mock) ---
+  async createMock(workspaceId, name, collectionUid, environmentUid) {
+    const ws = workspaceId || this.workspaceId;
+    const body = {
+      name,
+      collection: collectionUid,
+      private: false,
+      ...environmentUid ? { environment: environmentUid } : {}
+    };
+    const response = await retry(
+      () => this.gateway.requestJson({
+        service: "mock",
+        method: "post",
+        path: `/mocks?workspace=${ws}`,
+        body
+      }),
+      { maxAttempts: 5, delayMs: 2e3, backoffMultiplier: 2, maxDelayMs: 15e3, shouldRetry: (e) => this.isTransient(e) }
+    );
+    const record = this.dataOf(response);
+    const uid = this.idOf(record);
+    if (!uid) {
+      throw new Error("Mock create did not return a UID");
+    }
+    return {
+      uid,
+      url: String(record?.url ?? record?.mockUrl ?? "").trim()
+    };
+  }
+  async listMocks() {
+    const response = await this.gateway.requestJson({
+      service: "mock",
+      method: "get",
+      path: `/mocks?workspace=${this.workspaceId}`
+    });
+    const items = Array.isArray(response) ? response : Array.isArray(this.asRecord(response)?.data) ? this.asRecord(response).data : [];
+    return items.map((raw) => this.asRecord(raw)).filter((m) => m !== null).map((m) => ({
+      uid: this.idOf(m),
+      name: String(m.name ?? ""),
+      collection: String(m.collection ?? ""),
+      mockUrl: String(m.url ?? m.mockUrl ?? ""),
+      environment: String(m.environment ?? "")
+    }));
+  }
+  async mockExists(uid) {
+    try {
+      await this.gateway.requestJson({
+        service: "mock",
+        method: "get",
+        path: `/mocks/${uid}`
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async findMockByCollection(collectionUid) {
+    const mocks = await this.listMocks();
+    const match = mocks.find((m) => m.collection === collectionUid);
+    return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
+  }
+  // --- monitors (service: monitorsV2) ---
+  async createMonitor(workspaceId, name, collectionUid, environmentUid, cronSchedule) {
+    const ws = workspaceId || this.workspaceId;
+    const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : "0 0 * * 0";
+    const body = {
+      name,
+      type: "collection-based",
+      collection: { id: collectionUid },
+      schedule: { cronPattern: effectiveCron, timeZone: "UTC" },
+      ...environmentUid ? { environment: { id: environmentUid } } : {}
+    };
+    const response = await retry(
+      () => this.gateway.requestJson({
+        service: "monitorsV2",
+        method: "post",
+        path: `/monitors?workspace=${ws}`,
+        body
+      }),
+      { maxAttempts: 5, delayMs: 2e3, backoffMultiplier: 2, maxDelayMs: 15e3, shouldRetry: (e) => this.isTransient(e) }
+    );
+    const uid = this.idOf(this.dataOf(response));
+    if (!uid) {
+      throw new Error("Monitor create did not return a UID");
+    }
+    return uid;
+  }
+  async listMonitors() {
+    const response = await this.gateway.requestJson({
+      service: "monitorsV2",
+      method: "get",
+      path: `/monitors?workspace=${this.workspaceId}`
+    });
+    const data = response?.data;
+    const items = Array.isArray(data) ? data : [];
+    return items.map((raw) => this.asRecord(raw)).filter((m) => m !== null).map((m) => {
+      const collection = this.asRecord(m.collection);
+      const environment = this.asRecord(m.environment);
+      return {
+        uid: this.idOf(m),
+        name: String(m.name ?? ""),
+        active: m.active !== false,
+        collectionUid: collection ? String(collection.id ?? "") : String(m.collection ?? ""),
+        environmentUid: environment ? String(environment.id ?? "") : String(m.environment ?? "")
+      };
+    });
+  }
+  async monitorExists(uid) {
+    try {
+      await this.gateway.requestJson({
+        service: "monitorsV2",
+        method: "get",
+        path: `/monitors/${uid}`
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async findMonitorByCollection(collectionUid) {
+    const monitors = await this.listMonitors();
+    const match = monitors.find((m) => m.collectionUid === collectionUid);
+    return match ? { uid: match.uid, name: match.name } : null;
+  }
+  async runMonitor(uid) {
+    await this.gateway.requestJson({
+      service: "monitorsV2",
+      method: "post",
+      path: `/monitors/${uid}/run`
+    });
+  }
+};
+
+// src/lib/postman/token-provider.ts
+var MintError = class extends Error {
+  permanent;
+  constructor(message, permanent) {
+    super(message);
+    this.name = "MintError";
+    this.permanent = permanent;
+  }
+};
+function extractAccessToken(payload) {
+  if (!payload || typeof payload !== "object") return void 0;
+  const record = payload;
+  const direct = record.access_token;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const session = record.session;
+  if (session && typeof session === "object") {
+    const token = session.token;
+    if (typeof token === "string" && token.trim()) return token.trim();
+  }
+  return void 0;
+}
+var AccessTokenProvider = class {
+  token;
+  apiKey;
+  apiBaseUrl;
+  fetchImpl;
+  maxAttempts;
+  onToken;
+  sleep;
+  inflight;
+  constructor(options) {
+    this.token = String(options.accessToken || "").trim();
+    this.apiKey = String(options.apiKey || "").trim();
+    this.apiBaseUrl = String(
+      options.apiBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl
+    ).replace(/\/+$/, "");
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.maxAttempts = Math.max(1, options.maxAttempts ?? 2);
+    this.onToken = options.onToken;
+    this.sleep = options.sleep;
+  }
+  current() {
+    return this.token;
+  }
+  /** True when a PMAK is present, so an expired token can be re-minted. */
+  canRefresh() {
+    return Boolean(this.apiKey);
+  }
+  refresh() {
+    this.inflight ??= this.mintWithRetry().finally(() => {
+      this.inflight = void 0;
+    });
+    return this.inflight;
+  }
+  async mintWithRetry() {
+    if (!this.apiKey) {
+      throw new Error(
+        "postman: the access token expired and cannot be refreshed because no postman-api-key is present. Service-account access tokens expire after about 1 to 1.5 hours. Re-mint a fresh token (postman-resolve-service-token-action) and re-run."
+      );
+    }
+    const token = await retry(() => this.mintOnce(), {
+      maxAttempts: this.maxAttempts,
+      delayMs: 1e3,
+      backoffMultiplier: 2,
+      ...this.sleep ? { sleep: this.sleep } : {},
+      shouldRetry: (error) => !(error instanceof MintError && error.permanent)
+    });
+    this.token = token;
+    this.onToken?.(token);
+    return token;
+  }
+  async mintOnce() {
+    const response = await this.fetchImpl(`${this.apiBaseUrl}/service-account-tokens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.apiKey
+      },
+      body: JSON.stringify({ apiKey: this.apiKey })
+    });
+    const body = await response.text().catch(() => "");
+    if (!response.ok) {
+      const status = response.status;
+      if (status === 401 || status === 403) {
+        throw new MintError(
+          `postman: re-mint failed because the postman-api-key was rejected (PMAK rejected, HTTP ${status}); confirm it is a valid, enabled service-account PMAK for the intended team.`,
+          true
+        );
+      }
+      if (status === 400 && body.toLowerCase().includes("service accounts not enabled")) {
+        throw new MintError(
+          "postman: re-mint failed because service accounts are not enabled for this team; enable them in Team Settings or use a team where they are.",
+          true
+        );
+      }
+      throw new MintError(`postman: re-mint failed (service-account-tokens HTTP ${status}).`, false);
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      parsed = void 0;
+    }
+    const token = extractAccessToken(parsed);
+    if (!token) {
+      throw new MintError("postman: re-mint succeeded but no access token was returned.", false);
+    }
+    return token;
+  }
+};
+
+// src/lib/postman/gateway-client.ts
+function isExpiredAuthError(status, body) {
+  return status === 401 || body.includes("UNAUTHENTICATED") || body.includes("authenticationError");
+}
+var AccessTokenGatewayClient = class {
+  tokenProvider;
+  bifrostBaseUrl;
+  teamId;
+  orgMode;
+  fetchImpl;
+  secretMasker;
+  constructor(options) {
+    this.tokenProvider = options.tokenProvider;
+    this.bifrostBaseUrl = String(
+      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
+    ).replace(/\/+$/, "");
+    this.teamId = String(options.teamId || "").trim();
+    this.orgMode = options.orgMode ?? false;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.secretMasker = options.secretMasker ?? createSecretMasker([this.tokenProvider.current()]);
+  }
+  configureTeamContext(teamId, orgMode) {
+    this.teamId = String(teamId || "").trim();
+    this.orgMode = orgMode;
+  }
+  buildHeaders(extra) {
+    const headers = {
+      "Content-Type": "application/json",
+      "x-access-token": this.tokenProvider.current(),
+      ...extra || {}
+    };
+    if (this.teamId && this.orgMode) {
+      headers["x-entity-team-id"] = this.teamId;
+    }
+    return headers;
+  }
+  async send(request) {
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
+    return this.fetchImpl(url, {
+      method: "POST",
+      headers: this.buildHeaders(request.headers),
+      body: JSON.stringify({
+        service: request.service,
+        method: request.method,
+        path: request.path,
+        ...request.query !== void 0 ? { query: request.query } : {},
+        ...request.body !== void 0 ? { body: request.body } : {}
+      })
+    });
+  }
+  /** Send a gateway request, refreshing the token once on an auth failure. */
+  async request(request) {
+    let response = await this.send(request);
+    if (response.ok) {
+      return response;
+    }
+    const body = await response.text().catch(() => "");
+    if (isExpiredAuthError(response.status, body) && this.tokenProvider.canRefresh()) {
+      await this.tokenProvider.refresh();
+      response = await this.send(request);
+      if (response.ok) {
+        return response;
+      }
+      const retryBody = await response.text().catch(() => "");
+      throw this.toHttpError(request, response, retryBody);
+    }
+    throw this.toHttpError(request, response, body);
+  }
+  /** Send a gateway request and parse the JSON body, or null when empty. */
+  async requestJson(request) {
+    const response = await this.request(request);
+    const text = await response.text().catch(() => "");
+    if (!text.trim()) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  toHttpError(request, response, body) {
+    return new HttpError({
+      method: request.method.toUpperCase(),
+      url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path})`,
+      status: response.status,
+      statusText: response.statusText,
+      requestHeaders: this.buildHeaders(request.headers),
+      responseBody: this.secretMasker(body),
+      secretValues: [this.tokenProvider.current()]
+    });
   }
 };
 
@@ -24801,7 +25182,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
 }
 function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   const repository = options.repository ?? inputs.repository;
-  const masker = options.secretMasker ?? createSecretMasker([
+  const mutableMasker = createMutableSecretMasker([
     resolved.apiKey,
     inputs.postmanAccessToken,
     inputs.githubToken,
@@ -24811,12 +25192,54 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     inputs.sslClientPassphrase,
     inputs.sslExtraCaCerts
   ]);
-  const postman = new PostmanAssetsClient({
+  const masker = mutableMasker.mask;
+  const pmakClient = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
     baseUrl: inputs.postmanApiBase,
     bifrostBaseUrl: inputs.postmanBifrostBase,
     secretMasker: masker
   });
+  let tokenProvider;
+  let postman = pmakClient;
+  if (inputs.postmanAccessToken) {
+    tokenProvider = new AccessTokenProvider({
+      accessToken: inputs.postmanAccessToken,
+      apiKey: resolved.apiKey,
+      apiBaseUrl: inputs.postmanApiBase,
+      onToken: (token) => {
+        factories.core.setSecret(token);
+        mutableMasker.add(token);
+      }
+    });
+    const gateway = new AccessTokenGatewayClient({
+      tokenProvider,
+      bifrostBaseUrl: inputs.postmanBifrostBase,
+      teamId: resolved.teamId,
+      orgMode: inputs.orgMode,
+      secretMasker: masker
+    });
+    const gatewayAssets = new PostmanGatewayAssetsClient({
+      gateway,
+      workspaceId: inputs.workspaceId
+    });
+    postman = {
+      // PMAK fallback (probe-failed gateway routes / non-asset identity):
+      createEnvironment: pmakClient.createEnvironment.bind(pmakClient),
+      updateEnvironment: pmakClient.updateEnvironment.bind(pmakClient),
+      getEnvironment: pmakClient.getEnvironment.bind(pmakClient),
+      getCollection: pmakClient.getCollection.bind(pmakClient),
+      // Gateway, access-token-primary (live-probed mock + monitorsV2 services):
+      createMock: gatewayAssets.createMock.bind(gatewayAssets),
+      listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
+      mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
+      findMockByCollection: gatewayAssets.findMockByCollection.bind(gatewayAssets),
+      createMonitor: gatewayAssets.createMonitor.bind(gatewayAssets),
+      listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
+      monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
+      findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
+      runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets)
+    };
+  }
   const repoMutation = repository && (inputs.repoWriteMode === "commit-only" || inputs.repoWriteMode === "commit-and-push") ? new RepoMutationService({
     repository,
     secretMasker: masker,
@@ -24833,6 +25256,9 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   }) : void 0;
   const internalIntegration = inputs.postmanAccessToken ? createInternalIntegrationAdapter({
     accessToken: inputs.postmanAccessToken,
+    // Live accessor so a gateway-triggered re-mint propagates to the
+    // governance / workspace-link / identity Bifrost calls too.
+    ...tokenProvider ? { getAccessToken: () => tokenProvider.current() } : {},
     backend: inputs.integrationBackend,
     bifrostBaseUrl: inputs.postmanBifrostBase,
     orgMode: inputs.orgMode,

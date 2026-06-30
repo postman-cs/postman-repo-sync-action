@@ -35,7 +35,14 @@ import {
 } from './lib/postman/credential-identity.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
-import { createSecretMasker, type SecretMasker } from './lib/secrets.js';
+import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets-client.js';
+import { AccessTokenProvider } from './lib/postman/token-provider.js';
+import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
+import {
+  createMutableSecretMasker,
+  createSecretMasker,
+  type SecretMasker
+} from './lib/secrets.js';
 import { validateCertMaterial } from './lib/ssl-validation.js';
 
 type EnvironmentValues = {
@@ -159,7 +166,7 @@ export interface RepoSyncDependencies {
 }
 
 export interface RepoSyncDependencyFactories {
-  core: Pick<CoreLike, 'info' | 'setOutput' | 'warning'>;
+  core: Pick<CoreLike, 'info' | 'setOutput' | 'warning' | 'setSecret'>;
   exec: ExecLike;
 }
 
@@ -1427,25 +1434,77 @@ export function createRepoSyncDependencies(
   options: { repository?: string; secretMasker?: SecretMasker } = {}
 ): RepoSyncDependencies {
   const repository = options.repository ?? inputs.repository;
-  const masker =
-    options.secretMasker ??
-    createSecretMasker([
-      resolved.apiKey,
-      inputs.postmanAccessToken,
-      inputs.githubToken,
-      inputs.ghFallbackToken,
-      inputs.sslClientCert,
-      inputs.sslClientKey,
-      inputs.sslClientPassphrase,
-      inputs.sslExtraCaCerts
-    ]);
+  // Mutable masker so a mid-run re-minted access token is redacted by the same
+  // instance already threaded into every client (AccessTokenProvider.onToken
+  // calls mutableMasker.add).
+  const mutableMasker = createMutableSecretMasker([
+    resolved.apiKey,
+    inputs.postmanAccessToken,
+    inputs.githubToken,
+    inputs.ghFallbackToken,
+    inputs.sslClientCert,
+    inputs.sslClientKey,
+    inputs.sslClientPassphrase,
+    inputs.sslExtraCaCerts
+  ]);
+  const masker = mutableMasker.mask;
 
-  const postman = new PostmanAssetsClient({
+  const pmakClient = new PostmanAssetsClient({
     apiKey: resolved.apiKey,
     baseUrl: inputs.postmanApiBase,
     bifrostBaseUrl: inputs.postmanBifrostBase,
     secretMasker: masker
   });
+
+  // Access-token-primary routing. When an access token is present, the mock and
+  // monitor asset ops run through the Bifrost gateway (x-access-token, with
+  // single-flight re-mint via AccessTokenProvider) using the live-probed
+  // `mock` / `monitorsV2` service envelopes. Environment writes and collection
+  // reads stay on the PMAK client: a live probe proved the gateway `environment`
+  // service returns invalidServiceError and `collection` reads 404 on the public
+  // uid, so those routes are documented PMAK exceptions. getMe/getTeams (resolve
+  // phase) are PMAK by design.
+  let tokenProvider: AccessTokenProvider | undefined;
+  let postman: RepoSyncDependencies['postman'] = pmakClient;
+  if (inputs.postmanAccessToken) {
+    tokenProvider = new AccessTokenProvider({
+      accessToken: inputs.postmanAccessToken,
+      apiKey: resolved.apiKey,
+      apiBaseUrl: inputs.postmanApiBase,
+      onToken: (token) => {
+        factories.core.setSecret(token);
+        mutableMasker.add(token);
+      }
+    });
+    const gateway = new AccessTokenGatewayClient({
+      tokenProvider,
+      bifrostBaseUrl: inputs.postmanBifrostBase,
+      teamId: resolved.teamId,
+      orgMode: inputs.orgMode,
+      secretMasker: masker
+    });
+    const gatewayAssets = new PostmanGatewayAssetsClient({
+      gateway,
+      workspaceId: inputs.workspaceId
+    });
+    postman = {
+      // PMAK fallback (probe-failed gateway routes / non-asset identity):
+      createEnvironment: pmakClient.createEnvironment.bind(pmakClient),
+      updateEnvironment: pmakClient.updateEnvironment.bind(pmakClient),
+      getEnvironment: pmakClient.getEnvironment.bind(pmakClient),
+      getCollection: pmakClient.getCollection.bind(pmakClient),
+      // Gateway, access-token-primary (live-probed mock + monitorsV2 services):
+      createMock: gatewayAssets.createMock.bind(gatewayAssets),
+      listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
+      mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
+      findMockByCollection: gatewayAssets.findMockByCollection.bind(gatewayAssets),
+      createMonitor: gatewayAssets.createMonitor.bind(gatewayAssets),
+      listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
+      monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
+      findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
+      runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets)
+    };
+  }
 
   const repoMutation =
     repository &&
@@ -1469,6 +1528,9 @@ export function createRepoSyncDependencies(
   const internalIntegration = inputs.postmanAccessToken
     ? createInternalIntegrationAdapter({
         accessToken: inputs.postmanAccessToken,
+        // Live accessor so a gateway-triggered re-mint propagates to the
+        // governance / workspace-link / identity Bifrost calls too.
+        ...(tokenProvider ? { getAccessToken: () => tokenProvider.current() } : {}),
         backend: inputs.integrationBackend,
         bifrostBaseUrl: inputs.postmanBifrostBase,
         orgMode: inputs.orgMode,
