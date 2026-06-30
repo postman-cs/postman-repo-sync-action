@@ -48,7 +48,7 @@ cat ~/.postman/postmanrc | jq -r '.login._profiles[].accessToken'
 
 Do not use that CLI-derived token as the normal CI credential. It expires with the user session, and repo sync logs a warning when preflight resolves a non-service-account access token.
 
-If `postman-access-token` is omitted, workspace linking, system environment association, and generated PMAK creation are skipped. Artifact export can still run with `postman-api-key` alone.
+`postman-access-token` is required. Every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace linking and system environment association runs through the access-token gateway, so without the token the action fails fast. The `postman-api-key` mints/re-mints that token, logs in the Postman CLI for the generated workflow's `postman collection run`, and mints the CI `POSTMAN_API_KEY` secret — it is never an asset-routing fallback.
 
 ## Credential preflight
 

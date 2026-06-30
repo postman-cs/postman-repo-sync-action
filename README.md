@@ -73,7 +73,7 @@ The example permissions let `GITHUB_TOKEN` commit generated artifacts and update
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-`postman-access-token` is required for workspace-to-repository linking, system environment association, and API key generation. Use `postman-resolve-service-token-action` to mint it at runtime from a [Postman service account](https://learning.postman.com/docs/administration/service-accounts/) PMAK. If it is omitted, those integration steps are skipped and the remaining artifact sync can still run with `postman-api-key`. See [docs/credentials.md](docs/credentials.md).
+`postman-access-token` is required: every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace-to-repository linking and system environment association runs through the access-token gateway. Use `postman-resolve-service-token-action` to mint it at runtime from a [Postman service account](https://learning.postman.com/docs/administration/service-accounts/) PMAK. Without it the action fails fast — the PMAK is not an asset-routing fallback; it only mints/re-mints the access token, powers the generated CI workflow's `postman login --with-api-key`, and mints the CI `POSTMAN_API_KEY` secret. See [docs/credentials.md](docs/credentials.md).
 
 ### Disable CI workflow generation
 
