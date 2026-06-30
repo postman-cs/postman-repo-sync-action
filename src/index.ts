@@ -1459,11 +1459,12 @@ export function createRepoSyncDependencies(
   // Access-token-primary routing. When an access token is present, the mock and
   // monitor asset ops run through the Bifrost gateway (x-access-token, with
   // single-flight re-mint via AccessTokenProvider) using the live-probed
-  // `mock` / `monitorsV2` service envelopes. Environment writes and collection
-  // reads stay on the PMAK client: a live probe proved the gateway `environment`
-  // service returns invalidServiceError and `collection` reads 404 on the public
-  // uid, so those routes are documented PMAK exceptions. getMe/getTeams (resolve
-  // phase) are PMAK by design.
+  // `mock` / `monitorsV2` service envelopes. Environment create/get also run
+  // gateway-primary via the `sync` service (the env service name behind this
+  // bifrost is `sync`, not `environment`; re-probed 2026-06-30), each with a PMAK
+  // fallback. Environment update and `collection` reads stay PMAK: update has no
+  // verified gateway shape and `collection` reads 404 on the public uid.
+  // getMe/getTeams (resolve phase) are PMAK by design.
   let tokenProvider: AccessTokenProvider | undefined;
   let postman: RepoSyncDependencies['postman'] = pmakClient;
   if (inputs.postmanAccessToken) {
@@ -1487,11 +1488,32 @@ export function createRepoSyncDependencies(
       gateway,
       workspaceId: inputs.workspaceId
     });
+    // Prefer the gateway; on failure fall back to PMAK when a key is present,
+    // otherwise rethrow (access-token-only runs surface the gateway error).
+    const hasPmak = Boolean(inputs.postmanApiKey);
+    const prefer = async <T>(label: string, gatewayFn: () => Promise<T>, pmakFn: () => Promise<T>): Promise<T> => {
+      try {
+        return await gatewayFn();
+      } catch (error) {
+        if (!hasPmak) throw error;
+        factories.core.warning(
+          `postman: gateway ${label} failed; falling back to the API key. ${error instanceof Error ? error.message : String(error)}`
+        );
+        return pmakFn();
+      }
+    };
     postman = {
-      // PMAK fallback (probe-failed gateway routes / non-asset identity):
-      createEnvironment: pmakClient.createEnvironment.bind(pmakClient),
+      // Gateway-primary via the `sync` service (live-probed), PMAK fallback:
+      createEnvironment: (workspaceId, name, values) =>
+        prefer(
+          'environment create',
+          () => gatewayAssets.createEnvironment(workspaceId, name, values),
+          () => pmakClient.createEnvironment(workspaceId, name, values)
+        ),
+      getEnvironment: (uid) =>
+        prefer('environment get', () => gatewayAssets.getEnvironment(uid), () => pmakClient.getEnvironment(uid)),
+      // PMAK-only (no verified gateway shape / non-asset identity):
       updateEnvironment: pmakClient.updateEnvironment.bind(pmakClient),
-      getEnvironment: pmakClient.getEnvironment.bind(pmakClient),
       getCollection: pmakClient.getCollection.bind(pmakClient),
       // Gateway, access-token-primary (live-probed mock + monitorsV2 services):
       createMock: gatewayAssets.createMock.bind(gatewayAssets),

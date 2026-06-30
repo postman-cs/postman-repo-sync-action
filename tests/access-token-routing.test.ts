@@ -116,11 +116,11 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
     expect(env.service).toBe('mock');
   });
 
-  it('keeps environment writes on the PMAK client (gateway environment service is a documented exception)', async () => {
+  it('routes environment create through the gateway sync service when an access token is present', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url) => {
       const u = String(url);
-      if (u.includes('/environments')) {
-        return jsonResponse({ environment: { uid: 'env-1' } });
+      if (u.includes('/ws/proxy')) {
+        return jsonResponse({ data: { uid: 'env-1' } });
       }
       return jsonResponse({}, { status: 500 });
     });
@@ -137,10 +137,13 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
     expect(uid).toBe('env-1');
 
     const call = fetchMock.mock.calls[0];
-    expect(String(call[0])).toContain('/environments?workspace=ws-123');
+    expect(String(call[0])).toContain('/ws/proxy');
     const headers = (call[1] as RequestInit).headers as Record<string, string>;
-    expect(headers['X-Api-Key']).toBe('pmak-test');
-    expect(headers['x-access-token']).toBeUndefined();
+    expect(headers['x-access-token']).toBe('access-token-xyz');
+    expect(headers['X-Api-Key']).toBeUndefined();
+    const proxied = JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+    expect(proxied.service).toBe('sync');
+    expect(String(proxied.path)).toContain('/environment/import?workspace=ws-123');
   });
 
   it('falls back to the PMAK client for all asset ops when no access token is present', async () => {

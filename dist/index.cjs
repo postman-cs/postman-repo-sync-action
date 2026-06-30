@@ -4014,11 +4014,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto2;
+    var crypto3;
     try {
-      crypto2 = require("node:crypto");
+      crypto3 = require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto2.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto3.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -4291,7 +4291,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto2 === void 0) {
+      if (crypto3 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4306,7 +4306,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto2.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto3.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5370,8 +5370,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto2 = require("node:crypto");
-      random = (max) => crypto2.randomInt(0, max);
+      const crypto3 = require("node:crypto");
+      random = (max) => crypto3.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -16818,13 +16818,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto2;
+    var crypto3;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto2 = require("node:crypto");
+      crypto3 = require("node:crypto");
     } catch {
-      crypto2 = {
+      crypto3 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -16837,7 +16837,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto2.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto3.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -16909,9 +16909,9 @@ var require_connection = __commonJS({
     var { Headers: Headers3, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto2;
+    var crypto3;
     try {
-      crypto2 = require("node:crypto");
+      crypto3 = require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -16931,7 +16931,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers3(options.headers));
         request.headersList = headersList;
       }
-      const keyValue = crypto2.randomBytes(16).toString("base64");
+      const keyValue = crypto3.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -16961,7 +16961,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto2.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto3.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -18797,7 +18797,7 @@ function escapeProperty(s) {
 }
 
 // node_modules/@actions/core/lib/file-command.js
-var crypto = __toESM(require("crypto"), 1);
+var crypto2 = __toESM(require("crypto"), 1);
 var fs = __toESM(require("fs"), 1);
 var os2 = __toESM(require("os"), 1);
 function issueFileCommand(command, message) {
@@ -18813,7 +18813,7 @@ function issueFileCommand(command, message) {
   });
 }
 function prepareKeyValueMessage(key, value) {
-  const delimiter3 = `ghadelimiter_${crypto.randomUUID()}`;
+  const delimiter3 = `ghadelimiter_${crypto2.randomUUID()}`;
   const convertedValue = toCommandValue(value);
   if (key.includes(delimiter3)) {
     throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter3}"`);
@@ -25889,6 +25889,75 @@ var PostmanGatewayAssetsClient = class {
   isTransient(error2) {
     return error2 instanceof HttpError && (error2.status === 429 || error2.status >= 500);
   }
+  // --- environments (service: sync) ---
+  //
+  // Verified live (scripts/live-gateway-probe.ts, 2026-06-30): the env service
+  // proxied through this bifrost is `sync`, NOT `environment` (which answered
+  // invalidServiceError). Import needs a client-generated id; list is POST (not
+  // GET); get-one is the sync subpath.
+  /**
+   * Create/upsert an environment through the sync service.
+   * POST /environment/import?workspace=:ws { id:<uuid>, name, values } -> { data:{ uid } }.
+   * The id is generated once and reused across retries so the import is
+   * idempotent (a retry upserts the same environment instead of duplicating it).
+   */
+  async createEnvironment(workspaceId, name, values) {
+    const ws = workspaceId || this.workspaceId;
+    const id = crypto.randomUUID();
+    const body = {
+      id,
+      name,
+      values: values.map((v) => ({
+        key: v.key,
+        value: v.value,
+        type: v.type ?? "default",
+        enabled: v.enabled ?? true
+      }))
+    };
+    const response = await retry(
+      () => this.gateway.requestJson({
+        service: "sync",
+        method: "post",
+        path: `/environment/import?workspace=${ws}`,
+        body
+      }),
+      { maxAttempts: 5, delayMs: 2e3, backoffMultiplier: 2, maxDelayMs: 15e3, shouldRetry: (e) => this.isTransient(e) }
+    );
+    const uid = this.idOf(this.dataOf(response));
+    if (!uid) {
+      throw new Error("Environment import did not return a UID");
+    }
+    return uid;
+  }
+  /**
+   * Fetch one environment's data through the sync service.
+   * GET /environment/:uid/sync?since_id=0 -> { entities:[{ data }] }; the env body
+   * is the first entity's `data` (mirrors the PMAK client's `environment` object).
+   */
+  async getEnvironment(uid) {
+    const response = await this.gateway.requestJson({
+      service: "sync",
+      method: "get",
+      path: `/environment/${uid}/sync?since_id=0`
+    });
+    const entities = Array.isArray(response?.entities) ? response.entities : [];
+    const first = this.asRecord(entities[0]);
+    return first?.data ?? null;
+  }
+  /**
+   * List environments in a workspace through the sync service.
+   * POST /list/environment?workspace=:ws -> { data:[...] } (LIST is POST, not GET).
+   */
+  async listEnvironments(workspaceId) {
+    const ws = workspaceId || this.workspaceId;
+    const response = await this.gateway.requestJson({
+      service: "sync",
+      method: "post",
+      path: `/list/environment?workspace=${ws}`
+    });
+    const items = Array.isArray(response?.data) ? response.data : [];
+    return items.map((raw) => this.asRecord(raw)).filter((e) => e !== null).map((e) => ({ name: String(e.name ?? ""), uid: this.idOf(e) }));
+  }
   // --- mocks (service: mock) ---
   async createMock(workspaceId, name, collectionUid, environmentUid) {
     const ws = workspaceId || this.workspaceId;
@@ -27308,11 +27377,28 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
       gateway,
       workspaceId: inputs.workspaceId
     });
+    const hasPmak = Boolean(inputs.postmanApiKey);
+    const prefer = async (label, gatewayFn, pmakFn) => {
+      try {
+        return await gatewayFn();
+      } catch (error2) {
+        if (!hasPmak) throw error2;
+        factories.core.warning(
+          `postman: gateway ${label} failed; falling back to the API key. ${error2 instanceof Error ? error2.message : String(error2)}`
+        );
+        return pmakFn();
+      }
+    };
     postman = {
-      // PMAK fallback (probe-failed gateway routes / non-asset identity):
-      createEnvironment: pmakClient.createEnvironment.bind(pmakClient),
+      // Gateway-primary via the `sync` service (live-probed), PMAK fallback:
+      createEnvironment: (workspaceId, name, values) => prefer(
+        "environment create",
+        () => gatewayAssets.createEnvironment(workspaceId, name, values),
+        () => pmakClient.createEnvironment(workspaceId, name, values)
+      ),
+      getEnvironment: (uid) => prefer("environment get", () => gatewayAssets.getEnvironment(uid), () => pmakClient.getEnvironment(uid)),
+      // PMAK-only (no verified gateway shape / non-asset identity):
       updateEnvironment: pmakClient.updateEnvironment.bind(pmakClient),
-      getEnvironment: pmakClient.getEnvironment.bind(pmakClient),
       getCollection: pmakClient.getCollection.bind(pmakClient),
       // Gateway, access-token-primary (live-probed mock + monitorsV2 services):
       createMock: gatewayAssets.createMock.bind(gatewayAssets),

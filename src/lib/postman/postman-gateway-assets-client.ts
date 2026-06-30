@@ -55,6 +55,87 @@ export class PostmanGatewayAssetsClient {
     return error instanceof HttpError && (error.status === 429 || error.status >= 500);
   }
 
+  // --- environments (service: sync) ---
+  //
+  // Verified live (scripts/live-gateway-probe.ts, 2026-06-30): the env service
+  // proxied through this bifrost is `sync`, NOT `environment` (which answered
+  // invalidServiceError). Import needs a client-generated id; list is POST (not
+  // GET); get-one is the sync subpath.
+
+  /**
+   * Create/upsert an environment through the sync service.
+   * POST /environment/import?workspace=:ws { id:<uuid>, name, values } -> { data:{ uid } }.
+   * The id is generated once and reused across retries so the import is
+   * idempotent (a retry upserts the same environment instead of duplicating it).
+   */
+  async createEnvironment(
+    workspaceId: string,
+    name: string,
+    values: Array<{ key: string; value: string; type?: string; enabled?: boolean }>
+  ): Promise<string> {
+    const ws = workspaceId || this.workspaceId;
+    const id = crypto.randomUUID();
+    const body: JsonRecord = {
+      id,
+      name,
+      values: values.map((v) => ({
+        key: v.key,
+        value: v.value,
+        type: v.type ?? 'default',
+        enabled: v.enabled ?? true
+      }))
+    };
+    const response = await retry(
+      () =>
+        this.gateway.requestJson<JsonRecord>({
+          service: 'sync',
+          method: 'post',
+          path: `/environment/import?workspace=${ws}`,
+          body
+        }),
+      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
+    );
+    const uid = this.idOf(this.dataOf(response));
+    if (!uid) {
+      throw new Error('Environment import did not return a UID');
+    }
+    return uid;
+  }
+
+  /**
+   * Fetch one environment's data through the sync service.
+   * GET /environment/:uid/sync?since_id=0 -> { entities:[{ data }] }; the env body
+   * is the first entity's `data` (mirrors the PMAK client's `environment` object).
+   */
+  async getEnvironment(uid: string): Promise<unknown> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'sync',
+      method: 'get',
+      path: `/environment/${uid}/sync?since_id=0`
+    });
+    const entities = Array.isArray(response?.entities) ? (response.entities as unknown[]) : [];
+    const first = this.asRecord(entities[0]);
+    return first?.data ?? null;
+  }
+
+  /**
+   * List environments in a workspace through the sync service.
+   * POST /list/environment?workspace=:ws -> { data:[...] } (LIST is POST, not GET).
+   */
+  async listEnvironments(workspaceId: string): Promise<Array<{ name: string; uid: string }>> {
+    const ws = workspaceId || this.workspaceId;
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'sync',
+      method: 'post',
+      path: `/list/environment?workspace=${ws}`
+    });
+    const items = Array.isArray(response?.data) ? (response.data as unknown[]) : [];
+    return items
+      .map((raw) => this.asRecord(raw))
+      .filter((e): e is JsonRecord => e !== null)
+      .map((e) => ({ name: String(e.name ?? ''), uid: this.idOf(e) }));
+  }
+
   // --- mocks (service: mock) ---
 
   async createMock(
