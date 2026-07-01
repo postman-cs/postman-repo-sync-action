@@ -24,6 +24,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     releaseLabel: undefined,
     environments: ['prod'],
     repoUrl: 'https://github.com/postman-cs/repo-sync-demo',
+    adoToken: '',
+    provider: 'github',
     integrationBackend: 'bifrost',
     workspaceLinkEnabled: true,
     environmentSyncEnabled: true,

@@ -62,8 +62,10 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'postman-access-token',
     credentialPreflight: 'warn',
+    adoToken: '',
     githubToken: 'github-token',
     ghFallbackToken: 'fallback-token',
+    provider: 'github',
     ciWorkflowBase64: '',
     generateCiWorkflow: true,
     monitorType: 'cloud',
@@ -604,6 +606,38 @@ describe('repo sync action', () => {
     expect(callArgs.stagePaths).not.toContain('.github/workflows/provision.yml');
   });
 
+  it('skips repo mutation instead of falling back to staging the repository root when no generated paths exist', async () => {
+    const { core, infos } = createCoreStub();
+    const repoMutation = {
+      commitAndPush: vi.fn()
+    };
+
+    const result = await runRepoSync(
+      createInputs({
+        workspaceId: '',
+        baselineCollectionId: '',
+        smokeCollectionId: '',
+        contractCollectionId: '',
+        environments: [],
+        workspaceLinkEnabled: false,
+        environmentSyncEnabled: false,
+        generateCiWorkflow: false
+      }),
+      {
+        core,
+        postman: {} as unknown as RepoSyncDependencies['postman'],
+        repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    expect(repoMutation.commitAndPush).not.toHaveBeenCalled();
+    expect(infos).toContain('No generated repository paths were found; skipping repo mutation.');
+    expect(result).toMatchObject({
+      'commit-sha': '',
+      'resolved-current-ref': 'feature/repo-sync'
+    });
+  });
+
   it('writes the generated CI workflow to a custom path when configured', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -653,7 +687,7 @@ describe('repo sync action', () => {
     );
   });
 
-  it('creates release-labeled collection directories for versioned exports', async () => {
+  it('derives release-labeled collection directories from full branch refs', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -679,7 +713,8 @@ describe('repo sync action', () => {
         environments: ['prod'],
         generateCiWorkflow: false,
         collectionSyncMode: 'version',
-        releaseLabel: 'release-2026-03'
+        currentRef: 'refs/heads/release/customer-onboarding',
+        githubRefName: 'customer-onboarding'
       }),
       {
         core: createCoreStub().core,
@@ -704,17 +739,17 @@ describe('repo sync action', () => {
 
     expect(
       existsSync(
-        'postman/collections/core-payments release-2026-03/.resources/definition.yaml'
+        'postman/collections/core-payments release-customer-onboarding/.resources/definition.yaml'
       )
     ).toBe(true);
     expect(
       existsSync(
-        'postman/collections/[Smoke] core-payments release-2026-03/.resources/definition.yaml'
+        'postman/collections/[Smoke] core-payments release-customer-onboarding/.resources/definition.yaml'
       )
     ).toBe(true);
     expect(
       existsSync(
-        'postman/collections/[Contract] core-payments release-2026-03/.resources/definition.yaml'
+        'postman/collections/[Contract] core-payments release-customer-onboarding/.resources/definition.yaml'
       )
     ).toBe(true);
   });

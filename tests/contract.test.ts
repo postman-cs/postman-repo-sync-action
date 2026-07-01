@@ -38,6 +38,8 @@ describe('postman-repo-sync-action contract', () => {
       'mock-url',
       'monitor-cron',
       'environments-json',
+      'git-provider',
+      'ado-token',
       'repo-url',
       'integration-backend',
       'workspace-link-enabled',
@@ -117,6 +119,26 @@ describe('postman-repo-sync-action contract', () => {
         INPUT_CREDENTIAL_PREFLIGHT: 'sometimes'
       })
     ).toThrow(/Unsupported credential-preflight/);
+  });
+
+  it('resolves Azure DevOps provider defaults from pipeline environment', () => {
+    const inputs = resolveInputs({
+      INPUT_PROJECT_NAME: 'core-payments',
+      BUILD_REPOSITORY_URI: 'git@ssh.dev.azure.com:v3/postman/CSE/repo-sync-demo',
+      BUILD_REPOSITORY_NAME: 'repo-sync-demo',
+      BUILD_SOURCEBRANCH: 'refs/heads/feature/ado-sync',
+      BUILD_SOURCEBRANCHNAME: 'ado-sync',
+      BUILD_SOURCEVERSION: 'abc123',
+      SYSTEM_ACCESSTOKEN: 'system-access-token'
+    });
+
+    expect(inputs.provider).toBe('azure-devops');
+    expect(inputs.repoUrl).toBe('https://dev.azure.com/postman/CSE/_git/repo-sync-demo');
+    expect(inputs.repository).toBe('repo-sync-demo');
+    expect(inputs.currentRef).toBe('refs/heads/feature/ado-sync');
+    expect(inputs.githubRefName).toBe('ado-sync');
+    expect(inputs.adoToken).toBe('system-access-token');
+    expect(inputs.ciWorkflowPath).toBe('azure-pipelines.yml');
   });
 
   it('documents current behavior and current-ref push semantics', () => {

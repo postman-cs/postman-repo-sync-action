@@ -137,7 +137,7 @@ with:
 | Name | Description | Required | Default |
 | --- | --- | --- | --- |
 | `generate-ci-workflow` | Whether to generate the CI workflow file | no | `true` |
-| `ci-workflow-path` | Path to write the generated CI workflow file | no | `.github/workflows/ci.yml` |
+| `ci-workflow-path` | Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise. | no |  |
 | `project-name` | Service project name used for environment, mock, and monitor naming. | yes |  |
 | `workspace-id` | Postman workspace ID used for workspace-link and export metadata. | no |  |
 | `baseline-collection-id` | Baseline collection ID used for exported artifacts and mock server creation. | no |  |
@@ -151,7 +151,9 @@ with:
 | `mock-url` | Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one. | no |  |
 | `monitor-cron` | Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run). | no | `""` |
 | `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
-| `repo-url` | Explicit repository URL (GitHub or GitLab). Defaults to https://github.com/$GITHUB_REPOSITORY on GitHub Actions, or $CI_PROJECT_URL on GitLab CI, when omitted. | no |  |
+| `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
+| `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
+| `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
 | `workspace-link-enabled` | Enable workspace linking. | no | `true` |
 | `environment-sync-enabled` | Enable association of Postman environments to system environments. | no | `true` |
 | `system-env-map-json` | JSON map of environment slug to system environment id. | no | `{}` |
