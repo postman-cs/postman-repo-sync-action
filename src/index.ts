@@ -18,6 +18,7 @@ import { getCiWorkflowTemplate, renderCiWorkflowTemplate } from './lib/ci-workfl
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
 import { createTelemetryContext } from '@postman-cse/automation-telemetry-core';
+import { resolveActionVersion } from './action-version.js';
 import {
   createInternalIntegrationAdapter,
   type InternalIntegrationAdapter
@@ -1176,7 +1177,7 @@ export async function runRepoSync(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
-  const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', logger: dependencies.core });
+  const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', actionVersion: resolveActionVersion(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
   try {
     const result = await runRepoSyncInner(inputs, dependencies);
