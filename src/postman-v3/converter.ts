@@ -8,13 +8,13 @@ type JsonRecord = Record<string, unknown>;
 
 /**
  * Convert a Postman v2.1 collection into the canonical Collection v3 multi-file
- * tree using the official Postman libraries — the same pipeline `postman
- * collection migrate` and the Postman app run internally:
+ * tree using `@postman/runtime.models` and `@postman/v3.export` — the same pipeline `postman
+ * collection migrate` and the app run internally:
  *
  *   `@postman/runtime.models` transform(V2 -> V3)  -> in-memory v3 IR
  *   `@postman/v3.export` splitCollection(v3 IR)    -> { files: [{path, content}] }
  *
- * The emitted layout is the canonical one the current Postman CLI/app read
+ * The emitted layout is the canonical one the current CLI and app read
  * (`.resources/definition.yaml`, folder directories, `<name>.request.yaml`,
  * `$kind:` discriminators) — NOT the legacy hand-rolled `collection.yaml`/
  * `folder.yaml`/`type:` dialect, which `postman collection lint` now rejects

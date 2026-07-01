@@ -28,7 +28,7 @@ tests/
 
 - **Source = access-token gateway.** Collections are pulled via the gateway `GET /v3/collections/:id/export` (returns canonical v3). PMAK is used ONLY to mint the access-token — never for any data call.
 - **Always write v3, never v2.** Allowed: v2->v3. Forbidden: writing raw v2 (v2->v2) and down-converting v3->v2. Anything read as v3 is written as v3 directly — never round-tripped through v2. (The old `v3-export-to-v2.ts` down-map was deleted for this reason.)
-- **converter.ts uses the official Postman libraries** — `@postman/runtime.models` `transform(V2->V3)` + `@postman/v3.export` `splitCollection` — the same pipeline `postman collection migrate` runs. We do NOT hand-roll conversion. Entry points:
+- **converter.ts uses `@postman/runtime.models` + `@postman/v3.export`** — `transform(V2->V3)` + `splitCollection` — the same pipeline `postman collection migrate` runs. We do NOT hand-roll conversion. Entry points:
   - `convertAndSplitAnyCollection(payload, dir)` — the sync path's entry; auto-detects v2 vs v3 and routes.
   - `convertAndSplitCollection(v2, dir)` — v2.1 -> canonical v3 (for customers still on v2).
   - `convertAndSplitV3Collection(v3Export, dir)` — gateway v3 export -> canonical v3, written directly.

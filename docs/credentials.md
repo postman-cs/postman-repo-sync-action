@@ -31,7 +31,7 @@ Use a [service-account](https://learning.postman.com/docs/administration/service
 
 ## `postman-api-key`
 
-Create a service-account [Postman API key](https://learning.postman.com/docs/reference/postman-api/authentication/) in Postman and store it as the `POSTMAN_API_KEY` repository secret. The same key can be passed to `postman-resolve-service-token-action` and to repo sync. For rotation and revocation, see Postman's [managing API keys](https://learning.postman.com/docs/administration/managing-your-team/managing-api-keys/) guide.
+Create a service-account [Postman API key](https://learning.postman.com/docs/reference/postman-api/authentication/) in Postman and store it as the `POSTMAN_API_KEY` repository secret. The same key can be passed to `postman-resolve-service-token-action` and to repo sync. For rotation and revocation, see the [managing API keys](https://learning.postman.com/docs/administration/managing-your-team/managing-api-keys/) guide.
 
 If the PMAK is missing or expired and `postman-access-token` is available, repo sync can generate a replacement PMAK. To persist that generated key back to the repository, provide a `github-token` or `gh-fallback-token` that can manage Actions secrets.
 
