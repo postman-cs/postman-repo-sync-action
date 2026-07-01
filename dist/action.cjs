@@ -1072,14 +1072,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path8 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path9 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path8 && path8[0] !== "/") {
-          path8 = `/${path8}`;
+        if (path9 && path9[0] !== "/") {
+          path9 = `/${path9}`;
         }
-        return new URL(`${origin}${path8}`);
+        return new URL(`${origin}${path9}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1530,39 +1530,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path8, origin }
+          request: { method, path: path9, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path8);
+        debuglog("sending request to %s %s/%s", method, origin, path9);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path8, origin },
+          request: { method, path: path9, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path8,
+          path9,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path8, origin }
+          request: { method, path: path9, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path8);
+        debuglog("trailers received from %s %s/%s", method, origin, path9);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path8, origin },
+          request: { method, path: path9, origin },
           error: error2
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path8,
+          path9,
           error2.message
         );
       });
@@ -1611,9 +1611,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path8, origin }
+            request: { method, path: path9, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path8);
+          debuglog("sending request to %s %s/%s", method, origin, path9);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1676,7 +1676,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request = class {
       constructor(origin, {
-        path: path8,
+        path: path9,
         method,
         body,
         headers,
@@ -1691,11 +1691,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path8 !== "string") {
+        if (typeof path9 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path8[0] !== "/" && !(path8.startsWith("http://") || path8.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path9[0] !== "/" && !(path9.startsWith("http://") || path9.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path8)) {
+        } else if (invalidPathRegex.test(path9)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1761,7 +1761,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path8, query) : path8;
+        this.path = query ? buildURL(path9, query) : path9;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -6325,7 +6325,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path8, host, upgrade, blocking, reset } = request;
+      const { method, path: path9, host, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6391,7 +6391,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path8} HTTP/1.1\r
+      let header = `${method} ${path9} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -6917,7 +6917,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path8, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path9, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -6984,7 +6984,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path8;
+      headers[HTTP2_HEADER_PATH] = path9;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7337,9 +7337,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path8 = search ? `${pathname}${search}` : pathname;
+        const path9 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path8;
+        this.opts.path = path9;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -8574,10 +8574,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path8 = "/",
+          path: path9 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path8;
+        opts.path = origin + path9;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL2(origin);
           headers.host = host;
@@ -10498,20 +10498,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path8) {
-      if (typeof path8 !== "string") {
-        return path8;
+    function safeUrl(path9) {
+      if (typeof path9 !== "string") {
+        return path9;
       }
-      const pathSegments = path8.split("?");
+      const pathSegments = path9.split("?");
       if (pathSegments.length !== 2) {
-        return path8;
+        return path9;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path8, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path8);
+    function matchKey(mockDispatch2, { path: path9, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path9);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10533,7 +10533,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path8 }) => matchValue(safeUrl(path8), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path9 }) => matchValue(safeUrl(path9), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10571,9 +10571,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path8, method, body, headers, query } = opts;
+      const { path: path9, method, body, headers, query } = opts;
       return {
-        path: path8,
+        path: path9,
         method,
         body,
         headers,
@@ -11036,10 +11036,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path8, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path9, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path8,
+            Path: path9,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -15920,9 +15920,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path8) {
-      for (let i = 0; i < path8.length; ++i) {
-        const code = path8.charCodeAt(i);
+    function validateCookiePath(path9) {
+      for (let i = 0; i < path9.length; ++i) {
+        const code = path9.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code === 127 || // DEL
         code === 59) {
@@ -18599,11 +18599,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path8 = opts.path;
+          let path9 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path8 = `/${path8}`;
+            path9 = `/${path9}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path8);
+          url = new URL(util.parseOrigin(url).origin + path9);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -20954,7 +20954,7 @@ function getIDToken(aud) {
 
 // src/index.ts
 var import_node_fs = require("node:fs");
-var path7 = __toESM(require("node:path"), 1);
+var path8 = __toESM(require("node:path"), 1);
 
 // node_modules/js-yaml/dist/js-yaml.mjs
 var __create2 = Object.create;
@@ -23883,13 +23883,17 @@ function validateHttpsInstallUrl(url) {
   }
   return url;
 }
-function renderCiWorkflowTemplate(options = {}) {
-  const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
-  const installUrl = validateHttpsInstallUrl(rawUrl);
-  const postmanRegion = String(options.postmanRegion || "").trim() || "us";
+function resolvePostmanRegion(postmanRegionOption) {
+  const postmanRegion = String(postmanRegionOption || "").trim() || "us";
   if (!["us", "eu"].includes(postmanRegion)) {
     throw new Error("postman-region must be one of: us, eu; got: " + postmanRegion);
   }
+  return postmanRegion;
+}
+function renderCiWorkflowTemplate(options = {}) {
+  const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+  const installUrl = validateHttpsInstallUrl(rawUrl);
+  const postmanRegion = resolvePostmanRegion(options.postmanRegion);
   return buildCiWorkflowLines(installUrl, postmanRegion).join("\n");
 }
 function buildCiWorkflowLines(installUrl, postmanRegion) {
@@ -23990,6 +23994,143 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
   ];
 }
 var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
+function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
+  return [
+    "trigger:",
+    "  branches:",
+    "    include:",
+    "      - main",
+    "schedules:",
+    '  - cron: "0 */6 * * *"',
+    "    displayName: Scheduled run",
+    "    branches:",
+    "      include:",
+    "        - main",
+    "    always: true",
+    "pool:",
+    "  vmImage: ubuntu-latest",
+    "steps:",
+    "  - checkout: self",
+    "    persistCredentials: true",
+    '  - script: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
+    "    displayName: Install Postman CLI",
+    "    env:",
+    `      POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
+    '  - script: postman login --with-api-key "$POSTMAN_API_KEY"' + (postmanRegion === "eu" ? " --region eu" : ""),
+    "    displayName: Login to Postman CLI",
+    "    env:",
+    "      POSTMAN_API_KEY: $(POSTMAN_API_KEY)",
+    "  - script: |",
+    "      SMOKE=$(grep '\\[Smoke\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      CONTRACT=$(grep '\\[Contract\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      ENV=$(grep 'prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      ENV=${ENV:-$(grep '\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
+    '      [ -n "$SMOKE" ] || { echo "Missing smoke collection UID in .postman/resources.yaml"; exit 1; }',
+    '      [ -n "$CONTRACT" ] || { echo "Missing contract collection UID in .postman/resources.yaml"; exit 1; }',
+    '      [ -n "$ENV" ] || { echo "Missing environment UID in .postman/resources.yaml"; exit 1; }',
+    '      echo "##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]$SMOKE"',
+    '      echo "##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]$CONTRACT"',
+    '      echo "##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]$ENV"',
+    "    displayName: Resolve Postman Resource IDs",
+    "  - script: |",
+    '      mkdir -p "$(Agent.TempDirectory)/postman-ssl"',
+    '      printf %s "$POSTMAN_SSL_CLIENT_CERT_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '      printf %s "$POSTMAN_SSL_CLIENT_KEY_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/client.key"',
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var POSTMAN_SSL_EXTRA_CA_CERTS_B64",
+    '      if [ -n "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" ]; then',
+    '        printf %s "$POSTMAN_SSL_EXTRA_CA_CERTS_B64" | base64 -d > "$(Agent.TempDirectory)/postman-ssl/ca.crt"',
+    "      fi",
+    "    condition: ne(variables['POSTMAN_SSL_CLIENT_CERT_B64'], '')",
+    "    displayName: Decode SSL certificates",
+    "    env:",
+    "      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)",
+    "      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)",
+    "      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)",
+    "  - script: |",
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var CI_ENVIRONMENT",
+    "      normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE",
+    '      CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
+    '        -e "$POSTMAN_ENVIRONMENT_UID"',
+    "        --report-events",
+    '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
+    '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
+    '        if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '          CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "        fi",
+    '        if [ -f "$(Agent.TempDirectory)/postman-ssl/ca.crt" ]; then',
+    '          CMD+=(--ssl-extra-ca-certs "$(Agent.TempDirectory)/postman-ssl/ca.crt")',
+    "        fi",
+    "      fi",
+    '      "${CMD[@]}"',
+    "    displayName: Run Smoke Tests",
+    "    env:",
+    "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
+    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    "  - script: |",
+    "      normalize_azure_optional_var() {",
+    '        local name="$1"',
+    '        local value="${!name:-}"',
+    "        local unresolved_prefix='$'",
+    '        unresolved_prefix="${unresolved_prefix}("',
+    '        if [[ "$value" == "$unresolved_prefix"*")" ]]; then',
+    '          printf -v "$name" %s ""',
+    "        fi",
+    "      }",
+    "      normalize_azure_optional_var CI_ENVIRONMENT",
+    "      normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE",
+    '      CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
+    '        -e "$POSTMAN_ENVIRONMENT_UID"',
+    "        --report-events",
+    '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
+    '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
+    '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
+    '        if [ -n "$POSTMAN_SSL_CLIENT_PASSPHRASE" ]; then',
+    '          CMD+=(--ssl-client-passphrase "$POSTMAN_SSL_CLIENT_PASSPHRASE")',
+    "        fi",
+    '        if [ -f "$(Agent.TempDirectory)/postman-ssl/ca.crt" ]; then',
+    '          CMD+=(--ssl-extra-ca-certs "$(Agent.TempDirectory)/postman-ssl/ca.crt")',
+    "        fi",
+    "      fi",
+    '      "${CMD[@]}"',
+    "    displayName: Run Contract Tests",
+    "    env:",
+    "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
+    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    ""
+  ];
+}
+function getCiWorkflowTemplate(provider, options = {}) {
+  if (provider === "azure-devops") {
+    const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+    const postmanRegion = resolvePostmanRegion(options.postmanRegion);
+    return buildAdoCiWorkflowLines(validateHttpsInstallUrl(rawUrl), postmanRegion).join("\n");
+  }
+  return renderCiWorkflowTemplate(options);
+}
+
+// src/lib/github/repo-mutation.ts
+var import_node_path = __toESM(require("node:path"), 1);
 
 // src/lib/secrets.ts
 var REDACTED = "[REDACTED]";
@@ -24104,8 +24245,88 @@ function normalizeBranchRef(value) {
   return trimmed;
 }
 function buildPushTokenOrder(options) {
-  const ordered = [options.fallbackToken, options.githubToken].map((entry) => String(entry || "").trim()).filter(Boolean);
+  const ordered = [options.adoToken, options.fallbackToken, options.githubToken].map((entry) => String(entry || "").trim()).filter(Boolean);
   return ordered.filter((token, index) => ordered.indexOf(token) === index);
+}
+function parseHttpsRemote(rawUrl) {
+  const trimmed = String(rawUrl || "").trim();
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  let normalized = sshMatch ? normalizeSshRemote(sshMatch[1], sshMatch[2]) : trimmed;
+  const url = new URL(normalized);
+  if (url.hostname === "ssh.dev.azure.com") {
+    normalized = normalizeAzureReposSshPath(url.pathname.replace(/^\/+/, ""));
+  }
+  const parsed = new URL(normalized);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.hash = "";
+  return parsed;
+}
+function normalizeSshRemote(host, remotePath) {
+  if (host === "ssh.dev.azure.com") {
+    return normalizeAzureReposSshPath(remotePath);
+  }
+  return `https://${host}/${remotePath}`;
+}
+function normalizeAzureReposSshPath(remotePath) {
+  const segments = remotePath.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "v3") {
+    return `https://ssh.dev.azure.com/${remotePath}`;
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join("/")}`;
+}
+function normalizeRemotePathname(pathname) {
+  return pathname.replace(/\/+$/g, "");
+}
+function withoutGitSuffix(pathname) {
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith(".git") ? normalized.slice(0, -4) : normalized;
+}
+function withGitSuffix(pathname) {
+  const normalized = normalizeRemotePathname(pathname);
+  return normalized.endsWith(".git") ? normalized : `${normalized}.git`;
+}
+function formatUrl(url, pathname = url.pathname) {
+  return `${url.protocol}//${url.host}${pathname}${url.search}`;
+}
+function buildAuthenticatedRemoteUrl(provider, repository, token, repoUrl) {
+  const encodedToken = encodeURIComponent(token);
+  if (provider === "github") {
+    const url = parseHttpsRemote(repoUrl || `https://github.com/${repository}`);
+    return `${url.protocol}//x-access-token:${encodedToken}@${url.host}${withGitSuffix(withoutGitSuffix(url.pathname))}${url.search}`;
+  }
+  if (provider === "gitlab") {
+    const url = parseHttpsRemote(repoUrl || `https://gitlab.com/${repository}`);
+    return `${url.protocol}//oauth2:${encodedToken}@${url.host}${withGitSuffix(withoutGitSuffix(url.pathname))}${url.search}`;
+  }
+  if (provider === "azure-devops") {
+    const url = parseHttpsRemote(repoUrl || `https://dev.azure.com/${repository}`);
+    return `${url.protocol}//anything:${encodedToken}@${url.host}${url.pathname}${url.search}`;
+  }
+  throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${provider}"`);
+}
+function supportsTokenRemote(provider) {
+  return provider === "github" || provider === "gitlab" || provider === "azure-devops";
+}
+function buildScopedExtraHeaderResetConfigs(provider, remoteUrl) {
+  const fallbackRoot = provider === "gitlab" ? "https://gitlab.com/" : "https://github.com/";
+  const url = parseHttpsRemote(remoteUrl || fallbackRoot);
+  const keys = [];
+  if (provider === "azure-devops") {
+    if (url.hostname === "dev.azure.com") {
+      const [organization] = url.pathname.split("/").filter(Boolean);
+      if (organization) {
+        keys.push(`http.${url.protocol}//${url.host}/${organization}/.extraheader=`);
+      }
+    } else if (url.hostname.endsWith(".visualstudio.com")) {
+      keys.push(`http.${url.protocol}//${url.host}/.extraheader=`);
+    }
+    keys.push(`http.${formatUrl(url)}.extraheader=`);
+  } else {
+    keys.push(`http.${url.protocol}//${url.host}/.extraheader=`);
+  }
+  return keys.filter((key, index) => keys.indexOf(key) === index);
 }
 function resolveCurrentRef(context) {
   if (context.repoWriteMode !== "commit-and-push") {
@@ -24117,25 +24338,62 @@ function resolveCurrentRef(context) {
   }
   return normalizeBranchRef(currentRef) || normalizeBranchRef(context.githubHeadRef) || normalizeBranchRef(context.githubRefName);
 }
+function hasControlCharacter(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+function normalizeStagePaths(stagePaths) {
+  const normalized = [];
+  for (const entry of stagePaths) {
+    const rawPath = String(entry || "");
+    const stagePath = rawPath.trim();
+    if (!stagePath) {
+      continue;
+    }
+    const segments = stagePath.split(/[\\/]+/).filter(Boolean);
+    if (hasControlCharacter(rawPath) || import_node_path.default.isAbsolute(stagePath) || import_node_path.default.win32.isAbsolute(stagePath) || segments.includes("..") || stagePath.startsWith(":") || hasControlCharacter(stagePath)) {
+      throw new Error(`Unsafe git stage path: ${stagePath}`);
+    }
+    normalized.push(stagePath);
+  }
+  return normalized;
+}
 var RepoMutationService = class {
   execute;
+  provider;
   repository;
+  repoUrl;
   secretMasker;
   constructor(options) {
     this.execute = options.execute;
+    this.provider = options.provider ?? "github";
     this.repository = options.repository;
+    this.repoUrl = options.repoUrl;
     this.secretMasker = options.secretMasker ?? createSecretMasker([]);
   }
   async commitAndPush(options) {
     const resolvedCurrentRef = resolveCurrentRef(options);
-    const tokens = buildPushTokenOrder({
+    const stagePaths = normalizeStagePaths(options.stagePaths);
+    const tokens = this.provider === "azure-devops" ? buildPushTokenOrder({ adoToken: options.adoToken }) : buildPushTokenOrder({
       fallbackToken: options.fallbackToken,
       githubToken: options.githubToken
     });
     const secretMasker = createSecretMasker(tokens);
+    if (stagePaths.length === 0) {
+      return {
+        commitSha: "",
+        pushed: false,
+        resolvedCurrentRef
+      };
+    }
     await this.execute("git", ["config", "user.name", options.committerName]);
     await this.execute("git", ["config", "user.email", options.committerEmail]);
-    await this.execute("git", ["add", "-A", "--", ...options.stagePaths]);
+    await this.execute("git", ["add", "-A", "--", ...stagePaths]);
     const staged = await this.execute("git", ["diff", "--cached", "--quiet"]);
     if (staged.exitCode === 0) {
       return {
@@ -24160,27 +24418,38 @@ var RepoMutationService = class {
     if (!resolvedCurrentRef) {
       throw new Error("No current ref could be resolved for repo-write-mode=commit-and-push");
     }
-    if (tokens.length === 0) {
+    const usePersistedCredentials = tokens.length === 0 && this.provider === "azure-devops";
+    if (tokens.length === 0 && !usePersistedCredentials) {
       throw new Error("No push token configured for repo-write-mode=commit-and-push");
     }
+    if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
+      throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+    }
     const originalRemote = (await this.execute("git", ["remote", "get-url", "origin"])).stdout.trim();
-    await this.execute("git", [
-      "config",
-      "--unset-all",
-      "http.https://github.com/.extraheader"
-    ]);
     let pushed = false;
     let lastError = "";
+    let remoteChanged = false;
     const isNonRetryablePushError = (message) => /workflow|permission/i.test(message);
     try {
-      for (const token of tokens) {
-        await this.execute("git", [
-          "remote",
-          "set-url",
-          "origin",
-          `https://x-access-token:${token}@github.com/${this.repository}.git`
-        ]);
+      const pushCandidates = usePersistedCredentials ? [null] : tokens;
+      for (const token of pushCandidates) {
+        const resetConfigArgs = token === null ? [] : buildScopedExtraHeaderResetConfigs(this.provider, originalRemote || this.repoUrl || "").flatMap((config) => ["-c", config]);
+        if (token !== null) {
+          await this.execute("git", [
+            "remote",
+            "set-url",
+            "origin",
+            buildAuthenticatedRemoteUrl(
+              this.provider,
+              this.repository,
+              token,
+              this.repoUrl || originalRemote
+            )
+          ]);
+          remoteChanged = true;
+        }
         const push = await this.execute("git", [
+          ...resetConfigArgs,
           "push",
           "origin",
           `HEAD:refs/heads/${resolvedCurrentRef}`
@@ -24195,7 +24464,9 @@ var RepoMutationService = class {
         }
       }
     } finally {
-      await this.execute("git", ["remote", "set-url", "origin", originalRemote]);
+      if (remoteChanged) {
+        await this.execute("git", ["remote", "set-url", "origin", originalRemote]);
+      }
     }
     if (!pushed) {
       throw new Error(secretMasker(lastError || "Failed to push generated changes"));
@@ -24221,10 +24492,31 @@ function normalizeRepoUrl(url) {
   const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
   if (sshMatch) {
     const host = sshMatch[1];
-    const path8 = sshMatch[2];
-    return `https://${host}/${path8}`;
+    const path9 = sshMatch[2];
+    if (host === "ssh.dev.azure.com") {
+      return normalizeAzureReposSshPath2(path9);
+    }
+    return `https://${host}/${path9}`;
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.hostname === "ssh.dev.azure.com") {
+      return normalizeAzureReposSshPath2(parsed.pathname.replace(/^\/+/, ""));
+    }
+  } catch {
   }
   return raw.replace(/\.git$/, "");
+}
+function normalizeAzureReposSshPath2(remotePath) {
+  const segments = remotePath.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "v3") {
+    return `https://ssh.dev.azure.com/${remotePath}`.replace(/\.git$/, "");
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join("/")}`.replace(
+    /\.git$/,
+    ""
+  );
 }
 function parseProvider(explicitProvider, repoUrl, env) {
   const explicit = normalize(explicitProvider)?.toLowerCase();
@@ -24439,8 +24731,8 @@ function normalizeRepoUrl2(url) {
   const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
   if (sshMatch) {
     const host = sshMatch[1];
-    const path8 = sshMatch[2];
-    return `https://${host}/${path8}`;
+    const path9 = sshMatch[2];
+    return `https://${host}/${path9}`;
   }
   return raw.replace(/\.git$/, "");
 }
@@ -25314,6 +25606,15 @@ var postmanRepoSyncActionContract = {
       required: false,
       default: '["prod"]'
     },
+    "git-provider": {
+      description: "Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected when omitted.",
+      required: false,
+      allowedValues: ["github", "gitlab", "bitbucket", "azure-devops"]
+    },
+    "ado-token": {
+      description: "Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.",
+      required: false
+    },
     "repo-url": {
       description: "Explicit repository URL. Defaults to the workflow repository URL.",
       required: false
@@ -25567,8 +25868,8 @@ var PostmanAssetsClient = class {
   getBifrostBaseUrl() {
     return this.bifrostBaseUrl;
   }
-  async request(path8, init = {}) {
-    const url = path8.startsWith("http") ? path8 : `${this.baseUrl}${path8}`;
+  async request(path9, init = {}) {
+    const url = path9.startsWith("http") ? path9 : `${this.baseUrl}${path9}`;
     const response = await this.fetchImpl(url, {
       ...init,
       headers: {
@@ -25669,8 +25970,8 @@ var PostmanAssetsClient = class {
    * non-idempotent creates is ambiguous (the asset may exist server-side),
    * so it is not retried to avoid duplicate mocks and monitors.
    */
-  async requestWithCollectionRetry(path8, init) {
-    return retry(() => this.request(path8, init), {
+  async requestWithCollectionRetry(path9, init) {
+    return retry(() => this.request(path9, init), {
       maxAttempts: 5,
       delayMs: 2e3,
       backoffMultiplier: 2,
@@ -25959,7 +26260,12 @@ function deriveReleaseLabel(inputs) {
   if (explicit) {
     return explicit;
   }
-  return normalizeReleaseLabel(inputs.githubRefName);
+  return normalizeReleaseLabel(resolveCurrentRef({
+    currentRef: inputs.currentRef,
+    githubHeadRef: inputs.githubHeadRef,
+    githubRefName: inputs.githubRefName,
+    repoWriteMode: "commit-and-push"
+  }));
 }
 function createAssetProjectName(inputs, releaseLabel) {
   if ((inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version") && releaseLabel) {
@@ -25970,7 +26276,8 @@ function createAssetProjectName(inputs, releaseLabel) {
 function resolveInputs(env = process.env) {
   const repoContext = detectRepoContext(
     {
-      repoUrl: getInput2("repo-url", env)
+      repoUrl: getInput2("repo-url", env),
+      gitProvider: getInput2("git-provider", env)
     },
     env
   );
@@ -26002,20 +26309,22 @@ function resolveInputs(env = process.env) {
     envRuntimeUrls,
     artifactDir: getInput2("artifact-dir", env) || "postman",
     repoWriteMode: normalizeRepoWriteMode(getInput2("repo-write-mode", env) || "commit-and-push"),
-    currentRef: getInput2("current-ref", env) || normalizeInputValue(env.GITHUB_REF),
-    githubHeadRef: getInput2("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF),
+    currentRef: getInput2("current-ref", env) || normalizeInputValue(env.GITHUB_REF) || normalizeInputValue(env.BUILD_SOURCEBRANCH),
+    githubHeadRef: getInput2("github-head-ref", env) || normalizeInputValue(env.GITHUB_HEAD_REF) || normalizeInputValue(env.SYSTEM_PULLREQUEST_SOURCEBRANCH),
     githubRefName: getInput2("github-ref-name", env) || normalizeInputValue(env.GITHUB_REF_NAME) || normalizeInputValue(repoContext.ref),
     committerName: getInput2("committer-name", env) || "Postman",
     committerEmail: getInput2("committer-email", env) || "support@postman.com",
     postmanApiKey: getInput2("postman-api-key", env),
     postmanAccessToken: getInput2("postman-access-token", env),
     credentialPreflight: parseCredentialPreflight(getInput2("credential-preflight", env)),
+    adoToken: getInput2("ado-token", env) || normalizeInputValue(env.SYSTEM_ACCESSTOKEN),
     githubToken: getInput2("github-token", env),
     ghFallbackToken: getInput2("gh-fallback-token", env),
+    provider: repoContext.provider,
     ciWorkflowBase64: getInput2("ci-workflow-base64", env),
     generateCiWorkflow: parseBooleanInput(getInput2("generate-ci-workflow", env), true),
     monitorType: getInput2("monitor-type", env) || "cloud",
-    ciWorkflowPath: getInput2("ci-workflow-path", env) || ".github/workflows/ci.yml",
+    ciWorkflowPath: getInput2("ci-workflow-path", env) || (repoContext.provider === "azure-devops" ? "azure-pipelines.yml" : ".github/workflows/ci.yml"),
     orgMode: parseBooleanInput(getInput2("org-mode", env), false),
     monitorId: getInput2("monitor-id", env),
     mockUrl: getInput2("mock-url", env),
@@ -26079,7 +26388,7 @@ function getEnvironmentUidsFromResources(resourcesState) {
   );
 }
 function normalizeToPosix(filePath) {
-  return filePath.split(path7.sep).join("/").replace(/\\/g, "/");
+  return filePath.split(path8.sep).join("/").replace(/\\/g, "/");
 }
 function isOpenApiSpecFile(filePath) {
   if (!(filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml"))) {
@@ -26119,7 +26428,7 @@ function scanLocalSpecReferences(baseDir = ".") {
       if (ignoredDirs.has(entry.name)) {
         continue;
       }
-      const fullPath = path7.join(currentDir, entry.name);
+      const fullPath = path8.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         visit(fullPath);
         continue;
@@ -26127,14 +26436,14 @@ function scanLocalSpecReferences(baseDir = ".") {
       if (!entry.isFile() || !isOpenApiSpecFile(fullPath)) {
         continue;
       }
-      const repoRelativePath = normalizeToPosix(path7.relative(baseDir, fullPath));
+      const repoRelativePath = normalizeToPosix(path8.relative(baseDir, fullPath));
       if (found.has(repoRelativePath)) {
         continue;
       }
       found.add(repoRelativePath);
       refs.push({
         repoRelativePath,
-        configRelativePath: normalizeToPosix(path7.join("..", repoRelativePath))
+        configRelativePath: normalizeToPosix(path8.join("..", repoRelativePath))
       });
     }
   };
@@ -26144,11 +26453,11 @@ function scanLocalSpecReferences(baseDir = ".") {
 function resolveMappedSpecReference(explicitSpecPath, discoveredSpecs) {
   const normalizedExplicitPath = normalizeToPosix(explicitSpecPath.trim());
   if (normalizedExplicitPath) {
-    const explicitFullPath = path7.resolve(normalizedExplicitPath);
+    const explicitFullPath = path8.resolve(normalizedExplicitPath);
     if ((0, import_node_fs.existsSync)(explicitFullPath) && (0, import_node_fs.statSync)(explicitFullPath).isFile()) {
       return {
         repoRelativePath: normalizedExplicitPath,
-        configRelativePath: normalizeToPosix(path7.join("..", normalizedExplicitPath))
+        configRelativePath: normalizeToPosix(path8.join("..", normalizedExplicitPath))
       };
     }
   }
@@ -26179,27 +26488,14 @@ function readActionInputs(actionCore) {
   const projectName = readInput(actionCore, "project-name", true);
   const postmanApiKey = readInput(actionCore, "postman-api-key");
   const postmanAccessToken = readInput(actionCore, "postman-access-token");
+  const adoToken = readInput(actionCore, "ado-token");
   const githubToken = readInput(actionCore, "github-token");
   const ghFallbackToken = readInput(actionCore, "gh-fallback-token");
   const sslClientCert = readInput(actionCore, "ssl-client-cert");
   const sslClientKey = readInput(actionCore, "ssl-client-key");
   const sslClientPassphrase = readInput(actionCore, "ssl-client-passphrase");
   const sslExtraCaCerts = readInput(actionCore, "ssl-extra-ca-certs");
-  if (postmanApiKey) actionCore.setSecret(postmanApiKey);
-  if (postmanAccessToken) actionCore.setSecret(postmanAccessToken);
-  if (githubToken) actionCore.setSecret(githubToken);
-  if (ghFallbackToken) actionCore.setSecret(ghFallbackToken);
-  if (sslClientCert) actionCore.setSecret(sslClientCert);
-  if (sslClientKey) actionCore.setSecret(sslClientKey);
-  if (sslClientPassphrase) actionCore.setSecret(sslClientPassphrase);
-  if (sslExtraCaCerts) actionCore.setSecret(sslExtraCaCerts);
-  if (sslClientCert) {
-    if (!sslClientKey) {
-      throw new Error("ssl-client-key is required when ssl-client-cert is provided");
-    }
-    validateCertMaterial(sslClientCert, sslClientKey, sslClientPassphrase || void 0);
-  }
-  return resolveInputs({
+  const inputs = resolveInputs({
     ...process.env,
     INPUT_PROJECT_NAME: projectName,
     INPUT_WORKSPACE_ID: readInput(actionCore, "workspace-id"),
@@ -26212,6 +26508,7 @@ function readActionInputs(actionCore) {
     INPUT_SPEC_SYNC_MODE: readInput(actionCore, "spec-sync-mode") || "update",
     INPUT_RELEASE_LABEL: readInput(actionCore, "release-label"),
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, "environments-json") || '["prod"]',
+    INPUT_GIT_PROVIDER: readInput(actionCore, "git-provider"),
     INPUT_REPO_URL: readInput(actionCore, "repo-url"),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, "integration-backend") || "bifrost",
     INPUT_WORKSPACE_LINK_ENABLED: readInput(actionCore, "workspace-link-enabled"),
@@ -26229,12 +26526,13 @@ function readActionInputs(actionCore) {
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, "credential-preflight") || "warn",
+    INPUT_ADO_TOKEN: adoToken,
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, "ci-workflow-base64"),
     INPUT_GENERATE_CI_WORKFLOW: readInput(actionCore, "generate-ci-workflow"),
     INPUT_MONITOR_TYPE: readInput(actionCore, "monitor-type") || "cloud",
-    INPUT_CI_WORKFLOW_PATH: readInput(actionCore, "ci-workflow-path") || ".github/workflows/ci.yml",
+    INPUT_CI_WORKFLOW_PATH: readInput(actionCore, "ci-workflow-path"),
     INPUT_ORG_MODE: readInput(actionCore, "org-mode"),
     INPUT_MONITOR_ID: readInput(actionCore, "monitor-id"),
     INPUT_MOCK_URL: readInput(actionCore, "mock-url"),
@@ -26250,6 +26548,26 @@ function readActionInputs(actionCore) {
     GITHUB_HEAD_REF: process.env.GITHUB_HEAD_REF,
     GITHUB_REF_NAME: process.env.GITHUB_REF_NAME
   });
+  if (inputs.postmanApiKey) actionCore.setSecret(inputs.postmanApiKey);
+  if (inputs.postmanAccessToken) actionCore.setSecret(inputs.postmanAccessToken);
+  if (inputs.adoToken) actionCore.setSecret(inputs.adoToken);
+  if (inputs.githubToken) actionCore.setSecret(inputs.githubToken);
+  if (inputs.ghFallbackToken) actionCore.setSecret(inputs.ghFallbackToken);
+  if (inputs.sslClientCert) actionCore.setSecret(inputs.sslClientCert);
+  if (inputs.sslClientKey) actionCore.setSecret(inputs.sslClientKey);
+  if (inputs.sslClientPassphrase) actionCore.setSecret(inputs.sslClientPassphrase);
+  if (inputs.sslExtraCaCerts) actionCore.setSecret(inputs.sslExtraCaCerts);
+  if (inputs.sslClientCert) {
+    if (!inputs.sslClientKey) {
+      throw new Error("ssl-client-key is required when ssl-client-cert is provided");
+    }
+    validateCertMaterial(
+      inputs.sslClientCert,
+      inputs.sslClientKey,
+      inputs.sslClientPassphrase || void 0
+    );
+  }
+  return inputs;
 }
 function buildGhCliEnv(env, token) {
   const allowList = [
@@ -26275,6 +26593,12 @@ function buildGhCliEnv(env, token) {
 }
 async function persistSslSecrets(inputs, actionCore, actionExec, repository, env = process.env) {
   if (!inputs.sslClientCert) {
+    return;
+  }
+  if (inputs.provider === "azure-devops") {
+    actionCore.warning(
+      "SSL inputs were provided but automatic secret persistence is not supported for Azure DevOps. Set these pipeline secret variables manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional)."
+    );
     return;
   }
   const token = inputs.ghFallbackToken || inputs.githubToken;
@@ -26344,8 +26668,8 @@ async function upsertEnvironments(inputs, dependencies, resourcesState) {
   }
   return envUids;
 }
-function ensureDir(path8) {
-  (0, import_node_fs.mkdirSync)(path8, { recursive: true });
+function ensureDir(path9) {
+  (0, import_node_fs.mkdirSync)(path9, { recursive: true });
 }
 function getCollectionDirectoryName(kind, projectName) {
   if (kind === "Baseline") {
@@ -26380,9 +26704,9 @@ function stripVolatileFields(obj) {
   }
   return obj;
 }
-function writeJsonFile(path8, content, normalize3 = false) {
+function writeJsonFile(path9, content, normalize3 = false) {
   const data = normalize3 ? stripVolatileFields(content) : content;
-  (0, import_node_fs.writeFileSync)(path8, JSON.stringify(data, null, 2));
+  (0, import_node_fs.writeFileSync)(path9, JSON.stringify(data, null, 2));
 }
 function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId) {
   const manifest = {
@@ -26440,11 +26764,39 @@ function buildSpecCollectionWorkflowManifest(specRef, collectionRefs) {
     }
   );
 }
+function hasControlCharacter2(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
 function assertPathWithinCwd(targetPath, fieldName) {
-  const base = path7.resolve(".");
-  const resolved = path7.resolve(base, targetPath);
-  const relative3 = path7.relative(base, resolved);
-  if (relative3.startsWith("..") || path7.isAbsolute(relative3)) {
+  const originalPath = String(targetPath || "");
+  const rawPath = originalPath.trim();
+  const segments = rawPath.split(/[\\/]+/).filter(Boolean);
+  if (!rawPath || hasControlCharacter2(originalPath) || path8.isAbsolute(rawPath) || path8.win32.isAbsolute(rawPath) || segments.includes("..") || rawPath.startsWith(":") || hasControlCharacter2(rawPath)) {
+    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
+  }
+  const base = (0, import_node_fs.realpathSync)(process.cwd());
+  const resolved = path8.resolve(base, rawPath);
+  const relative3 = path8.relative(base, resolved);
+  if (relative3.startsWith("..") || path8.isAbsolute(relative3)) {
+    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
+  }
+  let existingPath = resolved;
+  while (!(0, import_node_fs.existsSync)(existingPath)) {
+    const parent = path8.dirname(existingPath);
+    if (parent === existingPath) {
+      break;
+    }
+    existingPath = parent;
+  }
+  const realExistingPath = (0, import_node_fs.realpathSync)(existingPath);
+  const realRelative = path8.relative(base, realExistingPath);
+  if (realRelative.startsWith("..") || path8.isAbsolute(realRelative)) {
     throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
   }
 }
@@ -26474,7 +26826,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName) 
     (0, import_node_fs.writeFileSync)(globalsFilePath, "name: Globals\nvalues: []\n");
   }
   if (inputs.generateCiWorkflow) {
-    ensureDir(".github/workflows");
+    const ciDir = inputs.ciWorkflowPath.split("/").slice(0, -1).join("/");
+    if (ciDir) {
+      ensureDir(ciDir);
+    }
   }
   const manifestCollections = {};
   const discoveredSpecs = scanLocalSpecReferences();
@@ -26533,6 +26888,12 @@ function renderCiWorkflow(inputs) {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
+  if (inputs.provider === "azure-devops") {
+    return getCiWorkflowTemplate(inputs.provider, {
+      postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+      postmanRegion: inputs.postmanRegion
+    });
+  }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
     postmanRegion: inputs.postmanRegion
@@ -26563,17 +26924,30 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     }
     (0, import_node_fs.writeFileSync)(inputs.ciWorkflowPath, ciWorkflow);
   }
-  const provisionExists = (0, import_node_fs.existsSync)(".github/workflows/provision.yml");
+  const provisionPath = ".github/workflows/provision.yml";
+  const provisionExists = inputs.provider === "github" && (0, import_node_fs.existsSync)(provisionPath);
   if (provisionExists) {
-    (0, import_node_fs.rmSync)(".github/workflows/provision.yml");
+    (0, import_node_fs.rmSync)(provisionPath);
   }
   const stagePaths = [
     inputs.artifactDir,
     ".postman",
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
-    provisionExists ? ".github/workflows/provision.yml" : null
-  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs.existsSync)(entry) || entry === ".github/workflows/provision.yml"));
-  const effectiveStagePaths = stagePaths.length > 0 ? stagePaths : ["."];
+    provisionExists ? provisionPath : null
+  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs.existsSync)(entry) || entry === provisionPath));
+  if (stagePaths.length === 0) {
+    dependencies.core.info("No generated repository paths were found; skipping repo mutation.");
+    return {
+      commitSha: "",
+      pushed: false,
+      resolvedCurrentRef: resolveCurrentRef({
+        currentRef: inputs.currentRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        repoWriteMode: inputs.repoWriteMode
+      })
+    };
+  }
   const result = await dependencies.repoMutation.commitAndPush({
     repoWriteMode: inputs.repoWriteMode,
     currentRef: inputs.currentRef,
@@ -26581,9 +26955,10 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     githubRefName: inputs.githubRefName,
     committerName: inputs.committerName,
     committerEmail: inputs.committerEmail,
-    githubToken: inputs.githubToken,
-    fallbackToken: inputs.ghFallbackToken,
-    stagePaths: effectiveStagePaths
+    adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
+    githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
+    fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
+    stagePaths
   });
   return {
     commitSha: result.commitSha,
@@ -26810,7 +27185,15 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       const autoTeamId = await tempClient.getAutoDerivedTeamId();
       if (autoTeamId) teamId = autoTeamId;
     }
-    if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
+    if (inputs.provider === "azure-devops") {
+      if (options.persistGeneratedApiKeySecret ?? true) {
+        actionCore.warning(
+          "A new Postman API key was generated but automatic secret persistence is not supported for Azure DevOps. Set the POSTMAN_API_KEY pipeline secret variable manually."
+        );
+      } else {
+        actionCore.info("Skipping generated POSTMAN_API_KEY secret persistence for this run.");
+      }
+    } else if ((options.persistGeneratedApiKeySecret ?? true) && (inputs.githubToken || inputs.ghFallbackToken)) {
       actionCore.info("Persisting new Postman API key to GitHub repository secrets...");
       const ghToken = inputs.ghFallbackToken || inputs.githubToken;
       const repo = inputs.repository;
@@ -26875,6 +27258,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
   const masker = options.secretMasker ?? createSecretMasker([
     resolved.apiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,
@@ -26889,7 +27273,9 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     secretMasker: masker
   });
   const repoMutation = repository && (inputs.repoWriteMode === "commit-only" || inputs.repoWriteMode === "commit-and-push") ? new RepoMutationService({
+    provider: inputs.provider,
     repository,
+    repoUrl: inputs.repoUrl || void 0,
     secretMasker: masker,
     execute: async (command, args) => {
       const result = await factories.exec.getExecOutput(command, args, {
@@ -26923,6 +27309,7 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
   const masker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
+    inputs.adoToken,
     inputs.githubToken,
     inputs.ghFallbackToken,
     inputs.sslClientCert,

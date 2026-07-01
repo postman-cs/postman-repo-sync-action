@@ -1,7 +1,12 @@
+import { execFileSync } from 'node:child_process';
+
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-import { renderCiWorkflowTemplate } from '../src/lib/ci-workflow-template.js';
+import {
+  getCiWorkflowTemplate,
+  renderCiWorkflowTemplate
+} from '../src/lib/ci-workflow-template.js';
 
 describe('renderCiWorkflowTemplate', () => {
   it('produces multi-line YAML output with real newlines', () => {
@@ -196,5 +201,102 @@ describe('renderCiWorkflowTemplate', () => {
     expect(usLogin.run).not.toContain('--region');
 
     expect(() => renderCiWorkflowTemplate({ postmanRegion: 'ap' })).toThrow(/postman-region/);
+  });
+
+  it('renders valid Azure DevOps YAML when requested', () => {
+    const ciWorkflow = getCiWorkflowTemplate('azure-devops');
+    const parsed = parse(ciWorkflow);
+
+    expect(parsed.name).toBeUndefined();
+    expect(parsed.trigger.branches.include).toContain('main');
+    expect(parsed.schedules[0].always).toBe(true);
+    expect(parsed.pool.vmImage).toBe('ubuntu-latest');
+    expect(parsed.steps[0]).toMatchObject({
+      checkout: 'self',
+      persistCredentials: true
+    });
+    expect(ciWorkflow).toContain('--env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}"');
+    const decodeStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Decode SSL certificates'
+    );
+    const smokeStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Run Smoke Tests'
+    );
+    const contractStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Run Contract Tests'
+    );
+    const azureScriptBodies = parsed.steps
+      .map((step: { script?: string }) => step.script)
+      .filter(Boolean)
+      .join('\n');
+    expect(decodeStep.script).toContain(
+      'normalize_azure_optional_var POSTMAN_SSL_EXTRA_CA_CERTS_B64'
+    );
+    expect(smokeStep.script).toContain('normalize_azure_optional_var CI_ENVIRONMENT');
+    expect(smokeStep.script).toContain(
+      'normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE'
+    );
+    expect(contractStep.script).toContain('normalize_azure_optional_var CI_ENVIRONMENT');
+    expect(contractStep.script).toContain(
+      'normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE'
+    );
+    expect(smokeStep.script).toContain('postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"');
+    expect(smokeStep.script).toContain('-e "$POSTMAN_ENVIRONMENT_UID"');
+    expect(contractStep.script).toContain(
+      'postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"'
+    );
+    expect(contractStep.script).toContain('-e "$POSTMAN_ENVIRONMENT_UID"');
+    expect(azureScriptBodies).not.toContain('$(POSTMAN_SSL_EXTRA_CA_CERTS_B64)');
+    expect(azureScriptBodies).not.toContain('$(POSTMAN_SSL_CLIENT_PASSPHRASE)');
+    expect(azureScriptBodies).not.toContain('$(CI_ENVIRONMENT)');
+    expect(azureScriptBodies).not.toContain('$(POSTMAN_SMOKE_COLLECTION_UID)');
+    expect(azureScriptBodies).not.toContain('$(POSTMAN_CONTRACT_COLLECTION_UID)');
+    expect(azureScriptBodies).not.toContain('$(POSTMAN_ENVIRONMENT_UID)');
+  });
+
+  it('normalizes unresolved Azure optional macro values without clearing real values', () => {
+    execFileSync('bash', [
+      '-lc',
+      `
+set -euo pipefail
+normalize_azure_optional_var() {
+  local name="$1"
+  local value="\${!name:-}"
+  local unresolved_prefix='$'
+  unresolved_prefix="\${unresolved_prefix}("
+  if [[ "$value" == "$unresolved_prefix"*")" ]]; then
+    printf -v "$name" %s ""
+  fi
+}
+
+CI_ENVIRONMENT='$''(CI_ENVIRONMENT)'
+normalize_azure_optional_var CI_ENVIRONMENT
+[ -z "$CI_ENVIRONMENT" ]
+
+POSTMAN_SSL_CLIENT_PASSPHRASE='real passphrase'
+normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
+[ "$POSTMAN_SSL_CLIENT_PASSPHRASE" = 'real passphrase' ]
+`
+    ]);
+  });
+
+  it('passes the configured Postman region to Azure DevOps CLI login', () => {
+    const ciWorkflow = getCiWorkflowTemplate('azure-devops', { postmanRegion: 'eu' });
+    const parsed = parse(ciWorkflow);
+    const loginStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Login to Postman CLI'
+    );
+
+    expect(loginStep.script).toBe('postman login --with-api-key "$POSTMAN_API_KEY" --region eu');
+
+    const usWorkflow = getCiWorkflowTemplate('azure-devops', { postmanRegion: 'us' });
+    const usLogin = parse(usWorkflow).steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Login to Postman CLI'
+    );
+
+    expect(usLogin.script).toBe('postman login --with-api-key "$POSTMAN_API_KEY"');
+    expect(() => getCiWorkflowTemplate('azure-devops', { postmanRegion: 'ap' })).toThrow(
+      /postman-region/
+    );
   });
 });

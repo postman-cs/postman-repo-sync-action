@@ -31,10 +31,34 @@ function normalizeRepoUrl(url?: string): string | undefined {
   if (sshMatch) {
     const host = sshMatch[1];
     const path = sshMatch[2];
+    if (host === 'ssh.dev.azure.com') {
+      return normalizeAzureReposSshPath(path);
+    }
     return `https://${host}/${path}`;
   }
 
+  try {
+    const parsed = new URL(raw);
+    if (parsed.hostname === 'ssh.dev.azure.com') {
+      return normalizeAzureReposSshPath(parsed.pathname.replace(/^\/+/, ''));
+    }
+  } catch {
+    // Preserve the original validation behavior for non-URL strings.
+  }
+
   return raw.replace(/\.git$/, '');
+}
+
+function normalizeAzureReposSshPath(remotePath: string): string {
+  const segments = remotePath.split('/').filter(Boolean);
+  if (segments.length < 4 || segments[0] !== 'v3') {
+    return `https://ssh.dev.azure.com/${remotePath}`.replace(/\.git$/, '');
+  }
+  const [organization, project, ...repoParts] = segments.slice(1);
+  return `https://dev.azure.com/${organization}/${project}/_git/${repoParts.join('/')}`.replace(
+    /\.git$/,
+    ''
+  );
 }
 
 function parseProvider(
