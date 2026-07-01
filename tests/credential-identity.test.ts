@@ -7,6 +7,7 @@ import {
   crossCheckIdentities,
   formatIdentityLine,
   getMemoizedSessionIdentity,
+  getSessionResolutionFailure,
   resolvePmakIdentity,
   resolveSessionIdentity,
   runCredentialPreflight,
@@ -575,5 +576,163 @@ describe('credential identity', () => {
     });
     expect(second?.teamId).toBe('22222222');
     expect(secondFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('event-based session retry', () => {
+  beforeEach(() => {
+    __resetIdentityMemo();
+  });
+
+  function sessionSequence(steps: Array<() => Response>) {
+    let n = 0;
+    return vi.fn<typeof fetch>(async () => {
+      const step = steps[Math.min(n, steps.length - 1)];
+      n += 1;
+      return step();
+    });
+  }
+
+  it('retries a transient 5xx and resolves later, waiting the full-jitter delay via the injected clock', async () => {
+    const sleeps: number[] = [];
+    const fetchImpl = sessionSequence([
+      () => new Response('server error', { status: 503 }),
+      () => jsonResponse(sessionPayload(13347347))
+    ]);
+
+    const identity = await resolveSessionIdentity({
+      iapubBaseUrl: IAPUB_BASE,
+      accessToken: 'retry-5xx',
+      fetchImpl,
+      sleepImpl: async (ms) => {
+        sleeps.push(ms);
+      },
+      randomImpl: () => 0.5
+    });
+
+    expect(identity?.teamId).toBe('13347347');
+    expect(sleeps).toEqual([250]);
+    expect(getSessionResolutionFailure()).toBeUndefined();
+  });
+
+  it('honors Retry-After (seconds) on 429 and RateLimit-Reset as fallback, clamped to the max', async () => {
+    const afterSecs: number[] = [];
+    const fetchAfter = sessionSequence([
+      () => new Response('slow', { status: 429, headers: { 'retry-after': '2' } }),
+      () => jsonResponse(sessionPayload(13347347))
+    ]);
+    await resolveSessionIdentity({
+      iapubBaseUrl: IAPUB_BASE,
+      accessToken: 'retry-after',
+      fetchImpl: fetchAfter,
+      sleepImpl: async (ms) => {
+        afterSecs.push(ms);
+      },
+      randomImpl: () => 0.99
+    });
+    expect(afterSecs).toEqual([2000]);
+
+    __resetIdentityMemo();
+    const resets: number[] = [];
+    const fetchReset = sessionSequence([
+      () => new Response('limited', { status: 503, headers: { 'ratelimit-reset': '3' } }),
+      () => jsonResponse(sessionPayload(13347347))
+    ]);
+    await resolveSessionIdentity({
+      iapubBaseUrl: IAPUB_BASE,
+      accessToken: 'ratelimit-reset',
+      fetchImpl: fetchReset,
+      sleepImpl: async (ms) => {
+        resets.push(ms);
+      },
+      randomImpl: () => 0.99
+    });
+    expect(resets).toEqual([3000]);
+
+    __resetIdentityMemo();
+    const clamped: number[] = [];
+    const fetchHuge = sessionSequence([
+      () => new Response('slow', { status: 503, headers: { 'retry-after': '9999' } }),
+      () => jsonResponse(sessionPayload(13347347))
+    ]);
+    await resolveSessionIdentity({
+      iapubBaseUrl: IAPUB_BASE,
+      accessToken: 'retry-after-huge',
+      fetchImpl: fetchHuge,
+      sleepImpl: async (ms) => {
+        clamped.push(ms);
+      },
+      randomImpl: () => 0
+    });
+    expect(clamped).toEqual([8000]);
+  });
+
+  it('does NOT retry or sleep on 401 and classifies auth', async () => {
+    const sleeps: number[] = [];
+    const fetchImpl = sessionSequence([() => new Response('nope', { status: 401 })]);
+    const identity = await resolveSessionIdentity({
+      iapubBaseUrl: IAPUB_BASE,
+      accessToken: 'auth-401',
+      fetchImpl,
+      sleepImpl: async (ms) => {
+        sleeps.push(ms);
+      }
+    });
+    expect(identity).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleeps).toHaveLength(0);
+    expect(getSessionResolutionFailure()).toBe('auth');
+  });
+
+  it('runCredentialPreflight enforce FAILS closed when the session stays unresolved (auth)', async () => {
+    const capture = createLogCapture();
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/me')) {
+        return jsonResponse({ user: { id: 1, teamId: 10490519, teamName: 'jared-demo' } });
+      }
+      return new Response('expired', { status: 401 });
+    });
+    await expect(
+      runCredentialPreflight({
+        apiBaseUrl: API_BASE,
+        iapubBaseUrl: IAPUB_BASE,
+        postmanApiKey: 'pmak-enforce-unresolved',
+        postmanAccessToken: 'access-token-expired',
+        mode: 'enforce',
+        mask: passthroughMask,
+        log: capture.log,
+        fetchImpl,
+        sleepImpl: async () => undefined
+      })
+    ).rejects.toThrow(/enforce requires a resolvable session identity/);
+  });
+
+  it('runCredentialPreflight warn continues when the session stays unresolved (unavailable)', async () => {
+    const capture = createLogCapture();
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/me')) {
+        return jsonResponse({ user: { id: 1, teamId: 10490519, teamName: 'jared-demo' } });
+      }
+      return new Response('unavailable', { status: 503 });
+    });
+    await expect(
+      runCredentialPreflight({
+        apiBaseUrl: API_BASE,
+        iapubBaseUrl: IAPUB_BASE,
+        postmanApiKey: 'pmak-warn-unresolved',
+        postmanAccessToken: 'access-token-transient',
+        mode: 'warn',
+        mask: passthroughMask,
+        log: capture.log,
+        fetchImpl,
+        sleepImpl: async () => undefined,
+        randomImpl: () => 0
+      })
+    ).resolves.toBeUndefined();
+    expect(
+      capture.warnings.some((entry) => entry.includes('iapub was unreachable after retries'))
+    ).toBe(true);
   });
 });
