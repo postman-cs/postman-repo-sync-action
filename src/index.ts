@@ -141,7 +141,7 @@ export interface RepoSyncDependencies {
   teamId?: string;
   core: Pick<CoreLike, 'info' | 'setOutput' | 'warning'>;
   postman: Pick<
-    PostmanAssetsClient,
+    PostmanGatewayAssetsClient,
     | 'createEnvironment'
     | 'createMock'
     | 'createMonitor'
