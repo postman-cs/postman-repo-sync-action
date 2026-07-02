@@ -226,6 +226,18 @@ postman/environments/
   resources.yaml
 ```
 
+### What the generated CI workflow runs
+
+When CI workflow generation is enabled, the committed GitHub Actions workflow runs on every push and pull request to `main` and on a six-hour schedule. Each run:
+
+1. Checks out the repository and installs the Postman CLI from the region-appropriate install URL.
+2. Logs the Postman CLI in with the `POSTMAN_API_KEY` repository secret (this action mints and stores that secret when repository write access allows).
+3. Resolves the `[Smoke]` and `[Contract]` collection UIDs and the environment UID from the committed `.postman/resources.yaml`, failing fast if any are missing.
+4. Decodes optional mTLS client certificates from the `POSTMAN_SSL_*` secrets and passes them to the runs.
+5. Runs the `[Smoke]` collection and then the `[Contract]` collection with `postman collection run` against the resolved environment, with `--report-events` so results land in the Postman cloud run history, and with `CI_ENVIRONMENT` (the `CI_ENVIRONMENT` repository variable, default `Production`) available to scripts.
+
+A matching Azure DevOps Pipelines template is generated for Azure DevOps repositories. The assertions those collections execute are generated upstream: the per-check reference is in [postman-bootstrap-action's Generated Assertions](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/generated-assertions.md), and the curated Smoke journey scripts are in [postman-smoke-flow-action's Generated Test Scripts](https://github.com/postman-cs/postman-smoke-flow-action/blob/main/docs/generated-tests.md).
+
 For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch.
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
