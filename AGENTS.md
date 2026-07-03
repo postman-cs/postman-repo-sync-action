@@ -73,3 +73,12 @@ postman/
 - Collection v3 format uses `$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/` -- not the standard v2.1 JSON format
 - `commit-and-push` mode requires write permissions on the checked-out ref
 - `repo-mutation.ts` handles detached HEAD via `current-ref` input
+
+## CI
+
+`.github/workflows/ci.yml` runs a single `gate` job that fans out lint, test, typecheck, dist, commitlint, and actionlint
+as backgrounded shell processes on one runner: wall-clock is `max(gate)`, not
+`sum`, setup runs once, and every gate prints its result under a `::group::`
+block even when another fails.
+
+See the workspace `docs/CI.md` for the shared rationale.
