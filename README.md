@@ -176,8 +176,8 @@ with:
 | `ssl-client-key` | Base64-encoded PEM client private key for Postman CLI mTLS runs. | no |  |
 | `ssl-client-passphrase` | Optional passphrase for encrypted ssl-client-key. | no |  |
 | `ssl-extra-ca-certs` | Optional base64-encoded PEM CA certificate bundle for custom trust. | no |  |
-| `spec-id` | Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources. | no |  |
-| `spec-path` | Optional repo-root-relative path to the local spec file for resources/workflows metadata. | no |  |
+| `spec-id` | Spec Hub UID emitted by bootstrap's spec-id output. When set, it is persisted into .postman/resources.yaml cloudResources so later runs and the generated CI workflow can resolve the spec without re-discovery. | no |  |
+| `spec-path` | Optional repo-root-relative path to the local OpenAPI file. Recorded in .postman/resources.yaml and .postman/workflows.yaml metadata so the committed artifacts point back at the spec source in this repository; the file itself is not uploaded by this action. | no |  |
 | `postman-region` | Postman data residency region for public API and Postman CLI calls. One of: us or eu. | no | `us` |
 <!-- inputs-table:end -->
 
@@ -225,6 +225,23 @@ postman/environments/
 .postman/
   resources.yaml
 ```
+
+```mermaid
+flowchart LR
+    subgraph SYNC["repo-sync: once per onboarding run"]
+        W["Postman workspace"] -->|"gateway v3 export"| ART["postman/ + .postman/<br/>committed artifacts"]
+        ART --> WF["generated CI workflow"]
+        W --> MM["mock server +<br/>smoke monitor"]
+    end
+    subgraph LOOP["customer CI: every push / PR / 6h schedule"]
+        WF --> RUN["postman collection run<br/>Smoke then Contract"]
+        RES[".postman/resources.yaml<br/>collection UIDs + environment"] --> RUN
+        RUN --> API["live API or mock<br/>environment baseUrl"]
+        API --> REP["pass/fail per assertion<br/>+ --report-events to<br/>Postman run history"]
+    end
+```
+
+This is the execution half of the suite's contract-testing story: bootstrap injects the spec-derived `pm.test()` assertions into the collections, and the workflow this action generates is what actually runs them against a live target on every push and on schedule. See [bootstrap's Contract Enforcement Layers](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/contract-enforcement-layers.md) for the full two-layer model.
 
 ### What the generated CI workflow runs
 
@@ -280,9 +297,13 @@ Deeper reference:
 
 This action sends a single non-identifying usage event when a run completes, so the
 Postman team can measure adoption across CI systems. The event contains the
-action name and version, your Postman team ID, the detected CI provider and
-runner kind, the run outcome, the CI run identifier, an event timestamp, and a one-way SHA-256 hash of the repository
-identifier. Each event also carries a schema version and a constant event marker (always `completion`). The Postman team ID is sent in the clear on a legitimate-interest
+action name and version, your Postman team ID, the run outcome, an event
+timestamp, the detected CI provider, runner kind, and runner OS, the CI run
+identifier and event trigger, a one-way SHA-256 hash of the repository
+identifier, the detected git provider (github, gitlab, bitbucket, or
+azure-devops), a one-way SHA-256 hash of the VCS organization name, a coarse
+account type (service or user), and a coarse ref kind (default-branch, branch,
+or tag). Each event also carries a schema version and a constant event marker (always `completion`). The Postman team ID is sent in the clear on a legitimate-interest
 basis to measure product adoption.
 
 The `events.pm-cse.dev` endpoint is operated by the Postman Customer Success

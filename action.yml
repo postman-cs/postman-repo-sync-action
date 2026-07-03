@@ -148,10 +148,10 @@ inputs:
     description: Optional base64-encoded PEM CA certificate bundle for custom trust.
     required: false
   spec-id:
-    description: Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.
+    description: Spec Hub UID emitted by bootstrap's spec-id output. When set, it is persisted into .postman/resources.yaml cloudResources so later runs and the generated CI workflow can resolve the spec without re-discovery.
     required: false
   spec-path:
-    description: Optional repo-root-relative path to the local spec file for resources/workflows metadata.
+    description: Optional repo-root-relative path to the local OpenAPI file. Recorded in .postman/resources.yaml and .postman/workflows.yaml metadata so the committed artifacts point back at the spec source in this repository; the file itself is not uploaded by this action.
     required: false
   postman-region:
     description: "Postman data residency region for public API and Postman CLI calls. One of: us or eu."
