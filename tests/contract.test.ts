@@ -195,7 +195,7 @@ describe('postman-repo-sync-action contract', () => {
     const publicDocs = [readme, credentials, artifactLayout, cli].join('\n');
 
     expect(readme).toContain('postman-region: us');
-    expect(readme).toContain('## Which action should I use?');
+    expect(readme).toContain('Postman API Onboarding suite');
     expect(readme).toContain('[Security](SECURITY.md)');
     expect(readme).toContain('[Support](SUPPORT.md)');
     expect(readme).toContain('[Release policy](RELEASE_POLICY.md)');
