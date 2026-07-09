@@ -14,6 +14,7 @@ import {
   type ResolvedInputs
 } from './index.js';
 import { runCredentialPreflight } from './lib/postman/credential-identity.js';
+import { mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
 
 interface CliConfig {
@@ -267,6 +268,13 @@ export async function runCli(
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
   const reporter = new ConsoleReporter();
+
+  // PMAK-only runs: mint the access token up front (mirrors runAction) so the
+  // gateway asset ops and Bifrost paths below get the full access-token surface
+  // instead of failing the missing-token guard. dist/cli.cjs (what CI and the
+  // e2e harness invoke) must behave exactly like dist/index.cjs here.
+  await mintAccessTokenIfNeeded(inputs, reporter);
+
   const initialMasker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,

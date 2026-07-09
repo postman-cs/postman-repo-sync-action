@@ -40,7 +40,7 @@ import { HttpError } from './lib/http-error.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets-client.js';
-import { AccessTokenProvider } from './lib/postman/token-provider.js';
+import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
 import {
   createMutableSecretMasker,
@@ -1601,7 +1601,8 @@ export function createRepoSyncDependencies(
   // hide gateway bugs (the exact mask that let the mock 403 fester).
   if (!inputs.postmanAccessToken) {
     throw new Error(
-      'postman-access-token is required. Run postman-resolve-service-token-action before repo-sync; PMAK is not used for asset operations.'
+      'postman-access-token is required and could not be minted from postman-api-key (see the warning above for the diagnosis). ' +
+        'Provide a valid service-account postman-api-key so the action can mint one, or run postman-resolve-service-token-action and pass postman-access-token; PMAK is not used for asset operations.'
     );
   }
   const tokenProvider = new AccessTokenProvider({
@@ -1696,6 +1697,18 @@ export async function runAction(
   actionExec: ExecLike = exec
 ): Promise<RepoSyncOutputs> {
   const inputs = readActionInputs(actionCore);
+
+  // PMAK-only runs: eagerly mint the short-lived access token from the service
+  // -account PMAK so the whole access-token surface (credential preflight,
+  // gateway asset ops, Bifrost linking, env sync) works exactly as when
+  // postman-access-token is supplied. Mirrors bootstrap's runAction. A failed
+  // mint warns with a live-probed diagnosis (personal key vs permission gap vs
+  // invalid key) and falls through to the existing missing-token guard.
+  await mintAccessTokenIfNeeded(inputs, {
+    info: (message) => actionCore.info(message),
+    warning: (message) => actionCore.warning(message)
+  }, (secret) => actionCore.setSecret(secret));
+
   const masker = createSecretMasker([
     inputs.postmanApiKey,
     inputs.postmanAccessToken,
