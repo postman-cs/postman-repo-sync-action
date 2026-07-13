@@ -44,6 +44,7 @@ describe('CLI packaging contract', () => {
         cwd: repoRoot,
         encoding: 'utf8',
         env: {
+          ...process.env,
           NPM_CONFIG_CACHE: path.join(packDir, '.npm-cache'),
           PATH: process.env.PATH ?? ''
         },
@@ -61,6 +62,7 @@ describe('CLI packaging contract', () => {
     await execFileAsync('npm', ['install', '--prefix', prefixDir, tarballPath], {
       encoding: 'utf8',
       env: {
+        ...process.env,
         NPM_CONFIG_CACHE: path.join(packDir, '.npm-cache'),
         PATH: process.env.PATH ?? ''
       },
@@ -77,6 +79,7 @@ describe('CLI packaging contract', () => {
     const help = await execFileAsync(binPath, ['--help'], {
       encoding: 'utf8',
       env: {
+        ...process.env,
         PATH: process.env.PATH ?? '',
         // Prove help ignores credentials/network requirements.
         INPUT_POSTMAN_API_KEY: '',
@@ -92,7 +95,7 @@ describe('CLI packaging contract', () => {
 
     const version = await execFileAsync(binPath, ['--version'], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '' },
+      env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 1024 * 1024
     });
     const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')) as {
@@ -105,7 +108,7 @@ describe('CLI packaging contract', () => {
     const cliPath = path.join(repoRoot, 'dist', 'cli.cjs');
     const help = await execFileAsync(cliPath, ['--help'], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '' },
+      env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 1024 * 1024
     });
     expect(help.stdout).toMatch(/Usage:\s+postman-repo-sync/i);
