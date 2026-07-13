@@ -7,7 +7,7 @@ vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
   }))
 }));
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -683,6 +683,46 @@ describe('repo sync action', () => {
     expect(existsSync('.github/workflows/ci.yml')).toBe(true);
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('name: Resolve Postman Resource IDs');
     expect(repoMutation.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe CI workflow paths in repo-write-mode=none before writing', async () => {
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'repo-sync-ci-outside-'));
+    symlinkSync(outsideRoot, '.workflow-link', 'dir');
+    const invalidPaths = [
+      '../escaped-ci.yml',
+      join(outsideRoot, 'absolute-ci.yml'),
+      '.workflow-link/symlink-ci.yml'
+    ];
+
+    try {
+      for (const ciWorkflowPath of invalidPaths) {
+        await expect(
+          runRepoSync(
+            createInputs({
+              workspaceId: '',
+              baselineCollectionId: '',
+              smokeCollectionId: '',
+              contractCollectionId: '',
+              environments: [],
+              workspaceLinkEnabled: false,
+              environmentSyncEnabled: false,
+              repoWriteMode: 'none',
+              generateCiWorkflow: true,
+              ciWorkflowPath
+            }),
+            {
+              core: createCoreStub().core,
+              postman: {} as RepoSyncDependencies['postman']
+            }
+          )
+        ).rejects.toThrow(/ci-workflow-path must stay within the repository root/);
+      }
+
+      expect(existsSync(join(outsideRoot, 'absolute-ci.yml'))).toBe(false);
+      expect(existsSync(join(outsideRoot, 'symlink-ci.yml'))).toBe(false);
+    } finally {
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('writes the generated CI workflow to a custom path when configured', async () => {

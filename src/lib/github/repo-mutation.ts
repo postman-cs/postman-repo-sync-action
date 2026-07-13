@@ -267,6 +267,37 @@ export class RepoMutationService {
       };
     }
 
+    const changed = await this.execute('git', [
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--',
+      ...stagePaths
+    ]);
+    if (changed.exitCode !== 0) {
+      throw new Error(this.secretMasker(changed.stderr || changed.stdout || 'Failed to inspect generated changes'));
+    }
+    if (!changed.stdout.trim()) {
+      return {
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef
+      };
+    }
+
+    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
+    if (options.repoWriteMode === 'commit-and-push') {
+      if (!supportsTokenRemote(this.provider)) {
+        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+      }
+      if (!resolvedCurrentRef) {
+        throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
+      }
+      if (tokens.length === 0 && !usePersistedCredentials) {
+        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+      }
+    }
+
     await this.execute('git', ['config', 'user.name', options.committerName]);
     await this.execute('git', ['config', 'user.email', options.committerEmail]);
     await this.execute('git', ['add', '-A', '--', ...stagePaths]);
@@ -278,21 +309,6 @@ export class RepoMutationService {
         pushed: false,
         resolvedCurrentRef
       };
-    }
-
-    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
-    if (options.repoWriteMode === 'commit-and-push') {
-      // Validate push prerequisites after staged-change detection and before
-      // creating a commit, so configuration failures leave no local commit.
-      if (!resolvedCurrentRef) {
-        throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
-      }
-      if (tokens.length === 0 && !usePersistedCredentials) {
-        throw new Error('No push token configured for repo-write-mode=commit-and-push');
-      }
-      if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
-        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
-      }
     }
 
     await this.execute('git', [

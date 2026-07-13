@@ -1,3 +1,9 @@
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -22,6 +28,7 @@ const defaultGithubPushRemote = buildAuthenticatedRemoteUrl(
   'fallback-token',
   githubRepoUrl
 );
+const execFileAsync = promisify(execFile);
 
 function commandKey(command: string, args: string[]): CommandKey {
   return `${command} ${args.join(' ')}`;
@@ -54,6 +61,16 @@ function createCommandMap(
     'git add -A -- postman .postman .github/workflows': {
       exitCode: 0,
       stdout: '',
+      stderr: ''
+    },
+    'git status --porcelain=v1 --untracked-files=all -- postman .postman .github/workflows': {
+      exitCode: 0,
+      stdout: ' M postman/collection.yaml\n',
+      stderr: ''
+    },
+    'git status --porcelain=v1 --untracked-files=all -- postman .postman .github/workflows/ci.yml .github/workflows/provision.yml': {
+      exitCode: 0,
+      stdout: ' M postman/collection.yaml\n',
       stderr: ''
     },
     'git add -A -- postman .postman .github/workflows/ci.yml .github/workflows/provision.yml':
@@ -525,7 +542,7 @@ describe('repo mutation helpers', () => {
   it('returns without commit when there are no staged changes', async () => {
     const execute = createExecuteMock(
       createCommandMap({
-        'git diff --cached --quiet': {
+        'git status --porcelain=v1 --untracked-files=all -- postman .postman .github/workflows': {
           exitCode: 0,
           stdout: '',
           stderr: ''
@@ -552,6 +569,8 @@ describe('repo mutation helpers', () => {
       pushed: false,
       resolvedCurrentRef: 'feature/sync-artifacts'
     });
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['config']));
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['add']));
     expect(execute).not.toHaveBeenCalledWith('git', [
       'commit',
       '-m',
@@ -559,7 +578,7 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
-  it('fails commit-and-push token validation after staged changes and before git commit', async () => {
+  it('fails token preflight after scoped change detection and before any git mutation', async () => {
     const execute = createExecuteMock(createCommandMap({}));
     const repoMutation = new RepoMutationService({
       repository: 'postman-cs/repo-sync-demo',
@@ -576,7 +595,12 @@ describe('repo mutation helpers', () => {
       })
     ).rejects.toThrow(/No push token configured for repo-write-mode=commit-and-push/);
 
-    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).toHaveBeenCalledWith('git', [
+      'status', '--porcelain=v1', '--untracked-files=all', '--',
+      'postman', '.postman', '.github/workflows'
+    ]);
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['config']));
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['add']));
     expect(execute).not.toHaveBeenCalledWith('git', [
       'commit',
       '-m',
@@ -584,7 +608,7 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
-  it('fails commit-and-push missing ref validation after staged changes and before git commit', async () => {
+  it('fails ref preflight after scoped change detection and before any git mutation', async () => {
     const execute = createExecuteMock(createCommandMap({}));
     const repoMutation = new RepoMutationService({
       repository: 'postman-cs/repo-sync-demo',
@@ -602,7 +626,8 @@ describe('repo mutation helpers', () => {
       })
     ).rejects.toThrow(/No current ref could be resolved for repo-write-mode=commit-and-push/);
 
-    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['config']));
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['add']));
     expect(execute).not.toHaveBeenCalledWith('git', [
       'commit',
       '-m',
@@ -610,7 +635,7 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
-  it('fails unsupported provider validation after staged changes and before git commit', async () => {
+  it('fails provider preflight after scoped change detection and before any git mutation', async () => {
     const execute = createExecuteMock(createCommandMap({}));
     const repoMutation = new RepoMutationService({
       provider: 'bitbucket',
@@ -629,11 +654,56 @@ describe('repo mutation helpers', () => {
       })
     ).rejects.toThrow(/not supported for git provider "bitbucket"/);
 
-    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['config']));
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['add']));
     expect(execute).not.toHaveBeenCalledWith('git', [
       'commit',
       '-m',
       'chore: sync Postman artifacts and metadata'
     ]);
+  });
+
+  it('leaves the real git index unchanged when push preflight fails', async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), 'repo-mutation-preflight-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repoRoot });
+      await mkdir(path.join(repoRoot, 'postman'), { recursive: true });
+      await writeFile(path.join(repoRoot, 'postman', 'collection.yaml'), 'name: demo\n', 'utf8');
+      const execute = async (command: string, args: string[]): Promise<CommandResult> => {
+        try {
+          const result = await execFileAsync(command, args, { cwd: repoRoot, encoding: 'utf8' });
+          return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+        } catch (error) {
+          const failure = error as { code?: number; stdout?: string; stderr?: string };
+          return {
+            exitCode: typeof failure.code === 'number' ? failure.code : 1,
+            stdout: failure.stdout ?? '',
+            stderr: failure.stderr ?? ''
+          };
+        }
+      };
+      const repoMutation = new RepoMutationService({
+        repository: 'postman-cs/repo-sync-demo',
+        execute
+      });
+
+      await expect(
+        repoMutation.commitAndPush({
+          repoWriteMode: 'commit-and-push',
+          currentRef: 'feature/sync-artifacts',
+          committerName: 'Postman',
+          committerEmail: 'support@postman.com',
+          stagePaths: ['postman']
+        })
+      ).rejects.toThrow(/No push token configured/);
+
+      const staged = await execFileAsync('git', ['diff', '--cached', '--name-only'], {
+        cwd: repoRoot,
+        encoding: 'utf8'
+      });
+      expect(staged.stdout).toBe('');
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
   });
 });

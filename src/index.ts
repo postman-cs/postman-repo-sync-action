@@ -1140,6 +1140,7 @@ async function commitAndPushGeneratedFiles(
   // File generation is independent of git mutation: mode=none still writes the
   // requested CI workflow, but never stages/commits/pushes.
   if (inputs.generateCiWorkflow) {
+    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
     const ciWorkflow = renderCiWorkflow(inputs);
 
     // Extract dir from ciWorkflowPath
