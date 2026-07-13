@@ -558,4 +558,82 @@ describe('repo mutation helpers', () => {
       'chore: sync Postman artifacts and metadata'
     ]);
   });
+
+  it('fails commit-and-push token validation after staged changes and before git commit', async () => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'feature/sync-artifacts',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.postman', '.github/workflows']
+      })
+    ).rejects.toThrow(/No push token configured for repo-write-mode=commit-and-push/);
+
+    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'commit',
+      '-m',
+      'chore: sync Postman artifacts and metadata'
+    ]);
+  });
+
+  it('fails commit-and-push missing ref validation after staged changes and before git commit', async () => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/tags/v1.2.3',
+        githubToken: 'primary-token',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.postman', '.github/workflows']
+      })
+    ).rejects.toThrow(/No current ref could be resolved for repo-write-mode=commit-and-push/);
+
+    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'commit',
+      '-m',
+      'chore: sync Postman artifacts and metadata'
+    ]);
+  });
+
+  it('fails unsupported provider validation after staged changes and before git commit', async () => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      provider: 'bitbucket',
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'feature/sync-artifacts',
+        githubToken: 'primary-token',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.postman', '.github/workflows']
+      })
+    ).rejects.toThrow(/not supported for git provider "bitbucket"/);
+
+    expect(execute).toHaveBeenCalledWith('git', ['diff', '--cached', '--quiet']);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'commit',
+      '-m',
+      'chore: sync Postman artifacts and metadata'
+    ]);
+  });
 });

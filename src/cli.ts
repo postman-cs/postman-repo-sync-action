@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -33,6 +34,73 @@ const execFileAsync = promisify(execFile);
 
 type ReporterCore = RepoSyncDependencies['core'];
 
+const CLI_INPUT_NAMES = [
+  'project-name',
+  'workspace-id',
+  'baseline-collection-id',
+  'smoke-collection-id',
+  'contract-collection-id',
+  'collection-sync-mode',
+  'spec-sync-mode',
+  'release-label',
+  'environments-json',
+  'git-provider',
+  'ado-token',
+  'repo-url',
+  'integration-backend',
+  'workspace-link-enabled',
+  'environment-sync-enabled',
+  'system-env-map-json',
+  'environment-uids-json',
+  'env-runtime-urls-json',
+  'artifact-dir',
+  'repo-write-mode',
+  'repository',
+  'current-ref',
+  'github-head-ref',
+  'github-ref-name',
+  'committer-name',
+  'committer-email',
+  'postman-api-key',
+  'postman-access-token',
+  'credential-preflight',
+  'github-token',
+  'gh-fallback-token',
+  'ci-workflow-base64',
+  'generate-ci-workflow',
+  'monitor-type',
+  'ci-workflow-path',
+  'org-mode',
+  'monitor-id',
+  'mock-url',
+  'monitor-cron',
+  'ssl-client-cert',
+  'ssl-client-key',
+  'ssl-client-passphrase',
+  'ssl-extra-ca-certs',
+  'spec-id',
+  'spec-path',
+  'team-id',
+  'postman-region',
+  'postman-stack'
+] as const;
+
+const HELP_TEXT = `Usage: postman-repo-sync [options]
+
+Sync Postman artifacts into a git repository.
+
+Options:
+  --help                         Show this help and exit
+  --version                      Show version and exit
+  --result-json <path>           Write JSON result (default: postman-repo-sync-result.json)
+  --dotenv-path <path>           Optional dotenv output path
+  --<input-name> <value>         Action input as kebab-case flag (same names as action.yml)
+
+Examples:
+  postman-repo-sync --help
+  postman-repo-sync --repo-write-mode none --workspace-id <id> ...
+`;
+
 export class ConsoleReporter implements ReporterCore {
   public info(message: string): void {
     console.error(message);
@@ -47,20 +115,6 @@ export class ConsoleReporter implements ReporterCore {
 
   public setSecret(): void {
   }
-}
-
-function readFlag(argv: string[], name: string): string | undefined {
-  const prefix = `--${name}=`;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === `--${name}`) {
-      return argv[index + 1];
-    }
-    if (arg?.startsWith(prefix)) {
-      return arg.slice(prefix.length);
-    }
-  }
-  return undefined;
 }
 
 export function normalizeCliFlag(name: string): string {
@@ -139,70 +193,140 @@ export function createCliExec(secretMasker: (value: string) => string): ExecLike
   };
 }
 
-export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliConfig {
-  const inputNames = [
-    'project-name',
-    'workspace-id',
-    'baseline-collection-id',
-    'smoke-collection-id',
-    'contract-collection-id',
-    'collection-sync-mode',
-    'spec-sync-mode',
-    'release-label',
-    'environments-json',
-    'git-provider',
-    'ado-token',
-    'repo-url',
-    'integration-backend',
-    'workspace-link-enabled',
-    'environment-sync-enabled',
-    'system-env-map-json',
-    'environment-uids-json',
-    'env-runtime-urls-json',
-    'artifact-dir',
-    'repo-write-mode',
-    'repository',
-    'current-ref',
-    'github-head-ref',
-    'github-ref-name',
-    'committer-name',
-    'committer-email',
-    'postman-api-key',
-    'postman-access-token',
-    'credential-preflight',
-    'github-token',
-    'gh-fallback-token',
-    'ci-workflow-base64',
-    'generate-ci-workflow',
-    'monitor-type',
-    'ci-workflow-path',
-    'org-mode',
-    'monitor-id',
-    'mock-url',
-    'monitor-cron',
-    'ssl-client-cert',
-    'ssl-client-key',
-    'ssl-client-passphrase',
-    'ssl-extra-ca-certs',
-    'spec-id',
-    'spec-path',
-    'team-id',
-    'postman-region',
-    'postman-stack'
-  ];
+function resolvePackageVersion(): string {
+  const candidates: string[] = [];
+  // Present in the esbuild CJS bundle (dist/cli.cjs -> ../package.json).
+  if (typeof __filename === 'string' && __filename) {
+    candidates.push(path.join(path.dirname(__filename), '..', 'package.json'));
+  }
+  // vitest/ESM and local smoke: package.json at cwd.
+  candidates.push(path.join(process.cwd(), 'package.json'));
 
-  const inputEnv: NodeJS.ProcessEnv = { ...env };
-  for (const name of inputNames) {
-    const value = readFlag(argv, name);
-    if (value !== undefined) {
-      inputEnv[normalizeCliFlag(name)] = value;
+  for (const packageJsonPath of candidates) {
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+        name?: string;
+        version?: string;
+      };
+      if (packageJson.name === '@postman-cse/onboarding-repo-sync' && packageJson.version) {
+        return String(packageJson.version).trim();
+      }
+    } catch {
+      // try next candidate
     }
+  }
+  return '0.0.0';
+}
+
+function wantsHelp(argv: string[]): boolean {
+  return argv.includes('--help') || argv.includes('-h');
+}
+
+function wantsVersion(argv: string[]): boolean {
+  return argv.includes('--version') || argv.includes('-V');
+}
+
+function runnerFormEnvName(name: string): string {
+  return `INPUT_${name.replace(/ /g, '_').toUpperCase()}`;
+}
+
+export function parseCliArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliConfig {
+  const inputNames = new Set<string>(CLI_INPUT_NAMES);
+  const inputEnv: NodeJS.ProcessEnv = { ...env };
+  let resultJsonPath = 'postman-repo-sync-result.json';
+  let dotenvPath: string | undefined;
+  const seenFlags = new Map<string, string>();
+  let sawHelp = false;
+  let sawVersion = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg) {
+      continue;
+    }
+
+    if (arg === '--help' || arg === '-h') {
+      sawHelp = true;
+      continue;
+    }
+    if (arg === '--version' || arg === '-V') {
+      sawVersion = true;
+      continue;
+    }
+
+    if (!arg.startsWith('--')) {
+      throw new Error(`Unexpected positional argument: ${arg}`);
+    }
+
+    let name: string;
+    let value: string | undefined;
+    const separator = arg.indexOf('=');
+    if (separator !== -1) {
+      name = arg.slice(2, separator);
+      value = arg.slice(separator + 1);
+      if (value === '') {
+        throw new Error(`Missing value for --${name}`);
+      }
+    } else {
+      name = arg.slice(2);
+      const next = argv[index + 1];
+      if (next === undefined || next.startsWith('--')) {
+        throw new Error(`Missing value for --${name}`);
+      }
+      value = next;
+      index += 1;
+    }
+
+    if (!name) {
+      throw new Error(`Unknown option ${arg}`);
+    }
+
+    if (name === 'result-json') {
+      const previous = seenFlags.get(name);
+      if (previous !== undefined && previous !== value) {
+        throw new Error(`Conflicting values for --${name}`);
+      }
+      seenFlags.set(name, value);
+      resultJsonPath = value;
+      continue;
+    }
+    if (name === 'dotenv-path') {
+      const previous = seenFlags.get(name);
+      if (previous !== undefined && previous !== value) {
+        throw new Error(`Conflicting values for --${name}`);
+      }
+      seenFlags.set(name, value);
+      dotenvPath = value;
+      continue;
+    }
+    if (!inputNames.has(name)) {
+      throw new Error(`Unknown option --${name}`);
+    }
+
+    const previous = seenFlags.get(name);
+    if (previous !== undefined && previous !== value) {
+      throw new Error(`Conflicting values for --${name}`);
+    }
+    seenFlags.set(name, value);
+
+    // Explicit CLI flags own the input: write normalized form and clear the
+    // hyphenated runner-form alias so flag precedence beats env conflicts.
+    const normalized = normalizeCliFlag(name);
+    const runnerForm = runnerFormEnvName(name);
+    inputEnv[normalized] = value;
+    if (runnerForm !== normalized) {
+      delete inputEnv[runnerForm];
+    }
+  }
+
+  if (sawHelp && sawVersion) {
+    throw new Error('Cannot use --help and --version together');
   }
 
   return {
     inputEnv,
-    resultJsonPath: readFlag(argv, 'result-json') ?? 'postman-repo-sync-result.json',
-    dotenvPath: readFlag(argv, 'dotenv-path')
+    resultJsonPath,
+    dotenvPath
   };
 }
 
@@ -264,6 +388,20 @@ export async function runCli(
   argv: string[] = process.argv.slice(2),
   runtime: CliRuntime = {}
 ): Promise<void> {
+  const writeStdout = runtime.writeStdout ?? ((chunk: string) => process.stdout.write(chunk));
+
+  if (wantsHelp(argv) && wantsVersion(argv)) {
+    throw new Error('Cannot use --help and --version together');
+  }
+  if (wantsHelp(argv)) {
+    writeStdout(HELP_TEXT.endsWith('\n') ? HELP_TEXT : `${HELP_TEXT}\n`);
+    return;
+  }
+  if (wantsVersion(argv)) {
+    writeStdout(`${resolvePackageVersion()}\n`);
+    return;
+  }
+
   const env = runtime.env ?? process.env;
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
@@ -331,7 +469,6 @@ export async function runCli(
   await writeOptionalFile(config.resultJsonPath, JSON.stringify(result, null, 2));
   await writeOptionalFile(config.dotenvPath, toDotenv(result));
 
-  const writeStdout = runtime.writeStdout ?? ((chunk: string) => process.stdout.write(chunk));
   writeStdout(`${JSON.stringify(result, null, 2)}\n`);
 }
 

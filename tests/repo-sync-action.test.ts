@@ -638,6 +638,53 @@ describe('repo sync action', () => {
     });
   });
 
+  it('writes the requested CI workflow for repo-write-mode=none without calling repo mutation', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+    const repoMutation = {
+      commitAndPush: vi.fn()
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        repoWriteMode: 'none',
+        generateCiWorkflow: true,
+        ciWorkflowPath: '.github/workflows/ci.yml'
+      }),
+      {
+        core: createCoreStub().core,
+        postman: postman as unknown as RepoSyncDependencies['postman'],
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    expect(existsSync('.github/workflows/ci.yml')).toBe(true);
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('name: Resolve Postman Resource IDs');
+    expect(repoMutation.commitAndPush).not.toHaveBeenCalled();
+  });
+
   it('writes the generated CI workflow to a custom path when configured', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),

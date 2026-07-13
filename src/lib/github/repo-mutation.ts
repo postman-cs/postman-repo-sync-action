@@ -280,6 +280,21 @@ export class RepoMutationService {
       };
     }
 
+    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
+    if (options.repoWriteMode === 'commit-and-push') {
+      // Validate push prerequisites after staged-change detection and before
+      // creating a commit, so configuration failures leave no local commit.
+      if (!resolvedCurrentRef) {
+        throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
+      }
+      if (tokens.length === 0 && !usePersistedCredentials) {
+        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+      }
+      if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
+        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+      }
+    }
+
     await this.execute('git', [
       'commit',
       '-m',
@@ -293,17 +308,6 @@ export class RepoMutationService {
         pushed: false,
         resolvedCurrentRef
       };
-    }
-
-    if (!resolvedCurrentRef) {
-      throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
-    }
-    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
-    if (tokens.length === 0 && !usePersistedCredentials) {
-      throw new Error('No push token configured for repo-write-mode=commit-and-push');
-    }
-    if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
-      throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
     }
 
     const originalRemote = (await this.execute('git', ['remote', 'get-url', 'origin']))

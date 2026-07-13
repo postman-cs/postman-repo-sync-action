@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -118,6 +119,144 @@ describe('cli', () => {
     expect(inputs.postmanApiBase).toBe('https://api.eu.postman.com');
     expect(() => resolveInputs({ INPUT_POSTMAN_REGION: 'ap' })).toThrow(/Unsupported postman-region/);
     expect(() => resolveInputs({ INPUT_POSTMAN_REGION: 'eu', INPUT_POSTMAN_STACK: 'beta' })).toThrow(/postman-region=eu/);
+  });
+
+  it.each([
+    ['none', 'none'],
+    ['commit-only', 'commit-only'],
+    ['commit-and-push', 'commit-and-push']
+  ] as const)('accepts repo-write-mode=%s from CLI flag and normalized INPUT', (mode, expected) => {
+    expect(parseCliArgs(['--repo-write-mode', mode], {}).inputEnv.INPUT_REPO_WRITE_MODE).toBe(mode);
+    expect(resolveInputs({ INPUT_REPO_WRITE_MODE: mode }).repoWriteMode).toBe(expected);
+  });
+
+  it('defaults absent repo-write-mode to commit-and-push', () => {
+    expect(resolveInputs({}).repoWriteMode).toBe('commit-and-push');
+  });
+
+  it('rejects unsupported present repo-write-mode values', () => {
+    expect(() => resolveInputs({ INPUT_REPO_WRITE_MODE: 'push-please' })).toThrow(
+      /Unsupported repo-write-mode "push-please".*none, commit-only, commit-and-push/
+    );
+    expect(() => resolveInputs({ 'INPUT_REPO-WRITE-MODE': 'typo' } as NodeJS.ProcessEnv)).toThrow(
+      /Unsupported repo-write-mode "typo"/
+    );
+    expect(() => resolveInputs({ INPUT_REPO_WRITE_MODE: '' })).toThrow(
+      /Unsupported repo-write-mode ""/
+    );
+  });
+
+  it('reads runner-form INPUT_REPO-WRITE-MODE when normalized form is absent', () => {
+    const inputs = resolveInputs({ 'INPUT_REPO-WRITE-MODE': 'none' } as NodeJS.ProcessEnv);
+    expect(inputs.repoWriteMode).toBe('none');
+  });
+
+  it('rejects conflicting runner-form and normalized INPUT aliases', () => {
+    expect(() =>
+      resolveInputs({
+        INPUT_REPO_WRITE_MODE: 'none',
+        'INPUT_REPO-WRITE-MODE': 'commit-and-push'
+      } as NodeJS.ProcessEnv)
+    ).toThrow(/Conflicting values for repo-write-mode/);
+  });
+
+  it('allows matching runner-form and normalized INPUT aliases', () => {
+    const inputs = resolveInputs({
+      INPUT_REPO_WRITE_MODE: 'commit-only',
+      'INPUT_REPO-WRITE-MODE': 'commit-only'
+    } as NodeJS.ProcessEnv);
+    expect(inputs.repoWriteMode).toBe('commit-only');
+  });
+
+  it('rejects unknown flags, missing values, and unexpected positionals', () => {
+    expect(() => parseCliArgs(['--not-a-real-flag', 'x'], {})).toThrow(/Unknown option --not-a-real-flag/);
+    expect(() => parseCliArgs(['--repo-write-mode'], {})).toThrow(/Missing value for --repo-write-mode/);
+    expect(() => parseCliArgs(['--repo-write-mode', '--project-name', 'demo'], {})).toThrow(
+      /Missing value for --repo-write-mode/
+    );
+    expect(() => parseCliArgs(['--repo-write-mode='], {})).toThrow(/Missing value for --repo-write-mode/);
+    expect(() => parseCliArgs(['positional-arg'], {})).toThrow(/Unexpected positional argument/);
+  });
+
+  it('rejects conflicting repeated CLI flags while allowing identical repeats', () => {
+    expect(() =>
+      parseCliArgs(['--repo-write-mode=none', '--repo-write-mode', 'commit-only'], {})
+    ).toThrow(/Conflicting values for --repo-write-mode/);
+    expect(
+      parseCliArgs(['--repo-write-mode=none', '--repo-write-mode', 'none'], {}).inputEnv
+        .INPUT_REPO_WRITE_MODE
+    ).toBe('none');
+  });
+
+  it('gives an explicit CLI flag precedence over both INPUT aliases', () => {
+    const config = parseCliArgs(['--repo-write-mode', 'none'], {
+      INPUT_REPO_WRITE_MODE: 'commit-and-push',
+      'INPUT_REPO-WRITE-MODE': 'commit-only'
+    } as NodeJS.ProcessEnv);
+
+    expect(resolveInputs(config.inputEnv).repoWriteMode).toBe('none');
+  });
+
+  it('rejects conflicting help and version commands', () => {
+    expect(() => parseCliArgs(['--help', '--version'], {})).toThrow(
+      /Cannot use --help and --version together/
+    );
+  });
+
+  it('lets CLI flags override env by writing the normalized INPUT key', () => {
+    const config = parseCliArgs(['--repo-write-mode', 'none'], {
+      INPUT_REPO_WRITE_MODE: 'commit-and-push'
+    });
+    expect(config.inputEnv.INPUT_REPO_WRITE_MODE).toBe('none');
+    expect(resolveInputs(config.inputEnv).repoWriteMode).toBe('none');
+  });
+});
+
+describe('runCli help and version', () => {
+  it('prints help without credentials, network, or repo sync', async () => {
+    const executeRepoSync = vi.fn();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    let stdout = '';
+
+    await runCli(['--help', '--repo-write-mode', 'commit-and-push'], {
+      env: {},
+      executeRepoSync,
+      writeStdout: (chunk) => {
+        stdout += chunk;
+      }
+    });
+
+    expect(stdout).toMatch(/Usage:\s+postman-repo-sync/i);
+    expect(executeRepoSync).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('prints version without credentials, network, or repo sync', async () => {
+    const executeRepoSync = vi.fn();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    let stdout = '';
+    const packageJson = JSON.parse(
+      await (await import('node:fs/promises')).readFile(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+        'utf8'
+      )
+    ) as { version: string };
+
+    await runCli(['--version'], {
+      env: { INPUT_POSTMAN_API_KEY: 'should-not-matter' },
+      executeRepoSync,
+      writeStdout: (chunk) => {
+        stdout += chunk;
+      }
+    });
+
+    expect(stdout.trim()).toBe(packageJson.version);
+    expect(executeRepoSync).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
 

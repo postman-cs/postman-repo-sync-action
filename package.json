@@ -17,7 +17,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
     "build": "npm run typecheck && rm -rf dist && esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.cjs && esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/action.cjs && esbuild src/cli.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/cli.cjs",
-    "verify:dist": "npm run build && git diff --ignore-space-at-eol --text --exit-code -- dist",
+    "verify:dist": "npm run build && node -e \"const fs=require('fs');const p='dist/cli.cjs';const s=fs.readFileSync(p,'utf8');if(!s.startsWith('#!/usr/bin/env node\\n')){console.error('dist/cli.cjs missing Node shebang');process.exit(1)}if(!(fs.statSync(p).mode&0o111)){console.error('dist/cli.cjs is not executable');process.exit(1)}\" && git diff --ignore-space-at-eol --text --exit-code -- dist",
     "docs:tables": "node scripts/render-action-tables.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
