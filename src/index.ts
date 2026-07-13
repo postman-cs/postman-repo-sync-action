@@ -6,7 +6,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
@@ -1159,9 +1158,6 @@ async function commitAndPushGeneratedFiles(
 
   const provisionPath = '.github/workflows/provision.yml';
   const provisionExists = inputs.provider === 'github' && existsSync(provisionPath);
-  if (provisionExists) {
-    rmSync(provisionPath);
-  }
 
   const stagePaths = [
     inputs.artifactDir,
@@ -1194,6 +1190,7 @@ async function commitAndPushGeneratedFiles(
     adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
     githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
     fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
+    removePaths: provisionExists ? [provisionPath] : [],
     stagePaths
   });
 

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -663,13 +663,34 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
-  it('leaves the real git index unchanged when push preflight fails', async () => {
+  it('preserves provision.yml and the index on push preflight failures, then removes it after valid preflight', async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), 'repo-mutation-preflight-'));
     try {
       await execFileAsync('git', ['init'], { cwd: repoRoot });
+      await execFileAsync('git', ['config', 'user.name', 'Fixture'], { cwd: repoRoot });
+      await execFileAsync('git', ['config', 'user.email', 'fixture@example.com'], { cwd: repoRoot });
       await mkdir(path.join(repoRoot, 'postman'), { recursive: true });
+      await mkdir(path.join(repoRoot, '.github', 'workflows'), { recursive: true });
       await writeFile(path.join(repoRoot, 'postman', 'collection.yaml'), 'name: demo\n', 'utf8');
+      const provisionPath = path.join(repoRoot, '.github', 'workflows', 'provision.yml');
+      const provisionWorkflow = [
+        'name: Provision',
+        'on: [push]',
+        'jobs:',
+        '  test:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - run: echo test',
+        ''
+      ].join('\n');
+      await writeFile(provisionPath, provisionWorkflow, 'utf8');
+      await execFileAsync('git', ['add', '.github/workflows/provision.yml'], { cwd: repoRoot });
+      await execFileAsync('git', ['commit', '-m', 'test: add provision fixture'], { cwd: repoRoot });
+      await execFileAsync('git', ['remote', 'add', 'origin', 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo'], { cwd: repoRoot });
       const execute = async (command: string, args: string[]): Promise<CommandResult> => {
+        if (command === 'git' && args.includes('push')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
         try {
           const result = await execFileAsync(command, args, { cwd: repoRoot, encoding: 'utf8' });
           return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
@@ -682,26 +703,66 @@ describe('repo mutation helpers', () => {
           };
         }
       };
-      const repoMutation = new RepoMutationService({
+      const failures = [
+        {
+          service: new RepoMutationService({ cwd: repoRoot, repository: 'postman-cs/repo-sync-demo', execute }),
+          options: { currentRef: 'feature/sync-artifacts' },
+          message: /No push token configured/
+        },
+        {
+          service: new RepoMutationService({ cwd: repoRoot, repository: 'postman-cs/repo-sync-demo', execute }),
+          options: { currentRef: 'refs/tags/v1.2.3', githubToken: 'token' },
+          message: /No current ref could be resolved/
+        },
+        {
+          service: new RepoMutationService({ cwd: repoRoot, provider: 'bitbucket', repository: 'postman-cs/repo-sync-demo', execute }),
+          options: { currentRef: 'feature/sync-artifacts', githubToken: 'token' },
+          message: /not supported for git provider "bitbucket"/
+        }
+      ];
+
+      for (const failure of failures) {
+        await expect(
+          failure.service.commitAndPush({
+            repoWriteMode: 'commit-and-push',
+            committerName: 'Postman',
+            committerEmail: 'support@postman.com',
+            stagePaths: ['postman', '.github/workflows/provision.yml'],
+            removePaths: ['.github/workflows/provision.yml'],
+            ...failure.options
+          })
+        ).rejects.toThrow(failure.message);
+
+        expect(await readFile(provisionPath, 'utf8')).toBe(provisionWorkflow);
+        const staged = await execFileAsync('git', ['diff', '--cached', '--name-only'], {
+          cwd: repoRoot,
+          encoding: 'utf8'
+        });
+        expect(staged.stdout).toBe('');
+      }
+
+      const validMutation = new RepoMutationService({
+        cwd: repoRoot,
+        provider: 'azure-devops',
         repository: 'postman-cs/repo-sync-demo',
+        repoUrl: 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo',
         execute
       });
+      await validMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'feature/sync-artifacts',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.github/workflows/provision.yml'],
+        removePaths: ['.github/workflows/provision.yml']
+      });
 
-      await expect(
-        repoMutation.commitAndPush({
-          repoWriteMode: 'commit-and-push',
-          currentRef: 'feature/sync-artifacts',
-          committerName: 'Postman',
-          committerEmail: 'support@postman.com',
-          stagePaths: ['postman']
-        })
-      ).rejects.toThrow(/No push token configured/);
-
-      const staged = await execFileAsync('git', ['diff', '--cached', '--name-only'], {
+      await expect(readFile(provisionPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      const committed = await execFileAsync('git', ['show', '--name-status', '--format='], {
         cwd: repoRoot,
         encoding: 'utf8'
       });
-      expect(staged.stdout).toBe('');
+      expect(committed.stdout).toContain('D\t.github/workflows/provision.yml');
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

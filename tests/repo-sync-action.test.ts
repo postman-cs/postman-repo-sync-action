@@ -638,6 +638,42 @@ describe('repo sync action', () => {
     });
   });
 
+  it('delegates provision workflow removal without deleting it before repo mutation preflight', async () => {
+    mkdirSync('.github/workflows', { recursive: true });
+    writeFileSync('.github/workflows/provision.yml', 'name: Provision\n');
+    const repoMutation = {
+      commitAndPush: vi.fn(async (options: { removePaths?: string[] }) => {
+        expect(existsSync('.github/workflows/provision.yml')).toBe(true);
+        expect(options.removePaths).toEqual(['.github/workflows/provision.yml']);
+        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+      })
+    };
+
+    await expect(
+      runRepoSync(
+        createInputs({
+          workspaceId: '',
+          baselineCollectionId: '',
+          smokeCollectionId: '',
+          contractCollectionId: '',
+          environments: [],
+          workspaceLinkEnabled: false,
+          environmentSyncEnabled: false,
+          generateCiWorkflow: false,
+          githubToken: '',
+          ghFallbackToken: ''
+        }),
+        {
+          core: createCoreStub().core,
+          postman: {} as RepoSyncDependencies['postman'],
+          repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+        }
+      )
+    ).rejects.toThrow(/No push token configured/);
+
+    expect(existsSync('.github/workflows/provision.yml')).toBe(true);
+  });
+
   it('writes the requested CI workflow for repo-write-mode=none without calling repo mutation', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
