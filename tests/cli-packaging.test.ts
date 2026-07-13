@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, constants, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { access, constants, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,16 +59,46 @@ describe('CLI packaging contract', () => {
 
     const tarballPath = path.join(packDir, packed.filename);
     await mkdir(prefixDir, { recursive: true });
-    // npm ci has already populated the normal cache, including private/runtime
-    // packages. Offline install proves the packed bin without registry access.
-    await execFileAsync('npm', ['install', '--offline', '--prefix', prefixDir, tarballPath], {
+    const fixturePackage = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')) as {
+      name: string;
+      private?: boolean;
+      scripts?: Record<string, string>;
+    };
+    fixturePackage.name = 'postman-repo-sync-packaging-fixture';
+    fixturePackage.private = true;
+    delete fixturePackage.scripts;
+    const fixtureLock = JSON.parse(await readFile(path.join(repoRoot, 'package-lock.json'), 'utf8')) as {
+      name: string;
+      packages: Record<string, { name?: string }>;
+    };
+    fixtureLock.name = fixturePackage.name;
+    if (fixtureLock.packages['']) {
+      fixtureLock.packages[''].name = fixturePackage.name;
+    }
+    await writeFile(path.join(prefixDir, 'package.json'), JSON.stringify(fixturePackage), 'utf8');
+    await writeFile(path.join(prefixDir, 'package-lock.json'), JSON.stringify(fixtureLock), 'utf8');
+
+    // The gate's first npm ci has cached the exact lockfile tarballs. Rehydrate
+    // dependencies offline, then perform a real tarball install without registry I/O.
+    await execFileAsync('npm', ['ci', '--offline', '--ignore-scripts'], {
+      cwd: prefixDir,
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: process.env.PATH ?? ''
-      },
+      env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 20 * 1024 * 1024
     });
+    await execFileAsync(
+      'npm',
+      ['install', '--offline', '--ignore-scripts', '--no-save', tarballPath],
+      {
+        cwd: prefixDir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: process.env.PATH ?? ''
+        },
+        maxBuffer: 20 * 1024 * 1024
+      }
+    );
 
     const binPath = path.join(
       prefixDir,
