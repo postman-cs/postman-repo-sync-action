@@ -7,7 +7,7 @@ vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
   }))
 }));
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -636,6 +636,129 @@ describe('repo sync action', () => {
       'commit-sha': '',
       'resolved-current-ref': 'feature/repo-sync'
     });
+  });
+
+  it('delegates provision workflow removal without deleting it before repo mutation preflight', async () => {
+    mkdirSync('.github/workflows', { recursive: true });
+    writeFileSync('.github/workflows/provision.yml', 'name: Provision\n');
+    const repoMutation = {
+      commitAndPush: vi.fn(async (options: { removePaths?: string[] }) => {
+        expect(existsSync('.github/workflows/provision.yml')).toBe(true);
+        expect(options.removePaths).toEqual(['.github/workflows/provision.yml']);
+        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+      })
+    };
+
+    await expect(
+      runRepoSync(
+        createInputs({
+          workspaceId: '',
+          baselineCollectionId: '',
+          smokeCollectionId: '',
+          contractCollectionId: '',
+          environments: [],
+          workspaceLinkEnabled: false,
+          environmentSyncEnabled: false,
+          generateCiWorkflow: false,
+          githubToken: '',
+          ghFallbackToken: ''
+        }),
+        {
+          core: createCoreStub().core,
+          postman: {} as RepoSyncDependencies['postman'],
+          repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+        }
+      )
+    ).rejects.toThrow(/No push token configured/);
+
+    expect(existsSync('.github/workflows/provision.yml')).toBe(true);
+  });
+
+  it('writes the requested CI workflow for repo-write-mode=none without calling repo mutation', async () => {
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+    const repoMutation = {
+      commitAndPush: vi.fn()
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        repoWriteMode: 'none',
+        generateCiWorkflow: true,
+        ciWorkflowPath: '.github/workflows/ci.yml'
+      }),
+      {
+        core: createCoreStub().core,
+        postman: postman as unknown as RepoSyncDependencies['postman'],
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    expect(existsSync('.github/workflows/ci.yml')).toBe(true);
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('name: Resolve Postman Resource IDs');
+    expect(repoMutation.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe CI workflow paths in repo-write-mode=none before writing', async () => {
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'repo-sync-ci-outside-'));
+    symlinkSync(outsideRoot, '.workflow-link', 'dir');
+    const invalidPaths = [
+      '../escaped-ci.yml',
+      join(outsideRoot, 'absolute-ci.yml'),
+      '.workflow-link/symlink-ci.yml'
+    ];
+
+    try {
+      for (const ciWorkflowPath of invalidPaths) {
+        await expect(
+          runRepoSync(
+            createInputs({
+              workspaceId: '',
+              baselineCollectionId: '',
+              smokeCollectionId: '',
+              contractCollectionId: '',
+              environments: [],
+              workspaceLinkEnabled: false,
+              environmentSyncEnabled: false,
+              repoWriteMode: 'none',
+              generateCiWorkflow: true,
+              ciWorkflowPath
+            }),
+            {
+              core: createCoreStub().core,
+              postman: {} as RepoSyncDependencies['postman']
+            }
+          )
+        ).rejects.toThrow(/ci-workflow-path must stay within the repository root/);
+      }
+
+      expect(existsSync(join(outsideRoot, 'absolute-ci.yml'))).toBe(false);
+      expect(existsSync(join(outsideRoot, 'symlink-ci.yml'))).toBe(false);
+    } finally {
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('writes the generated CI workflow to a custom path when configured', async () => {

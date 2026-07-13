@@ -1,3 +1,4 @@
+import { existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
@@ -35,10 +36,12 @@ export interface CommitAndPushOptions extends RepoMutationContext {
   committerName: string;
   fallbackToken?: string;
   githubToken?: string;
+  removePaths?: string[];
   stagePaths: string[];
 }
 
 export interface RepoMutationServiceOptions {
+  cwd?: string;
   execute: ExecuteFn;
   provider?: GitProvider;
   repository: string;
@@ -221,13 +224,16 @@ function normalizeStagePaths(stagePaths: string[]): string[] {
       throw new Error(`Unsafe git stage path: ${stagePath}`);
     }
 
-    normalized.push(stagePath);
+    if (!normalized.includes(stagePath)) {
+      normalized.push(stagePath);
+    }
   }
 
   return normalized;
 }
 
 export class RepoMutationService {
+  private readonly cwd: string;
   private readonly execute: ExecuteFn;
   private readonly provider: GitProvider;
   private readonly repository: string;
@@ -235,6 +241,7 @@ export class RepoMutationService {
   private readonly secretMasker: SecretMasker;
 
   constructor(options: RepoMutationServiceOptions) {
+    this.cwd = options.cwd ?? process.cwd();
     this.execute = options.execute;
     this.provider = options.provider ?? 'github';
     this.repository = options.repository;
@@ -249,7 +256,8 @@ export class RepoMutationService {
     resolvedCurrentRef: string;
   }> {
     const resolvedCurrentRef = resolveCurrentRef(options);
-    const stagePaths = normalizeStagePaths(options.stagePaths);
+    const removePaths = normalizeStagePaths(options.removePaths ?? []);
+    const stagePaths = normalizeStagePaths([...options.stagePaths, ...removePaths]);
     const tokens =
       this.provider === 'azure-devops'
         ? buildPushTokenOrder({ adoToken: options.adoToken })
@@ -267,8 +275,45 @@ export class RepoMutationService {
       };
     }
 
+    const changed = await this.execute('git', [
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--',
+      ...stagePaths
+    ]);
+    if (changed.exitCode !== 0) {
+      throw new Error(this.secretMasker(changed.stderr || changed.stdout || 'Failed to inspect generated changes'));
+    }
+    const hasPlannedRemoval = removePaths.some((removePath) =>
+      existsSync(path.resolve(this.cwd, removePath))
+    );
+    if (!changed.stdout.trim() && !hasPlannedRemoval) {
+      return {
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef
+      };
+    }
+
+    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
+    if (options.repoWriteMode === 'commit-and-push') {
+      if (!supportsTokenRemote(this.provider)) {
+        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+      }
+      if (!resolvedCurrentRef) {
+        throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
+      }
+      if (tokens.length === 0 && !usePersistedCredentials) {
+        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+      }
+    }
+
     await this.execute('git', ['config', 'user.name', options.committerName]);
     await this.execute('git', ['config', 'user.email', options.committerEmail]);
+    for (const removePath of removePaths) {
+      rmSync(path.resolve(this.cwd, removePath), { force: true });
+    }
     await this.execute('git', ['add', '-A', '--', ...stagePaths]);
 
     const staged = await this.execute('git', ['diff', '--cached', '--quiet']);
@@ -293,17 +338,6 @@ export class RepoMutationService {
         pushed: false,
         resolvedCurrentRef
       };
-    }
-
-    if (!resolvedCurrentRef) {
-      throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
-    }
-    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
-    if (tokens.length === 0 && !usePersistedCredentials) {
-      throw new Error('No push token configured for repo-write-mode=commit-and-push');
-    }
-    if (tokens.length > 0 && !supportsTokenRemote(this.provider)) {
-      throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
     }
 
     const originalRemote = (await this.execute('git', ['remote', 'get-url', 'origin']))

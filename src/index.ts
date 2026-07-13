@@ -6,7 +6,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
@@ -192,8 +191,33 @@ export function getInput(
   name: string,
   env: NodeJS.ProcessEnv = process.env
 ): string {
-  const envName = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
-  return normalizeInputValue(env[envName]);
+  const normalizedName = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
+  const runnerName = `INPUT_${name.replace(/ /g, '_').toUpperCase()}`;
+  const normalizedRaw = env[normalizedName];
+  const runnerRaw = runnerName === normalizedName ? undefined : env[runnerName];
+  const hasNormalized = normalizedRaw !== undefined;
+  const hasRunner = runnerRaw !== undefined;
+
+  if (hasNormalized && hasRunner) {
+    const normalizedValue = normalizeInputValue(normalizedRaw);
+    const runnerValue = normalizeInputValue(runnerRaw);
+    if (normalizedValue !== runnerValue) {
+      throw new Error(
+        `Conflicting values for ${name}: ${normalizedName}=${JSON.stringify(normalizedValue)} vs ${runnerName}=${JSON.stringify(runnerValue)}`
+      );
+    }
+  }
+
+  return normalizeInputValue(hasNormalized ? normalizedRaw : runnerRaw);
+}
+
+export function hasInput(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const normalizedName = `INPUT_${name.replace(/-/g, '_').toUpperCase()}`;
+  const runnerName = `INPUT_${name.replace(/ /g, '_').toUpperCase()}`;
+  return (
+    env[normalizedName] !== undefined ||
+    (runnerName !== normalizedName && env[runnerName] !== undefined)
+  );
 }
 
 function parseJsonMap(raw: string): Record<string, string> {
@@ -231,7 +255,9 @@ function normalizeRepoWriteMode(value: string): 'none' | 'commit-only' | 'commit
   if (value === 'none' || value === 'commit-only' || value === 'commit-and-push') {
     return value;
   }
-  return 'commit-and-push';
+  throw new Error(
+    `Unsupported repo-write-mode "${value}". Allowed values: none, commit-only, commit-and-push`
+  );
 }
 
 function normalizeCollectionSyncMode(value: string): 'refresh' | 'version' {
@@ -336,7 +362,9 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     environmentUids,
     envRuntimeUrls,
     artifactDir: getInput('artifact-dir', env) || 'postman',
-    repoWriteMode: normalizeRepoWriteMode(getInput('repo-write-mode', env) || 'commit-and-push'),
+    repoWriteMode: hasInput('repo-write-mode', env)
+      ? normalizeRepoWriteMode(getInput('repo-write-mode', env))
+      : 'commit-and-push',
     currentRef:
       getInput('current-ref', env) ||
       normalizeInputValue(env.GITHUB_REF) ||
@@ -1108,12 +1136,10 @@ async function commitAndPushGeneratedFiles(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies
 ): Promise<{ commitSha: string; resolvedCurrentRef: string; pushed: boolean }> {
-  if (!dependencies.repoMutation || inputs.repoWriteMode === 'none') {
-    return { commitSha: '', resolvedCurrentRef: '', pushed: false };
-  }
-
-
+  // File generation is independent of git mutation: mode=none still writes the
+  // requested CI workflow, but never stages/commits/pushes.
   if (inputs.generateCiWorkflow) {
+    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
     const ciWorkflow = renderCiWorkflow(inputs);
 
     // Extract dir from ciWorkflowPath
@@ -1126,11 +1152,12 @@ async function commitAndPushGeneratedFiles(
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
   }
 
+  if (!dependencies.repoMutation || inputs.repoWriteMode === 'none') {
+    return { commitSha: '', resolvedCurrentRef: '', pushed: false };
+  }
+
   const provisionPath = '.github/workflows/provision.yml';
   const provisionExists = inputs.provider === 'github' && existsSync(provisionPath);
-  if (provisionExists) {
-    rmSync(provisionPath);
-  }
 
   const stagePaths = [
     inputs.artifactDir,
@@ -1163,6 +1190,7 @@ async function commitAndPushGeneratedFiles(
     adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
     githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
     fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
+    removePaths: provisionExists ? [provisionPath] : [],
     stagePaths
   });
 
