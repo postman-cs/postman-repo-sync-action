@@ -59,11 +59,12 @@ describe('CLI packaging contract', () => {
 
     const tarballPath = path.join(packDir, packed.filename);
     await mkdir(prefixDir, { recursive: true });
-    await execFileAsync('npm', ['install', '--prefix', prefixDir, tarballPath], {
+    // npm ci has already populated the normal cache, including private/runtime
+    // packages. Offline install proves the packed bin without registry access.
+    await execFileAsync('npm', ['install', '--offline', '--prefix', prefixDir, tarballPath], {
       encoding: 'utf8',
       env: {
         ...process.env,
-        NPM_CONFIG_CACHE: path.join(packDir, '.npm-cache'),
         PATH: process.env.PATH ?? ''
       },
       maxBuffer: 20 * 1024 * 1024
