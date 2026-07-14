@@ -119,10 +119,16 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
   });
 
   it('routes environment create through the gateway sync service when an access token is present', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (url) => {
-      const u = String(url);
-      if (u.includes('/ws/proxy')) {
-        return jsonResponse({ data: { uid: 'env-1' } });
+    // createEnvironment discovers first (list), then imports — so the list call
+    // returns the empty shape and the import POST returns the created entity.
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      const env = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+      const path = String(env.path ?? '');
+      if (path.startsWith('/list/environment')) {
+        return jsonResponse({ data: [] });
+      }
+      if (path.startsWith('/environment/import')) {
+        return jsonResponse({ data: { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', owner: '10490519' } });
       }
       return jsonResponse({}, { status: 500 });
     });
@@ -135,15 +141,20 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
       factory
     );
 
-    const uid = await deps.postman.createEnvironment('ws-123', 'prod', []);
-    expect(uid).toBe('env-1');
+    const envUid = await deps.postman.createEnvironment('ws-123', 'prod', []);
+    expect(typeof envUid).toBe('string');
+    expect(envUid).toMatch(/^10490519-/);
 
-    const call = fetchMock.mock.calls[0];
-    expect(String(call[0])).toContain('/ws/proxy');
-    const headers = (call[1] as RequestInit).headers as Record<string, string>;
+    const proxyCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/ws/proxy'));
+    const createCall = proxyCalls.find((c) => {
+      const env = JSON.parse(String((c[1] as RequestInit).body)) as Record<string, unknown>;
+      return env.method === 'post' && String(env.path ?? '').includes('/environment/import?');
+    });
+    expect(createCall).toBeDefined();
+    const headers = (createCall![1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-access-token']).toBe('access-token-xyz');
     expect(headers['X-Api-Key']).toBeUndefined();
-    const proxied = JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+    const proxied = JSON.parse(String((createCall![1] as RequestInit).body)) as Record<string, unknown>;
     expect(proxied.service).toBe('sync');
     expect(String(proxied.path)).toContain('/environment/import?workspace=ws-123');
   });

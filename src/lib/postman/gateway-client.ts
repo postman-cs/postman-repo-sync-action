@@ -40,18 +40,15 @@ function isExpiredAuthError(status: number, body: string): boolean {
 
 /**
  * Transient downstream failures the gateway surfaces intermittently (Bifrost
- * proxy read timeouts, gateway 5xx). Retried with backoff. `ESOCKETTIMEDOUT`
- * is the recurring one — a downstream read timeout, not a request the server
- * durably accepted, so retrying is safe for the onboarding ops (all guarded by
- * reuse-or-create idempotency + run-scoped teardown). The large v3 collection
- * export read is the observed trigger.
+ * proxy read timeouts, gateway 5xx, and statusless transport failures). Safe
+ * reads retry these with backoff.
+ * Unsafe creates opt out via `{ retryTransient: false }` and reconcile through
+ * live discovery instead of re-POSTing — an `ESOCKETTIMEDOUT` after accept can
+ * otherwise duplicate mocks/monitors. The large v3 collection export read is
+ * the observed safe-read trigger.
  */
-function isTransientGatewayError(status: number, body: string): boolean {
-  if (status === 502 || status === 503 || status === 504) return true;
-  if (status >= 500 && (body.includes('ESOCKETTIMEDOUT') || body.includes('ETIMEDOUT') || body.includes('ECONNRESET') || body.includes('serverError') || body.includes('downstream'))) {
-    return true;
-  }
-  return false;
+function isRetryableSafeReadResponse(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -129,14 +126,31 @@ export class AccessTokenGatewayClient {
 
   /**
    * Send a gateway request, refreshing the token once on an auth failure and
-   * retrying transient downstream failures (5xx / Bifrost read timeouts) with
-   * exponential backoff. The auth-refresh-once path is independent of the
-   * transient-retry budget.
+   * optionally retrying transient downstream failures (5xx / Bifrost read
+   * timeouts) with exponential backoff. Safe reads keep transient retries;
+   * unsafe creates pass `{ retryTransient: false }` and reconcile after an
+   * ambiguous response instead of re-POSTing. Auth refresh remains independent
+   * of the transient-retry budget.
    */
-  async request(request: GatewayRequest): Promise<Response> {
+  async request(
+    request: GatewayRequest,
+    options: { retryTransient?: boolean } = {}
+  ): Promise<Response> {
+    const retryTransient = options.retryTransient ?? request.method === 'get';
     let attempt = 0;
     for (;;) {
-      let response = await this.send(request);
+      let response: Response;
+      try {
+        response = await this.send(request);
+      } catch (error) {
+        if (retryTransient && attempt < this.maxRetries) {
+          const delay = this.retryBaseDelayMs * 2 ** attempt;
+          attempt += 1;
+          await this.sleepImpl(delay);
+          continue;
+        }
+        throw error;
+      }
       if (response.ok) {
         return response;
       }
@@ -152,7 +166,11 @@ export class AccessTokenGatewayClient {
         throw this.toHttpError(request, response, retryBody);
       }
 
-      if (isTransientGatewayError(response.status, body) && attempt < this.maxRetries) {
+      if (
+        retryTransient &&
+        isRetryableSafeReadResponse(response.status) &&
+        attempt < this.maxRetries
+      ) {
         const delay = this.retryBaseDelayMs * 2 ** attempt;
         attempt += 1;
         await this.sleepImpl(delay);
@@ -165,9 +183,10 @@ export class AccessTokenGatewayClient {
 
   /** Send a gateway request and parse the JSON body, or null when empty. */
   async requestJson<T = Record<string, unknown>>(
-    request: GatewayRequest
+    request: GatewayRequest,
+    options: { retryTransient?: boolean } = {}
   ): Promise<T | null> {
-    const response = await this.request(request);
+    const response = await this.request(request, options);
     const text = await response.text().catch(() => '');
     if (!text.trim()) {
       return null;

@@ -155,6 +155,7 @@ export interface RepoSyncDependencies {
     | 'listMocks'
     | 'monitorExists'
     | 'mockExists'
+    | 'findEnvironmentByName'
     | 'findMonitorByCollection'
     | 'findMockByCollection'
     | 'runMonitor'
@@ -804,18 +805,34 @@ async function upsertEnvironments(
   for (const envName of inputs.environments) {
     const runtimeUrl = String(inputs.envRuntimeUrls[envName] || '').trim();
     const values = buildEnvironmentValues(envName, runtimeUrl);
-    const existingUid = envUids[envName];
-    if (existingUid) {
-      await dependencies.postman.updateEnvironment(
-        existingUid,
-        `${inputs.projectName} - ${envName}`,
-        values
+    const displayName = `${inputs.projectName} - ${envName}`;
+    let existingUid = String(envUids[envName] || '').trim();
+
+    // Explicit input / .postman/resources.yaml UIDs win. Otherwise discover by
+    // exact workspace display name so a fresh checkout without tracked UIDs
+    // still updates instead of creating a duplicate.
+    if (!existingUid) {
+      const discovered = await dependencies.postman.findEnvironmentByName(
+        inputs.workspaceId,
+        displayName
       );
+      if (discovered?.uid) {
+        existingUid = discovered.uid;
+        dependencies.core.info(
+          `Discovered existing environment for ${displayName}: ${existingUid}`
+        );
+      }
+    }
+
+    if (existingUid) {
+      await dependencies.postman.updateEnvironment(existingUid, displayName, values);
+      envUids[envName] = existingUid;
       continue;
     }
+
     envUids[envName] = await dependencies.postman.createEnvironment(
       inputs.workspaceId,
-      `${inputs.projectName} - ${envName}`,
+      displayName,
       values
     );
   }
@@ -1298,6 +1315,7 @@ async function runRepoSyncInner(
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
       let resolvedMockUrl = '';
+      const mockName = `${assetProjectName} Mock`;
 
       if (inputs.mockUrl) {
         resolvedMockUrl = inputs.mockUrl;
@@ -1305,7 +1323,11 @@ async function runRepoSyncInner(
       }
 
       if (!resolvedMockUrl && inputs.baselineCollectionId) {
-        const discovered = await dependencies.postman.findMockByCollection(inputs.baselineCollectionId);
+        const discovered = await dependencies.postman.findMockByCollection(
+          inputs.baselineCollectionId,
+          mockEnvUid,
+          mockName
+        );
         if (discovered) {
           resolvedMockUrl = discovered.mockUrl;
           dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
@@ -1315,7 +1337,7 @@ async function runRepoSyncInner(
       if (!resolvedMockUrl) {
         const mock = await dependencies.postman.createMock(
           inputs.workspaceId,
-          `${assetProjectName} Mock`,
+          mockName,
           inputs.baselineCollectionId,
           mockEnvUid
         );
@@ -1333,6 +1355,7 @@ async function runRepoSyncInner(
 
     if (monitorEnvUid && inputs.monitorType !== 'cli') {
       let resolvedMonitorId = '';
+      const monitorName = `${assetProjectName} - Smoke Monitor`;
 
       if (inputs.monitorId) {
         const valid = await dependencies.postman.monitorExists(inputs.monitorId);
@@ -1345,7 +1368,11 @@ async function runRepoSyncInner(
       }
 
       if (!resolvedMonitorId && inputs.smokeCollectionId) {
-        const discovered = await dependencies.postman.findMonitorByCollection(inputs.smokeCollectionId);
+        const discovered = await dependencies.postman.findMonitorByCollection(
+          inputs.smokeCollectionId,
+          monitorEnvUid,
+          monitorName
+        );
         if (discovered) {
           resolvedMonitorId = discovered.uid;
           dependencies.core.info(`Discovered existing monitor for collection ${inputs.smokeCollectionId}: ${resolvedMonitorId}`);
@@ -1355,7 +1382,7 @@ async function runRepoSyncInner(
       if (!resolvedMonitorId) {
         resolvedMonitorId = await dependencies.postman.createMonitor(
           inputs.workspaceId,
-          `${assetProjectName} - Smoke Monitor`,
+          monitorName,
           inputs.smokeCollectionId,
           monitorEnvUid,
           effectiveCron || undefined
@@ -1659,6 +1686,7 @@ export function createRepoSyncDependencies(
     createEnvironment: gatewayAssets.createEnvironment.bind(gatewayAssets),
     getEnvironment: gatewayAssets.getEnvironment.bind(gatewayAssets),
     updateEnvironment: gatewayAssets.updateEnvironment.bind(gatewayAssets),
+    findEnvironmentByName: gatewayAssets.findEnvironmentByName.bind(gatewayAssets),
     // Collection read via the v3 export endpoint — returns canonical v3 IR,
     // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
     // collection reads.

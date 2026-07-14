@@ -46,47 +46,54 @@ describe('PostmanGatewayAssetsClient', () => {
   const ENV_PUBLIC_UID = '10490519-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
   it('createMock references the collection + environment by their full public uids (no model-id strip)', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' })
-    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValue(jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' }));
     const { assets } = buildClient(fetchImpl);
 
     await assets.createMock('ws-1', 'm', PUBLIC_UID, ENV_PUBLIC_UID);
 
-    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    const env = parseEnvelope(fetchImpl.mock.calls[1]);
     // public uid passed straight through — the bare model id 403s the mock service
     expect((env.body as Record<string, unknown>).collection).toBe(PUBLIC_UID);
     expect((env.body as Record<string, unknown>).environment).toBe(ENV_PUBLIC_UID);
   });
 
   it('createMock sends the live-probed bare body via the mock service and parses id/url', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1' })
-    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValue(
+        jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1' })
+      );
     const { assets } = buildClient(fetchImpl);
 
     const result = await assets.createMock('ws-1', 'm', 'col-1', '');
     expect(result).toEqual({ uid: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' });
 
-    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    const env = parseEnvelope(fetchImpl.mock.calls[1]);
     expect(env.service).toBe('mock');
     expect(env.method).toBe('post');
     expect(env.path).toBe('/mocks?workspace=ws-1');
     // bare body, NOT wrapped in { mock: { ... } }
     expect(env.body).toEqual({ name: 'm', collection: 'col-1', private: false });
-    const headers = (fetchImpl.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    const headers = (fetchImpl.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-access-token']).toBe('tok-initial');
     expect(headers['X-Api-Key']).toBeUndefined();
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ data: { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', owner: '10490519' } })
-    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValue(
+        jsonResponse({ data: { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', owner: '10490519' } })
+      );
     const { assets } = buildClient(fetchImpl);
     // bare model id from sync import -> public uid mock/monitor accept
     await expect(assets.createEnvironment('ws-1', 'e', [])).resolves.toBe(ENV_PUBLIC_UID);
-    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    const env = parseEnvelope(fetchImpl.mock.calls[1]);
     expect(env.service).toBe('sync');
     expect(env.path).toBe('/environment/import?workspace=ws-1');
   });
@@ -108,22 +115,25 @@ describe('PostmanGatewayAssetsClient', () => {
       jsonResponse([{ id: 'm1', name: 'a', collection: PUBLIC_UID, url: 'https://m1.mock' }])
     );
     const { assets } = buildClient(fetchImpl);
-    await expect(assets.findMockByCollection(PUBLIC_UID)).resolves.toEqual({
+    await expect(assets.findMockByCollection(PUBLIC_UID, '', 'a')).resolves.toEqual({
       uid: 'm1',
       mockUrl: 'https://m1.mock'
     });
   });
 
   it('createMonitor sends the jobTemplates schema (flat collection uid + full envelope) and parses data.id', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ meta: { action: 'create' }, data: { id: 'mon-uuid', name: 'mon' } })
-    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValue(
+        jsonResponse({ meta: { action: 'create' }, data: { id: 'mon-uuid', name: 'mon' } })
+      );
     const { assets } = buildClient(fetchImpl);
 
     const uid = await assets.createMonitor('ws-1', 'mon', PUBLIC_UID, ENV_PUBLIC_UID, '0 5 * * 1');
     expect(uid).toBe('mon-uuid');
 
-    const env = parseEnvelope(fetchImpl.mock.calls[0]);
+    const env = parseEnvelope(fetchImpl.mock.calls[1]);
     expect(env.service).toBe('monitors');
     expect(env.path).toBe('/jobTemplates?workspace=ws-1');
     expect(env.body).toEqual({
@@ -139,12 +149,13 @@ describe('PostmanGatewayAssetsClient', () => {
   });
 
   it('createMonitor omits environment when none is supplied and defaults the cron', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ data: { id: 'mon-uuid' } })
-    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValue(jsonResponse({ data: { id: 'mon-uuid' } }));
     const { assets } = buildClient(fetchImpl);
     await assets.createMonitor('ws-1', 'mon', PUBLIC_UID, '');
-    const body = parseEnvelope(fetchImpl.mock.calls[0]).body as Record<string, unknown>;
+    const body = parseEnvelope(fetchImpl.mock.calls[1]).body as Record<string, unknown>;
     expect(body.environment).toBeUndefined();
     expect(body.schedule).toEqual({ cronPattern: '0 0 * * 0', timeZone: 'UTC' });
   });
@@ -161,18 +172,16 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe('/jobTemplates?workspace=ws-1&_etc=true');
   });
 
-  it('findMonitorByCollection reads the per-collection jobTemplates route', async () => {
+  it('findMonitorByCollection reads the workspace-scoped jobTemplates route', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({ data: [{ id: 'mon1', name: 'm', active: true, collection: PUBLIC_UID }] })
     );
     const { assets } = buildClient(fetchImpl);
-    await expect(assets.findMonitorByCollection(PUBLIC_UID)).resolves.toEqual({
+    await expect(assets.findMonitorByCollection(PUBLIC_UID, '', 'm')).resolves.toEqual({
       uid: 'mon1',
       name: 'm'
     });
-    expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe(
-      `/collections/${PUBLIC_UID}/jobTemplates?_etc=true`
-    );
+    expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe('/jobTemplates?workspace=ws-1&_etc=true');
   });
 
   it('runMonitor posts to the jobTemplates jobs path', async () => {
