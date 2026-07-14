@@ -1,6 +1,6 @@
 {
   "name": "@postman-cse/onboarding-repo-sync",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Postman repo sync GitHub Action.",
   "type": "module",
   "main": "dist/index.cjs",
@@ -21,7 +21,7 @@
     "docs:tables": "node scripts/render-action-tables.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run",
+    "test": "vitest run && node --test .github/scripts/wait-for-e2e-gate.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": [

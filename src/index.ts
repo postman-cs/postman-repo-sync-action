@@ -895,18 +895,64 @@ function writeJsonFile(path: string, content: unknown, normalize = false): void 
   writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
+function buildMappedSpecCloudKey(
+  mappedSource: string,
+  specSyncMode: ResolvedInputs['specSyncMode'],
+  releaseLabel?: string
+): string | undefined {
+  if (specSyncMode !== 'version') {
+    return mappedSource;
+  }
+  const normalized = normalizeReleaseLabel(releaseLabel || '');
+  if (!normalized) {
+    return undefined;
+  }
+  return `${mappedSource}#release=${normalized}`;
+}
+
+/**
+ * Decide which workspace id (if any) may be written into resources.yaml.
+ * Persist when linking succeeds, linking is explicitly disabled, or the same
+ * prior durable id is already present. A new id with linking enabled that
+ * fails/skips must not be written.
+ */
+function resolveDurableWorkspaceId(options: {
+  candidateId: string;
+  priorId?: string;
+  workspaceLinkEnabled: boolean;
+  workspaceLinkStatus: Status;
+}): string | undefined {
+  const { candidateId, priorId, workspaceLinkEnabled, workspaceLinkStatus } = options;
+  const candidate = candidateId.trim();
+  const prior = priorId?.trim() || undefined;
+
+  if (!workspaceLinkEnabled) {
+    return candidate || prior;
+  }
+
+  if (workspaceLinkStatus === 'success') {
+    return candidate || undefined;
+  }
+
+  // A different prior id would make the manifest's workspace disagree with
+  // the candidate workspace that produced its resource mappings.
+  return prior === candidate ? prior : undefined;
+}
+
 function buildResourcesManifest(
-  workspaceId: string,
+  workspaceId: string | undefined,
   collectionMap: Record<string, string>,
   envMap: Record<string, string>,
   artifactDir: string,
   localSpecRefs: string[],
   mappedSpecRef?: string,
-  specId?: string
+  specId?: string,
+  existingSpecs?: CloudResourceMap
 ): string {
-  const manifest: Record<string, unknown> = {
-    workspace: { id: workspaceId }
-  };
+  const manifest: Record<string, unknown> = {};
+  if (workspaceId) {
+    manifest.workspace = { id: workspaceId };
+  }
 
   const localResources: Record<string, string[]> = {};
   const cloudResources: Record<string, Record<string, string>> = {};
@@ -933,8 +979,14 @@ function buildResourcesManifest(
   if (localSpecRefs.length > 0) {
     localResources.specs = localSpecRefs;
   }
+
+  // Preserve existing cloudResources.specs and merge any newly mapped entry.
+  const specs: CloudResourceMap = { ...(existingSpecs || {}) };
   if (mappedSpecRef && specId) {
-    cloudResources.specs = { [mappedSpecRef]: specId };
+    specs[mappedSpecRef] = specId;
+  }
+  if (Object.keys(specs).length > 0) {
+    cloudResources.specs = specs;
   }
 
   if (Object.keys(localResources).length > 0) {
@@ -1026,7 +1078,13 @@ async function exportArtifacts(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
   envUids: Record<string, string>,
-  assetProjectName: string
+  assetProjectName: string,
+  options: {
+    workspaceLinkStatus: Status;
+    priorWorkspaceId?: string;
+    existingSpecs?: CloudResourceMap;
+    releaseLabel?: string;
+  }
 ): Promise<void> {
   if (!inputs.workspaceId) {
     return;
@@ -1064,6 +1122,14 @@ async function exportArtifacts(
   const manifestCollections: Record<string, string> = {};
   const discoveredSpecs = scanLocalSpecReferences();
   const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
+  const mappedSpecCloudKey =
+    mappedSpec && inputs.specId
+      ? buildMappedSpecCloudKey(
+          mappedSpec.configRelativePath,
+          inputs.specSyncMode,
+          options.releaseLabel
+        )
+      : undefined;
 
   if (inputs.baselineCollectionId) {
     const col = await dependencies.postman.getCollection(inputs.baselineCollectionId);
@@ -1095,14 +1161,22 @@ async function exportArtifacts(
     );
   }
 
+  const durableWorkspaceId = resolveDurableWorkspaceId({
+    candidateId: inputs.workspaceId,
+    priorId: options.priorWorkspaceId,
+    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
+    workspaceLinkStatus: options.workspaceLinkStatus
+  });
+
   writeFileSync('.postman/resources.yaml', buildResourcesManifest(
-    inputs.workspaceId,
+    durableWorkspaceId,
     manifestCollections,
     envUids,
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
-    mappedSpec?.configRelativePath,
-    inputs.specId || undefined
+    mappedSpecCloudKey,
+    inputs.specId || undefined,
+    options.existingSpecs
   ));
 
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
@@ -1425,7 +1499,12 @@ async function runRepoSyncInner(
     }
   }
 
-  await exportArtifacts(inputs, dependencies, envUids, assetProjectName);
+  await exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
+    workspaceLinkStatus: outputs['workspace-link-status'],
+    priorWorkspaceId: resourcesState?.workspace?.id,
+    existingSpecs: resourcesState?.cloudResources?.specs,
+    releaseLabel
+  });
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
   outputs['commit-sha'] = commit.commitSha;
