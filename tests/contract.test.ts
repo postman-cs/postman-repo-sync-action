@@ -175,10 +175,10 @@ describe('postman-repo-sync-action contract', () => {
     expect(packageManifest.scripts.bundle).toContain("--banner:js='#!/usr/bin/env node'");
     expect(packageManifest.scripts.bundle).toContain('chmod 755 dist/cli.cjs');
     expect(packageManifest.scripts.build).toBe('npm run typecheck && npm run bundle');
-    expect(packageManifest.scripts['verify:dist:assert']).toContain('scripts/verify-dist-artifact.mjs');
-    expect(packageManifest.scripts['verify:dist']).toBe(
-      'npm run build && git diff --ignore-space-at-eol --text --exit-code -- dist && npm run verify:dist:assert'
+    expect(packageManifest.scripts['verify:dist:assert']).toBe(
+      'git diff --ignore-space-at-eol --text --exit-code -- dist && node scripts/verify-dist-artifact.mjs'
     );
+    expect(packageManifest.scripts['verify:dist']).toBe('npm run build && npm run verify:dist:assert');
 
     expect(Object.keys(actionYaml.inputs)).toEqual(
       Object.keys(postmanRepoSyncActionContract.inputs)
