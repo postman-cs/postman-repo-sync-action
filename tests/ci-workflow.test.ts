@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 const ciWorkflow = readFileSync(join(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
-const liveE2eWorkflow = readFileSync(join(process.cwd(), '.github/workflows/live-e2e.yml'), 'utf8');
+const releaseWorkflow = readFileSync(join(process.cwd(), '.github/workflows/release.yml'), 'utf8');
 
 function namedStep(workflow: string, name: string): string {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -13,11 +13,12 @@ function namedStep(workflow: string, name: string): string {
 }
 
 describe('CI workflow dist/pack race contract', () => {
-  it('builds dist once before fan-out and keeps the parallel dist gate read-only', () => {
+  it('bundles once, typechecks once, caps fan-out at two, and keeps dist read-only', () => {
     // Regression for the parallel race where `npm run verify:dist` deleted
     // dist/ while packaging tests ran `npm pack`.
-    expect(ciWorkflow).toMatch(/run: npm run build[\s\S]*?- name: Run gates/);
-    expect(ciWorkflow.match(/run: npm run build/g) ?? []).toHaveLength(1);
+    expect(ciWorkflow).toMatch(/run: npm run bundle[\s\S]*?- name: Run gates/);
+    expect(ciWorkflow).not.toMatch(/run: npm run build/);
+    expect(ciWorkflow.match(/npm run typecheck/g) ?? []).toHaveLength(1);
 
     const runGates = namedStep(ciWorkflow, 'Run gates');
     expect(runGates).toContain('run test');
@@ -31,6 +32,8 @@ describe('CI workflow dist/pack race contract', () => {
     expect(runGates).toContain('gate:$n=pass');
     expect(runGates).toContain('gate:$n=fail');
     expect(runGates).toContain('::group::$n');
+    expect(runGates).toContain('MAX_PARALLEL_GATES=2');
+    expect(runGates).toContain('wait -n -p finished_pid');
 
     const upload = namedStep(ciWorkflow, 'Upload expected dist on mismatch');
     expect(upload).toContain('if: failure()');
@@ -39,20 +42,11 @@ describe('CI workflow dist/pack race contract', () => {
   });
 });
 
-describe('live e2e PR path filter contract', () => {
-  it('limits PR live-e2e to src/dist/action/package/fixtures paths and keeps smoke wiring', () => {
-    expect(liveE2eWorkflow).toMatch(/pull_request:[\s\S]*?paths:/);
-    expect(liveE2eWorkflow).toContain('src/**');
-    expect(liveE2eWorkflow).toContain('dist/**');
-    expect(liveE2eWorkflow).toContain('action.yml');
-    expect(liveE2eWorkflow).toContain('package*.json');
-    expect(liveE2eWorkflow).toContain('fixtures/**');
-
-    // Preserve existing smoke e2e wiring and fork/safety behavior.
-    expect(liveE2eWorkflow).toContain('E2E_GATE_SUITE: smoke');
-    expect(liveE2eWorkflow).toContain('E2E_GATE_ACTION: postman-repo-sync-action');
-    expect(liveE2eWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
-    expect(liveE2eWorkflow).toContain('github.actor != \'dependabot[bot]\'');
-    expect(liveE2eWorkflow).toContain('Require same-repository PR branch');
+describe('live e2e tiering contract', () => {
+  it('keeps live sandbox work off PRs and on immutable releases', () => {
+    expect(existsSync(join(process.cwd(), '.github/workflows/live-e2e.yml'))).toBe(false);
+    expect(releaseWorkflow).toContain('live-e2e-gate:');
+    expect(releaseWorkflow).toContain('E2E_GATE_SUITE: smoke');
+    expect(releaseWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
   });
 });
