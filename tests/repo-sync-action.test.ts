@@ -273,6 +273,7 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce('env-prod')
         .mockResolvedValueOnce('env-stage'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({
         uid: 'mock-123',
         url: 'https://mock.pstmn.io'
@@ -441,6 +442,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn(),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
@@ -483,6 +485,7 @@ describe('repo sync action', () => {
     );
 
     expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
   });
 
@@ -490,6 +493,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi
@@ -552,6 +556,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
@@ -678,6 +683,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
@@ -765,6 +771,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
@@ -814,6 +821,7 @@ describe('repo sync action', () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi
@@ -884,6 +892,7 @@ describe('monitor resolution paths', () => {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-new'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
@@ -949,7 +958,11 @@ describe('monitor resolution paths', () => {
     await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMonitor).not.toHaveBeenCalled();
-    expect(postman.findMonitorByCollection).toHaveBeenCalledWith('col-smoke');
+    expect(postman.findMonitorByCollection).toHaveBeenCalledWith(
+      'col-smoke',
+      'env-prod',
+      'core-payments - Smoke Monitor'
+    );
   });
 
   it('creates a new monitor when no existing asset is found', async () => {
@@ -1020,6 +1033,7 @@ describe('mock resolution paths', () => {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-new', url: 'https://mock-new.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('core-payments')),
@@ -1073,7 +1087,11 @@ describe('mock resolution paths', () => {
     await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
     
     expect(postman.createMock).not.toHaveBeenCalled();
-    expect(postman.findMockByCollection).toHaveBeenCalledWith('col-baseline');
+    expect(postman.findMockByCollection).toHaveBeenCalledWith(
+      'col-baseline',
+      'env-prod',
+      'core-payments Mock'
+    );
   });
 
   it('creates a new mock when no existing asset is found', async () => {
@@ -1397,6 +1415,7 @@ describe('repo-variable fallback resolution', () => {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
       updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),

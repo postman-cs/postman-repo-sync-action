@@ -33,9 +33,10 @@ jobs:
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
           echo "ACTIONLINT_BIN=$RUNNER_TEMP/actionlint" >> "$GITHUB_ENV"
-      # All checks run in parallel as backgrounded shell processes on one runner,
-      # so wall-clock is max(gate), not sum, and setup/npm-ci run once. Failures
-      # aggregate under ::group:: logs, so one pass shows every result.
+      # Build once before fan-out so pack tests and the dist check only read dist/.
+      - run: npm run build
+      # All checks run in parallel on one runner. Failures aggregate under
+      # ::group:: logs so one pass shows every result.
       - name: Run gates
         run: |
           set -uo pipefail
@@ -45,7 +46,7 @@ jobs:
           run lint       npm run lint
           run test       npm test
           run typecheck  npm run typecheck
-          run dist       npm run verify:dist
+          run dist       git diff --ignore-space-at-eol --text --exit-code -- dist
           run actionlint "$ACTIONLINT_BIN"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             run commitlint npx commitlint \
