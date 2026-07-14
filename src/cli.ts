@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { execFile } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';

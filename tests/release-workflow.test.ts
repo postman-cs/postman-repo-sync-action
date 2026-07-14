@@ -55,4 +55,14 @@ describe('release workflow publishing contract', () => {
     );
     expect(releaseWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
   });
+
+  it('keeps a single automatic rolling major alias job after publish', () => {
+    // Next immutable release must force-move stale v2 (or current major) alias.
+    expect(releaseWorkflow).toMatch(/^ {2}advance-major-alias:/m);
+    expect(releaseWorkflow).toContain('Force-move rolling major alias tag');
+    expect(releaseWorkflow).toContain('git tag -fa "$MAJOR"');
+    expect(releaseWorkflow).toContain('git push origin "$MAJOR" --force');
+    expect(releaseWorkflow).toContain("needs.validate.outputs.npm_publish == 'true'");
+    expect(releaseWorkflow.match(/^ {2}advance-major-alias:/gm) ?? []).toHaveLength(1);
+  });
 });

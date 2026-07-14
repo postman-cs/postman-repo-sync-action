@@ -15,7 +15,12 @@ const packageManifest = JSON.parse(
   readFileSync(resolve(repoRoot, 'package.json'), 'utf8')
 ) as {
   main: string;
-  scripts: { build: string };
+  scripts: {
+    build: string;
+    bundle?: string;
+    'verify:dist'?: string;
+    'verify:dist:assert'?: string;
+  };
 };
 
 describe('postman-repo-sync-action contract', () => {
@@ -163,10 +168,17 @@ describe('postman-repo-sync-action contract', () => {
       main: 'dist/action.cjs'
     });
     expect(packageManifest.main).toBe('dist/index.cjs');
-    expect(packageManifest.scripts.build).toContain('src/index.ts --bundle');
-    expect(packageManifest.scripts.build).toContain('--outfile=dist/index.cjs');
-    expect(packageManifest.scripts.build).toContain('src/main.ts --bundle');
-    expect(packageManifest.scripts.build).toContain('--outfile=dist/action.cjs');
+    expect(packageManifest.scripts.bundle).toContain('src/index.ts --bundle');
+    expect(packageManifest.scripts.bundle).toContain('--outfile=dist/index.cjs');
+    expect(packageManifest.scripts.bundle).toContain('src/main.ts --bundle');
+    expect(packageManifest.scripts.bundle).toContain('--outfile=dist/action.cjs');
+    expect(packageManifest.scripts.bundle).toContain("--banner:js='#!/usr/bin/env node'");
+    expect(packageManifest.scripts.bundle).toContain('chmod 755 dist/cli.cjs');
+    expect(packageManifest.scripts.build).toBe('npm run typecheck && npm run bundle');
+    expect(packageManifest.scripts['verify:dist:assert']).toContain('scripts/verify-dist-artifact.mjs');
+    expect(packageManifest.scripts['verify:dist']).toBe(
+      'npm run build && git diff --ignore-space-at-eol --text --exit-code -- dist && npm run verify:dist:assert'
+    );
 
     expect(Object.keys(actionYaml.inputs)).toEqual(
       Object.keys(postmanRepoSyncActionContract.inputs)
