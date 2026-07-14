@@ -252,6 +252,8 @@ For `commit-and-push`, the push target is resolved from `current-ref`, then `GIT
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
 
+Asset reuse priority is explicit inputs (`environment-uids-json`, `mock-url`, `monitor-id`), then live discovery by exact workspace-scoped name, collection UID, and environment UID, then create. Creates submit once and reconcile on ambiguous gateway errors; overlapping compatible creates inside one process share a single in-flight promise. Adopted environments are updated to the requested values. Mock environment assignment has no verified patch route, so a mock is reused only when its live environment already matches; mismatches are never claimed as converged. Concurrent jobs against the same workspace can still race because Postman does not expose create idempotency keys—serialize those workflows with GitHub Actions `concurrency` (or an equivalent CI lock) when duplicate mocks/monitors/environments would be harmful.
+
 Deeper reference:
 
 - [Artifact layout and Collection v3 format](docs/artifact-layout.md), including sync modes and versioned releases.

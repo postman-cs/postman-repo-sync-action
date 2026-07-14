@@ -1,8 +1,26 @@
 import type { AccessTokenGatewayClient } from './gateway-client.js';
 import { HttpError } from '../http-error.js';
-import { retry } from '../retry.js';
+import { retry, sleep as defaultSleep } from '../retry.js';
 
 type JsonRecord = Record<string, unknown>;
+
+const MAX_CREATE_FLIGHTS = 256;
+interface CreateFlight {
+  fingerprint: string;
+  promise: Promise<unknown>;
+}
+const createFlights = new Map<string, CreateFlight>();
+
+export interface PostmanGatewayAssetsClientOptions {
+  gateway: AccessTokenGatewayClient;
+  workspaceId: string;
+  /** Injectable sleep for reconcile polling (tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Bounded discovery polls after an ambiguous create response. Default 3. */
+  reconcileAttempts?: number;
+  /** Delay between reconcile polls in ms. Default 500. */
+  reconcileDelayMs?: number;
+}
 
 /**
  * Access-token-primary asset client for the routes whose gateway shapes were
@@ -32,14 +50,25 @@ type JsonRecord = Record<string, unknown>;
  * (RESOURCE_NOT_FOUND) — are NOT wired here. Collection reads use the verified
  * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
  * reads/updates use the `sync` service. PMAK is never used for any asset op.
+ *
+ * Create operations submit once and reconcile via live discovery on ambiguous
+ * responses. Blind transport retries are reserved for safe reads. Per-process
+ * single-flight keys (`workspace + kind + identity`) collapse overlapping
+ * creates in one process; cross-process races remain a residual API limit.
  */
 export class PostmanGatewayAssetsClient {
   private readonly gateway: AccessTokenGatewayClient;
   private readonly workspaceId: string;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly reconcileAttempts: number;
+  private readonly reconcileDelayMs: number;
 
-  constructor(options: { gateway: AccessTokenGatewayClient; workspaceId: string }) {
+  constructor(options: PostmanGatewayAssetsClientOptions) {
     this.gateway = options.gateway;
     this.workspaceId = String(options.workspaceId || '').trim();
+    this.sleep = options.sleep ?? defaultSleep;
+    this.reconcileAttempts = Math.max(1, options.reconcileAttempts ?? 3);
+    this.reconcileDelayMs = Math.max(0, options.reconcileDelayMs ?? 500);
   }
 
   private asRecord(value: unknown): JsonRecord | null {
@@ -74,8 +103,81 @@ export class PostmanGatewayAssetsClient {
     return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
   }
 
-  private isTransient(error: unknown): boolean {
-    return error instanceof HttpError && (error.status === 429 || error.status >= 500);
+  private isAmbiguousCreateOutcome(error: unknown): boolean {
+    if (error instanceof HttpError) {
+      return error.status === 408 || error.status === 429 || error.status >= 500;
+    }
+    return error instanceof Error;
+  }
+
+  private isRetryableIdempotentWriteOutcome(error: unknown): boolean {
+    if (error instanceof HttpError) {
+      return error.status === 408 || error.status === 429 || error.status >= 500;
+    }
+    return error instanceof Error;
+  }
+
+  private selectExactMatch<T extends { uid: string }>(
+    kind: 'environment' | 'mock' | 'monitor',
+    identity: string,
+    matches: T[]
+  ): T | null {
+    if (matches.length > 1) {
+      const ids = matches.map((match) => match.uid).join(', ');
+      throw new Error(
+        `Multiple ${kind}s match ${identity}: ${ids}. Refusing to choose one; remove duplicates or pass an explicit asset ID.`
+      );
+    }
+    return matches[0] ?? null;
+  }
+
+  private async singleFlight<T>(
+    key: string,
+    fingerprint: string,
+    kind: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const existing = createFlights.get(key);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw new Error(`Incompatible concurrent ${kind} create for ${key}`);
+      }
+      return existing.promise as Promise<T>;
+    }
+    if (createFlights.size >= MAX_CREATE_FLIGHTS) {
+      throw new Error(`Too many concurrent Postman asset creates (limit ${MAX_CREATE_FLIGHTS})`);
+    }
+    const pending = operation().finally(() => {
+      if (createFlights.get(key)?.promise === pending) {
+        createFlights.delete(key);
+      }
+    });
+    createFlights.set(key, { fingerprint, promise: pending });
+    return pending;
+  }
+
+  private async discoverAfterAmbiguousCreate<T>(
+    discover: () => Promise<T | null>,
+    error: unknown
+  ): Promise<T | null> {
+    if (!this.isAmbiguousCreateOutcome(error)) {
+      return null;
+    }
+    for (let attempt = 0; attempt < this.reconcileAttempts; attempt += 1) {
+      if (attempt > 0) {
+        await this.sleep(this.reconcileDelayMs);
+      }
+      const found = await discover();
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  private publicEnvironmentUid(data: JsonRecord | null, bareId: string): string {
+    const owner = String(data?.owner ?? '').trim();
+    return owner && !bareId.startsWith(`${owner}-`) ? `${owner}-${bareId}` : bareId;
   }
 
   // --- environments (service: sync) ---
@@ -88,9 +190,10 @@ export class PostmanGatewayAssetsClient {
   /**
    * Create/upsert an environment through the sync service.
    * POST /environment/import?workspace=:ws { id:<uuid>, name, values } ->
-   * { data:{ id:<bare uuid>, owner } }. The id is generated once and reused
-   * across retries so the import is idempotent (a retry upserts the same
-   * environment instead of duplicating it).
+   * { data:{ id:<bare uuid>, owner } }. The id is generated once for the
+   * operation. Unsafe creates submit once (no blind retry); on an ambiguous
+   * response the client discovers by exact workspace-scoped name before
+   * failing.
    *
    * Returns the PUBLIC uid (`<owner>-<uuid>`), not the bare model id the sync
    * import echoes: mock/monitor create reference the environment by its public
@@ -104,36 +207,56 @@ export class PostmanGatewayAssetsClient {
     values: Array<{ key: string; value: string; type?: string; enabled?: boolean }>
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
-    const id = crypto.randomUUID();
-    const body: JsonRecord = {
-      id,
-      name,
-      values: values.map((v) => ({
-        key: v.key,
-        value: v.value,
-        type: v.type ?? 'default',
-        enabled: v.enabled ?? true
-      }))
-    };
-    const response = await retry(
-      () =>
-        this.gateway.requestJson<JsonRecord>({
-          service: 'sync',
-          method: 'post',
-          path: `/environment/import?workspace=${ws}`,
-          body
-        }),
-      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
-    );
-    const data = this.dataOf(response);
-    const bareId = this.idOf(data);
-    if (!bareId) {
-      throw new Error('Environment import did not return a UID');
-    }
-    const owner = String(data?.owner ?? '').trim();
-    // Public uid is `<owner>-<uuid>`; skip the prefix if the import already
-    // echoed a public uid or no owner is present.
-    return owner && !bareId.startsWith(`${owner}-`) ? `${owner}-${bareId}` : bareId;
+    const envName = String(name ?? '').trim();
+    const flightKey = `environment:${ws}:${envName}`;
+    const normalizedValues = values.map((v) => ({
+      key: v.key,
+      value: v.value,
+      type: v.type ?? 'default',
+      enabled: v.enabled ?? true
+    }));
+    return this.singleFlight(flightKey, JSON.stringify(normalizedValues), 'environment', async () => {
+      const existing = await this.findEnvironmentByName(ws, envName);
+      if (existing?.uid) {
+        await this.updateEnvironment(existing.uid, envName, values);
+        return existing.uid;
+      }
+
+      const id = crypto.randomUUID();
+      const body: JsonRecord = {
+        id,
+        name: envName,
+        values: normalizedValues
+      };
+
+      try {
+        const response = await this.gateway.requestJson<JsonRecord>(
+          {
+            service: 'sync',
+            method: 'post',
+            path: `/environment/import?workspace=${ws}`,
+            body
+          },
+          { retryTransient: false }
+        );
+        const data = this.dataOf(response);
+        const bareId = this.idOf(data);
+        if (!bareId) {
+          throw new Error('Environment import did not return a UID');
+        }
+        return this.publicEnvironmentUid(data, bareId);
+      } catch (error) {
+        const adopted = await this.discoverAfterAmbiguousCreate(async () => {
+          const match = await this.findEnvironmentByName(ws, envName);
+          return match?.uid ?? null;
+        }, error);
+        if (adopted) {
+          await this.updateEnvironment(adopted, envName, values);
+          return adopted;
+        }
+        throw error;
+      }
+    });
   }
 
   /**
@@ -169,7 +292,7 @@ export class PostmanGatewayAssetsClient {
           path: `/environment/${id}`,
           body
         }),
-      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
+      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isRetryableIdempotentWriteOutcome(e) }
     );
   }
 
@@ -195,16 +318,44 @@ export class PostmanGatewayAssetsClient {
    */
   async listEnvironments(workspaceId: string): Promise<Array<{ name: string; uid: string }>> {
     const ws = workspaceId || this.workspaceId;
-    const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'sync',
-      method: 'post',
-      path: `/list/environment?workspace=${ws}`
-    });
+    const response = await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'sync',
+        method: 'post',
+        path: `/list/environment?workspace=${ws}`
+      },
+      { retryTransient: true }
+    );
     const items = Array.isArray(response?.data) ? (response.data as unknown[]) : [];
     return items
       .map((raw) => this.asRecord(raw))
       .filter((e): e is JsonRecord => e !== null)
-      .map((e) => ({ name: String(e.name ?? ''), uid: this.idOf(e) }));
+      .map((e) => {
+        const bareOrPublic = this.idOf(e);
+        return {
+          name: String(e.name ?? ''),
+          uid: this.publicEnvironmentUid(e, bareOrPublic)
+        };
+      });
+  }
+
+  /** Exact name match within a workspace. Prefer tracked UIDs before calling. */
+  async findEnvironmentByName(
+    workspaceId: string,
+    name: string
+  ): Promise<{ uid: string; name: string } | null> {
+    const want = String(name ?? '').trim();
+    if (!want) {
+      return null;
+    }
+    const environments = await this.listEnvironments(workspaceId);
+    const matches = environments.filter((entry) => entry.name === want);
+    const match = this.selectExactMatch(
+      'environment',
+      `workspace ${workspaceId} and name "${want}"`,
+      matches
+    );
+    return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
   // --- collection read (service: collection, v3 export) ---
@@ -243,33 +394,53 @@ export class PostmanGatewayAssetsClient {
     environmentUid: string
   ): Promise<{ uid: string; url: string }> {
     const ws = workspaceId || this.workspaceId;
+    const mockName = String(name ?? '').trim();
     const collection = String(collectionUid ?? '').trim();
     const environment = String(environmentUid ?? '').trim();
-    const body: JsonRecord = {
-      name,
-      collection,
-      private: false,
-      ...(environment ? { environment } : {})
-    };
-    const response = await retry(
-      () =>
-        this.gateway.requestJson<JsonRecord>({
-          service: 'mock',
-          method: 'post',
-          path: `/mocks?workspace=${ws}`,
-          body
-        }),
-      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
-    );
-    const record = this.dataOf(response);
-    const uid = this.idOf(record);
-    if (!uid) {
-      throw new Error('Mock create did not return a UID');
-    }
-    return {
-      uid,
-      url: String(record?.url ?? record?.mockUrl ?? '').trim()
-    };
+    const flightKey = `mock:${ws}:${collection}:${environment}:${mockName}`;
+    return this.singleFlight(flightKey, flightKey, 'mock', async () => {
+      const existing = await this.findMockByCollection(collection, environment, mockName);
+      if (existing) {
+        return { uid: existing.uid, url: existing.mockUrl };
+      }
+
+      const body: JsonRecord = {
+        name: mockName,
+        collection,
+        private: false,
+        ...(environment ? { environment } : {})
+      };
+
+      try {
+        const response = await this.gateway.requestJson<JsonRecord>(
+          {
+            service: 'mock',
+            method: 'post',
+            path: `/mocks?workspace=${ws}`,
+            body
+          },
+          { retryTransient: false }
+        );
+        const record = this.dataOf(response);
+        const uid = this.idOf(record);
+        if (!uid) {
+          throw new Error('Mock create did not return a UID');
+        }
+        return {
+          uid,
+          url: String(record?.url ?? record?.mockUrl ?? '').trim()
+        };
+      } catch (error) {
+        const adopted = await this.discoverAfterAmbiguousCreate(
+          () => this.findMockByCollection(collection, environment, mockName),
+          error
+        );
+        if (adopted) {
+          return { uid: adopted.uid, url: adopted.mockUrl };
+        }
+        throw error;
+      }
+    });
   }
 
   async listMocks(): Promise<
@@ -311,13 +482,26 @@ export class PostmanGatewayAssetsClient {
   }
 
   async findMockByCollection(
-    collectionUid: string
+    collectionUid: string,
+    environmentUid: string,
+    name: string
   ): Promise<{ uid: string; mockUrl: string } | null> {
     const mocks = await this.listMocks();
     // Both sides are public uids (`<owner>-<uuid>`): the mock list echoes the
     // `collection` uid it was created with, and the caller passes the same uid.
     const want = String(collectionUid ?? '').trim();
-    const match = mocks.find((m) => m.collection === want);
+    const environment = String(environmentUid ?? '').trim();
+    const mockName = String(name ?? '').trim();
+    const matches = mocks.filter((mock) =>
+      mock.collection === want &&
+      mock.environment === environment &&
+      mock.name === mockName
+    );
+    const match = this.selectExactMatch(
+      'mock',
+      `workspace ${this.workspaceId}, name "${mockName}", collection ${want}, and environment ${environment || '(none)'}`,
+      matches
+    );
     return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
   }
 
@@ -352,36 +536,56 @@ export class PostmanGatewayAssetsClient {
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
     const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
+    const monitorName = String(name ?? '').trim();
     const collection = String(collectionUid ?? '').trim();
     const environment = String(environmentUid ?? '').trim();
-    // Canonical app `constructMonitor` body (MonitorFormComponent): `collection`
-    // is the flat public uid, and the request carries the full options/notifications/
-    // retry/distribution envelope monitoring-api validates against.
-    const body: JsonRecord = {
-      name,
-      collection,
-      options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
-      notifications: { onFailure: [], onError: [] },
-      retry: {},
-      schedule: { cronPattern: effectiveCron, timeZone: 'UTC' },
-      distribution: null,
-      ...(environment ? { environment } : {})
-    };
-    const response = await retry(
-      () =>
-        this.gateway.requestJson<JsonRecord>({
-          service: 'monitors',
-          method: 'post',
-          path: `/jobTemplates?workspace=${ws}`,
-          body
-        }),
-      { maxAttempts: 5, delayMs: 2000, backoffMultiplier: 2, maxDelayMs: 15000, shouldRetry: (e) => this.isTransient(e) }
-    );
-    const uid = this.idOf(this.dataOf(response));
-    if (!uid) {
-      throw new Error('Monitor create did not return a UID');
-    }
-    return uid;
+    const flightKey = `monitor:${ws}:${collection}:${environment}:${monitorName}`;
+    return this.singleFlight(flightKey, effectiveCron, 'monitor', async () => {
+      const existing = await this.findMonitorByCollection(collection, environment, monitorName);
+      if (existing?.uid) {
+        return existing.uid;
+      }
+
+      // Canonical app `constructMonitor` body (MonitorFormComponent): `collection`
+      // is the flat public uid, and the request carries the full options/notifications/
+      // retry/distribution envelope monitoring-api validates against.
+      const body: JsonRecord = {
+        name: monitorName,
+        collection,
+        options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
+        notifications: { onFailure: [], onError: [] },
+        retry: {},
+        schedule: { cronPattern: effectiveCron, timeZone: 'UTC' },
+        distribution: null,
+        ...(environment ? { environment } : {})
+      };
+
+      try {
+        const response = await this.gateway.requestJson<JsonRecord>(
+          {
+            service: 'monitors',
+            method: 'post',
+            path: `/jobTemplates?workspace=${ws}`,
+            body
+          },
+          { retryTransient: false }
+        );
+        const uid = this.idOf(this.dataOf(response));
+        if (!uid) {
+          throw new Error('Monitor create did not return a UID');
+        }
+        return uid;
+      } catch (error) {
+        const adopted = await this.discoverAfterAmbiguousCreate(
+          () => this.findMonitorByCollection(collection, environment, monitorName),
+          error
+        );
+        if (adopted?.uid) {
+          return adopted.uid;
+        }
+        throw error;
+      }
+    });
   }
 
   async listMonitors(): Promise<
@@ -411,27 +615,37 @@ export class PostmanGatewayAssetsClient {
   }
 
   async findMonitorByCollection(
-    collectionUid: string
+    collectionUid: string,
+    environmentUid: string,
+    name: string
   ): Promise<{ uid: string; name: string } | null> {
-    // Monitors for one collection: GET /collections/:collectionUid/jobTemplates.
-    // The collection ref is the public uid passed straight through.
+    // The workspace-scoped job-template list carries collection, environment,
+    // and name, so discovery can enforce the complete reusable identity.
     const want = String(collectionUid ?? '').trim();
-    const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'monitors',
-      method: 'get',
-      path: `/collections/${want}/jobTemplates?_etc=true`
-    });
-    const data = response?.data;
-    const monitors = this.mapJobTemplates(Array.isArray(data) ? data : []);
-    const match = monitors.find((m) => m.collectionUid === want) ?? monitors[0];
+    const environment = String(environmentUid ?? '').trim();
+    const monitorName = String(name ?? '').trim();
+    const monitors = await this.listMonitors();
+    const matches = monitors.filter((monitor) =>
+      monitor.collectionUid === want &&
+      monitor.environmentUid === environment &&
+      monitor.name === monitorName
+    );
+    const match = this.selectExactMatch(
+      'monitor',
+      `workspace ${this.workspaceId}, name "${monitorName}", collection ${want}, and environment ${environment || '(none)'}`,
+      matches
+    );
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
   async runMonitor(uid: string): Promise<void> {
-    await this.gateway.requestJson<JsonRecord>({
-      service: 'monitors',
-      method: 'post',
-      path: `/jobTemplates/${uid}/jobs`
-    });
+    await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'monitors',
+        method: 'post',
+        path: `/jobTemplates/${uid}/jobs`
+      },
+      { retryTransient: false }
+    );
   }
 }
