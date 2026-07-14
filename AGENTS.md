@@ -38,7 +38,8 @@ tests/
 
 ```bash
 npm ci && npm test && npm run typecheck && npm run build
-npm run verify:dist  # CI/hook gate: rebuild + git diff (dev runs build)
+npm run verify:dist:assert  # CI: inspect dist; no build
+npm run verify:dist         # dev/hook: build, diff, inspect
 ```
 
 ## Key Behaviors
@@ -69,16 +70,16 @@ postman/
 
 ## Gotchas
 
-- `repo-sync` build script runs `typecheck` before esbuild (unlike other actions)
+- `build`: typecheck once, then bundle. Bundle adds CLI shebang and mode 755. CI builds once; dist gate only inspects.
 - Collection v3 format uses `$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/` -- not standard v2.1 JSON format
 - `commit-and-push` mode requires write permissions on checked-out ref
 - `repo-mutation.ts` handles detached HEAD via `current-ref` input
 
 ## CI
 
-`.github/workflows/ci.yml` runs one build before its single `gate` job fans out
-lint, test, typecheck, read-only dist diff, commitlint, and actionlint on one
-runner. Building before fan-out prevents pack tests from racing dist rebuild.
-Every gate prints its result under a `::group::` block even when another fails.
+`.github/workflows/ci.yml` builds once. Then one runner runs lint, test,
+typecheck, read-only dist check, commitlint, and actionlint in parallel.
+Pack test and dist check never rebuild. No dist race. Every gate prints a
+`::group::` result even when another gate fails.
 
 See workspace `../../docs/CI.md` for shared rationale.
