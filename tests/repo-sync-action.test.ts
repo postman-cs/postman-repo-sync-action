@@ -26,8 +26,13 @@ import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 
 type ResourcesYamlShape = {
+  workspace?: {
+    id?: string;
+  };
   cloudResources?: {
     collections?: Record<string, string>;
+    environments?: Record<string, string>;
+    specs?: Record<string, string>;
   };
 };
 
@@ -885,6 +890,333 @@ describe('repo sync action', () => {
     ).toBe(true);
   });
 
+});
+
+describe('state ownership persistence', () => {
+  let originalCwd = '';
+  let testDir = '';
+
+  function makePostman() {
+    return {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  function makeRepoMutation() {
+    return {
+      commitAndPush: vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      })
+    } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation'];
+  }
+
+  function seedLocalSpec(relativePath = 'openapi.yaml'): void {
+    writeFileSync(
+      relativePath,
+      JSON.stringify({
+        openapi: '3.1.0',
+        info: { title: 'Payments', version: '1.0.0' },
+        paths: {}
+      })
+    );
+  }
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'repo-sync-state-ownership-'));
+    process.chdir(testDir);
+    process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
+    process.env.GITHUB_REF_NAME = 'feature/repo-sync';
+    delete process.env.GITHUB_HEAD_REF;
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REF_NAME;
+    delete process.env.GITHUB_HEAD_REF;
+  });
+
+  it('writes workspace.id when workspace linking succeeds', async () => {
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('success');
+    expect(resources.workspace?.id).toBe('ws-123');
+  });
+
+  it('omits workspace.id on failed link with no prior durable id while still writing artifact maps', async () => {
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('failed');
+    expect(resources.workspace?.id).toBeUndefined();
+    expect(resources.cloudResources?.collections).toMatchObject({
+      '../postman/collections/core-payments': 'col-baseline',
+      '../postman/collections/[Smoke] core-payments': 'col-smoke',
+      '../postman/collections/[Contract] core-payments': 'col-contract'
+    });
+    expect(resources.cloudResources?.environments).toMatchObject({
+      '../postman/environments/prod.postman_environment.json': 'env-prod'
+    });
+  });
+
+  it('omits a new workspace.id when linking is enabled but cannot run', async () => {
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('skipped');
+    expect(resources.workspace?.id).toBeUndefined();
+  });
+
+  it('preserves the same prior durable workspace.id when linking fails', async () => {
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      `workspace:\n  id: ws-123\ncloudResources:\n  collections:\n    ../postman/collections/core-payments: col-baseline\n`
+    );
+
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('failed');
+    expect(resources.workspace?.id).toBe('ws-123');
+  });
+
+  it('does not pair a different prior workspace.id with candidate resource mappings after link failure', async () => {
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync('.postman/resources.yaml', 'workspace:\n  id: ws-prior\n');
+
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('failed');
+    expect(resources.workspace?.id).toBeUndefined();
+    expect(resources.cloudResources?.collections).toMatchObject({
+      '../postman/collections/core-payments': 'col-baseline'
+    });
+  });
+
+  it('persists workspace.id when workspace linking is explicitly disabled', async () => {
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(result['workspace-link-status']).toBe('skipped');
+    expect(resources.workspace?.id).toBe('ws-123');
+  });
+
+  it('preserves an existing versioned spec map entry across export', async () => {
+    seedLocalSpec();
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      `workspace:\n  id: ws-123\ncloudResources:\n  specs:\n    ../openapi.yaml#release=v1: spec-v1\n`
+    );
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        specId: ''
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.cloudResources?.specs).toMatchObject({
+      '../openapi.yaml#release=v1': 'spec-v1'
+    });
+  });
+
+  it('writes a release-scoped mapped spec key in version mode and a bare key in update mode', async () => {
+    seedLocalSpec();
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        specSyncMode: 'version',
+        releaseLabel: 'v2',
+        specId: 'spec-v2'
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    let resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.cloudResources?.specs).toMatchObject({
+      '../openapi.yaml#release=v2': 'spec-v2'
+    });
+    expect(resources.cloudResources?.specs?.['../openapi.yaml']).toBeUndefined();
+
+    rmSync('postman', { recursive: true, force: true });
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        specSyncMode: 'update',
+        specId: 'spec-update'
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.cloudResources?.specs).toMatchObject({
+      '../openapi.yaml': 'spec-update'
+    });
+  });
+
+  it('does not discard different source/spec entries when adding a mapped spec', async () => {
+    seedLocalSpec();
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      `workspace:\n  id: ws-123\ncloudResources:\n  specs:\n    ../other.yaml: spec-other\n    ../openapi.yaml#release=v1: spec-v1\n`
+    );
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        specSyncMode: 'update',
+        specId: 'spec-current'
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.cloudResources?.specs).toEqual({
+      '../other.yaml': 'spec-other',
+      '../openapi.yaml#release=v1': 'spec-v1',
+      '../openapi.yaml': 'spec-current'
+    });
+  });
 });
 
 describe('monitor resolution paths', () => {
