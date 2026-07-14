@@ -81,6 +81,7 @@ function createPlatform(options: PlatformOptions = {}) {
   const events: string[] = [];
   let mockCreated = false;
   let monitorCreated = false;
+  let mintCount = 0;
 
   const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -103,6 +104,10 @@ function createPlatform(options: PlatformOptions = {}) {
     if (custom) return custom;
 
     // Direct endpoints.
+    if (url === `${hosts.api}/service-account-tokens` && method === 'POST') {
+      mintCount += 1;
+      return json({ access_token: 'access-token-minted' });
+    }
     if (url === `${hosts.api}/me`) {
       return json({
         user: {
@@ -201,6 +206,9 @@ function createPlatform(options: PlatformOptions = {}) {
       },
       get monitorCreated() {
         return monitorCreated;
+      },
+      get mintCount() {
+        return mintCount;
       }
     }
   };
@@ -347,6 +355,42 @@ describe('contract: repo-sync org x credential matrix', () => {
     await expect(runAction(core, createExecStub())).rejects.toThrow(
       /postman-api-key is missing or invalid.*no postman-access-token provided/
     );
+  });
+
+  it('{PMAK-only, org} eagerly mints an access token before any gateway call, auto-detects org-mode, and completes (7e2ed70-class guard)', async () => {
+    const platform = createPlatform({ org: true });
+    vi.stubGlobal('fetch', platform.fetch);
+    const { core, outputs } = createCore(baseInputs({ 'postman-access-token': '' }));
+
+    await runAction(core, createExecStub());
+
+    // The eager mint happened exactly once, and before the first gateway proxy call.
+    expect(platform.state.mintCount).toBe(1);
+    const mintIndex = platform.events.findIndex(
+      (entry) => entry.includes('POST') && entry.includes('/service-account-tokens')
+    );
+    const firstProxyIndex = platform.events.findIndex((entry) => entry.startsWith('proxy:'));
+    expect(mintIndex).toBeGreaterThanOrEqual(0);
+    expect(firstProxyIndex).toBeGreaterThan(mintIndex);
+
+    // Org-mode was detected from ums squads with the minted token, and assets landed.
+    expect(platform.events.some((entry) => entry.startsWith('proxy:ums'))).toBe(true);
+    expect(platform.state.mockCreated).toBe(true);
+    expect(platform.state.monitorCreated).toBe(true);
+    expect(outputs['environment-uids-json']).toBeDefined();
+  });
+
+  it('{PMAK-only, non-org} eagerly mints and completes with org-mode false', async () => {
+    const platform = createPlatform({ org: false });
+    vi.stubGlobal('fetch', platform.fetch);
+    const { core, outputs } = createCore(baseInputs({ 'postman-access-token': '' }));
+
+    await runAction(core, createExecStub());
+
+    expect(platform.state.mintCount).toBe(1);
+    expect(platform.state.mockCreated).toBe(true);
+    expect(platform.state.monitorCreated).toBe(true);
+    expect(outputs['environment-uids-json']).toBeDefined();
   });
 
   it('{both, org, beta stack} routes every call to beta hosts', async () => {
