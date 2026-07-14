@@ -436,6 +436,7 @@ type PostmanResourcesState = {
   };
   cloudResources?: {
     collections?: CloudResourceMap;
+    additionalCollections?: CloudResourceMap;
     environments?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
@@ -885,7 +886,8 @@ function buildResourcesManifest(
   artifactDir: string,
   localSpecRefs: string[],
   mappedSpecRef?: string,
-  specId?: string
+  specId?: string,
+  existingState?: PostmanResourcesState | null
 ): string {
   const manifest: Record<string, unknown> = {
     workspace: { id: workspaceId }
@@ -918,6 +920,11 @@ function buildResourcesManifest(
   }
   if (mappedSpecRef && specId) {
     cloudResources.specs = { [mappedSpecRef]: specId };
+  }
+
+  const additionalCollections = existingState?.cloudResources?.additionalCollections;
+  if (additionalCollections && Object.keys(additionalCollections).length > 0) {
+    cloudResources.additionalCollections = { ...additionalCollections };
   }
 
   if (Object.keys(localResources).length > 0) {
@@ -1009,7 +1016,8 @@ async function exportArtifacts(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
   envUids: Record<string, string>,
-  assetProjectName: string
+  assetProjectName: string,
+  resourcesState: PostmanResourcesState | null
 ): Promise<void> {
   if (!inputs.workspaceId) {
     return;
@@ -1085,7 +1093,8 @@ async function exportArtifacts(
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpec?.configRelativePath,
-    inputs.specId || undefined
+    inputs.specId || undefined,
+    resourcesState
   ));
 
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
@@ -1398,7 +1407,7 @@ async function runRepoSyncInner(
     }
   }
 
-  await exportArtifacts(inputs, dependencies, envUids, assetProjectName);
+  await exportArtifacts(inputs, dependencies, envUids, assetProjectName, resourcesState);
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
   outputs['commit-sha'] = commit.commitSha;
