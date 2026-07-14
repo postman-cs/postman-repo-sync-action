@@ -70,16 +70,15 @@ postman/
 
 ## Gotchas
 
-- `build`: typecheck once, then bundle. Bundle adds CLI shebang and mode 755. CI builds once; dist gate only inspects.
+- `build`: typecheck, then bundle. Bundle adds CLI shebang and mode 755. CI bundles once; queued typecheck runs once; dist gate only inspects.
 - Collection v3 format uses `$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/` -- not standard v2.1 JSON format
 - `commit-and-push` mode requires write permissions on checked-out ref
 - `repo-mutation.ts` handles detached HEAD via `current-ref` input
 
 ## CI
 
-`.github/workflows/ci.yml` builds once. Then one runner runs lint, test,
-typecheck, read-only dist check, commitlint, and actionlint in parallel.
-Pack test and dist check never rebuild. No dist race. Every gate prints a
-`::group::` result even when another gate fails.
+`.github/workflows/ci.yml` bundles once. One runner queues at most two checks.
+Typecheck runs once. Dist check only reads. No pack race. Every check prints a
+`::group::` result even when another check fails.
 
 See workspace `../../docs/CI.md` for shared rationale.
