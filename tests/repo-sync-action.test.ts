@@ -29,7 +29,7 @@ type ResourcesYamlShape = {
   workspace?: {
     id?: string;
   };
-  cloudResources?: {
+  canonical?: {
     collections?: Record<string, string>;
     environments?: Record<string, string>;
     specs?: Record<string, string>;
@@ -67,6 +67,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'postman-access-token',
     credentialPreflight: 'warn',
+    branchStrategy: 'legacy',
+  previewTtlDays: 30,
     adoToken: '',
     githubToken: 'github-token',
     ghFallbackToken: 'fallback-token',
@@ -84,6 +86,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     sslClientPassphrase: '',
     sslExtraCaCerts: '',
     specId: '',
+    specContentChanged: true,
     specPath: '',
     teamId: '',
     repository: 'postman-cs/repo-sync-demo',
@@ -296,7 +299,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const github = {
       getRepositoryVariable: vi.fn().mockResolvedValue(''),
@@ -395,20 +402,9 @@ describe('repo sync action', () => {
       content: '{"status":"created"}'
     });
     expect(resourcesYaml).toEqual({
+      version: 2,
       workspace: { id: 'ws-123' },
-      localResources: {
-        collections: [
-          '../postman/collections/core-payments',
-          '../postman/collections/[Smoke] core-payments',
-          '../postman/collections/[Contract] core-payments'
-        ],
-        environments: [
-          '../postman/environments/prod.postman_environment.json',
-          '../postman/environments/stage.postman_environment.json'
-        ],
-        specs: ['../packages/sdk/openapi.json']
-      },
-      cloudResources: {
+      canonical: {
         collections: {
           '../postman/collections/core-payments': 'col-baseline',
           '../postman/collections/[Smoke] core-payments': 'col-smoke',
@@ -458,7 +454,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const github = {
       getRepositoryVariable: vi
@@ -513,7 +513,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -550,7 +554,7 @@ describe('repo sync action', () => {
       readFileSync('.postman/resources.yaml', 'utf8')
     ) as ResourcesYamlShape;
 
-    expect(resourcesYaml.cloudResources?.collections).toEqual({
+    expect(resourcesYaml.canonical?.collections).toEqual({
       '../postman/collections/core-payments': 'col-baseline-existing',
       '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
       '../postman/collections/[Contract] core-payments': 'col-contract-existing'
@@ -572,7 +576,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const repoMutation = {
       commitAndPush: vi.fn().mockResolvedValue({
@@ -699,7 +707,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
     const repoMutation = {
       commitAndPush: vi.fn()
@@ -787,7 +799,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -841,7 +857,11 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     await runRepoSync(
@@ -915,7 +935,11 @@ describe('state ownership persistence', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
   }
 
@@ -1069,12 +1093,12 @@ describe('state ownership persistence', () => {
     const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
     expect(result['workspace-link-status']).toBe('failed');
     expect(resources.workspace?.id).toBeUndefined();
-    expect(resources.cloudResources?.collections).toMatchObject({
+    expect(resources.canonical?.collections).toMatchObject({
       '../postman/collections/core-payments': 'col-baseline',
       '../postman/collections/[Smoke] core-payments': 'col-smoke',
       '../postman/collections/[Contract] core-payments': 'col-contract'
     });
-    expect(resources.cloudResources?.environments).toMatchObject({
+    expect(resources.canonical?.environments).toMatchObject({
       '../postman/environments/prod.postman_environment.json': 'env-prod'
     });
   });
@@ -1151,7 +1175,7 @@ describe('state ownership persistence', () => {
     const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
     expect(result['workspace-link-status']).toBe('failed');
     expect(resources.workspace?.id).toBeUndefined();
-    expect(resources.cloudResources?.collections).toMatchObject({
+    expect(resources.canonical?.collections).toMatchObject({
       '../postman/collections/core-payments': 'col-baseline'
     });
   });
@@ -1200,7 +1224,7 @@ describe('state ownership persistence', () => {
     );
 
     const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
-    expect(resources.cloudResources?.specs).toMatchObject({
+    expect(resources.canonical?.specs).toMatchObject({
       '../openapi.yaml#release=v1': 'spec-v1'
     });
   });
@@ -1226,10 +1250,10 @@ describe('state ownership persistence', () => {
     );
 
     let resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
-    expect(resources.cloudResources?.specs).toMatchObject({
+    expect(resources.canonical?.specs).toMatchObject({
       '../openapi.yaml#release=v2': 'spec-v2'
     });
-    expect(resources.cloudResources?.specs?.['../openapi.yaml']).toBeUndefined();
+    expect(resources.canonical?.specs?.['../openapi.yaml']).toBeUndefined();
 
     rmSync('postman', { recursive: true, force: true });
     await runRepoSync(
@@ -1249,7 +1273,7 @@ describe('state ownership persistence', () => {
     );
 
     resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
-    expect(resources.cloudResources?.specs).toMatchObject({
+    expect(resources.canonical?.specs).toMatchObject({
       '../openapi.yaml': 'spec-update'
     });
   });
@@ -1279,7 +1303,7 @@ describe('state ownership persistence', () => {
     );
 
     const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
-    expect(resources.cloudResources?.specs).toEqual({
+    expect(resources.canonical?.specs).toEqual({
       '../other.yaml': 'spec-other',
       '../openapi.yaml#release=v1': 'spec-v1',
       '../openapi.yaml': 'spec-current'
@@ -1304,6 +1328,10 @@ describe('monitor resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }
@@ -1416,7 +1444,11 @@ describe('monitor resolution paths', () => {
 
   it('swallows runMonitor failures with a warning', async () => {
     const postman = makePostman({
-      runMonitor: vi.fn().mockRejectedValue(new Error('boom'))
+      runMonitor: vi.fn().mockRejectedValue(new Error('boom')),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     });
     const github = makeGithub();
     await expect(
@@ -1445,6 +1477,10 @@ describe('mock resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }
@@ -1827,6 +1863,10 @@ describe('repo-variable fallback resolution', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined),
       ...overrides
     };
   }

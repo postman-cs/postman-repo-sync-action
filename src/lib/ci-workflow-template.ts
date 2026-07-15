@@ -44,6 +44,9 @@ function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string
   '    branches: [main]',
   '  schedule:',
   '    - cron: "0 */6 * * *"',
+  'concurrency:',
+  '  group: postman-onboard-${{ github.head_ref || github.ref_name }}',
+  '  cancel-in-progress: false',
   'jobs:',
   '  test:',
   '    runs-on: ubuntu-latest',
@@ -61,7 +64,7 @@ function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string
   '          ruby <<\'RUBY\'',
   "          require 'yaml'",
   "          config = YAML.load_file('.postman/resources.yaml') || {}",
-  "          cloud = config.fetch('cloudResources', {})",
+  "          cloud = config.fetch('canonical', config.fetch('cloudResources', {}))",
   "          collections = cloud.fetch('collections', {})",
   "          environments = cloud.fetch('environments', {})",
   "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
@@ -262,6 +265,60 @@ function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): str
   ''
   ];
 }
+
+export function renderGcWorkflowTemplate(): string {
+  return [
+  'name: Postman Preview GC',
+  'on:',
+  '  delete:',
+  '    branches: ["**"]',
+  '  pull_request:',
+  '    types: [closed]',
+  '  schedule:',
+  '    - cron: "0 2 * * *"',
+  '  workflow_dispatch:',
+  '    inputs:',
+  '      branch:',
+  '        description: Branch name to GC (optional, otherwise sweep by TTL/branch-existence)',
+  '        required: false',
+  'concurrency:',
+  '  group: postman-preview-gc-${{ github.ref_name }}',
+  '  cancel-in-progress: false',
+  'jobs:',
+  '  gc:',
+  '    runs-on: ubuntu-latest',
+  '    if: github.event_name != \'pull_request\' || github.event.pull_request.head.repo.full_name == github.repository',
+  '    steps:',
+  '      - uses: actions/checkout@v5',
+  '        with:',
+  '          fetch-depth: 0',
+  '      - name: Run Postman preview GC (provider-neutral cli.cjs gc)',
+  '        env:',
+  '          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}',
+  '          POSTMAN_ACCESS_TOKEN: ${{ secrets.POSTMAN_ACCESS_TOKEN }}',
+  '          POSTMAN_WORKSPACE_ID: ${{ vars.POSTMAN_WORKSPACE_ID }}',
+  '          REPO_URL: https://github.com/${{ github.repository }}',
+  '        run: |',
+  '          set -euo pipefail',
+  '          # The repo-sync action bundles a provider-neutral gc command (cli.cjs gc)',
+  '          # that uses the Postman access token for inventory/deletion and the',
+  '          # provider ambient credential (GITHUB_TOKEN via git ls-remote) for branch existence.',
+  '          # Daily scheduled run is the retention executor (TTL contract of last resort).',
+  '          if [ -n "${{ inputs.branch }}" ]; then',
+  '            npx @postman-cse/onboarding-repo-sync gc --branch "${{ inputs.branch }}" --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
+  '          else',
+  '            npx @postman-cse/onboarding-repo-sync gc --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
+  '          fi',
+  '      - name: Orphan audit summary (job summary)',
+  '        if: always()',
+  '        run: |',
+  '          echo "### Preview GC orphan audit" >> "$GITHUB_STEP_SUMMARY"',
+  '          echo "Marker-guarded deletion only — strangers (no marker) are never deleted. See gc-summary-json for structured counts." >> "$GITHUB_STEP_SUMMARY"',
+  ''
+  ].join('\n');
+}
+
+export const GC_WORKFLOW_TEMPLATE = renderGcWorkflowTemplate();
 
 export function getCiWorkflowTemplate(
   provider: GitProvider,
