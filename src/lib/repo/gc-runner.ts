@@ -10,6 +10,7 @@
  */
 
 import { parseAssetMarker, type AssetMarker } from './branch-decision.js';
+import { load as loadYaml } from 'js-yaml';
 import {
   runPreviewGc,
   type BranchExistence,
@@ -32,10 +33,13 @@ export interface GcPostmanClient {
   getEnvironment(uid: string): Promise<unknown>;
   listMocks(): Promise<Array<{ uid: string; name: string; collection: string; mockUrl: string; environment: string }>>;
   listMonitors(): Promise<Array<{ uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string }>>;
+  listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
+  getSpecContent(uid: string): Promise<string | undefined>;
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
   deleteCollection(uid: string): Promise<void>;
+  deleteSpec(uid: string): Promise<void>;
 }
 
 export interface GcRunOptions {
@@ -86,6 +90,19 @@ function markerFromEnvironment(envelope: unknown): AssetMarker | undefined {
     }
   }
   return undefined;
+}
+
+function markerFromSpecContent(content: string | undefined): AssetMarker | undefined {
+  if (!content) return undefined;
+  try {
+    const parsed = loadYaml(content) as Record<string, unknown> | undefined;
+    const marker = parsed?.['x-postman-onboarding'];
+    return marker && typeof marker === 'object'
+      ? parseAssetMarker(`${GC_MARKER_ENV_KEY}: ${JSON.stringify(marker)}`)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Preview suffix / channel prefix filter: only OUR generated-name shapes are GC candidates. */
@@ -152,6 +169,18 @@ export async function collectGcCandidates(
     candidates.push({ kind: 'collection', uid, name: collection.name, marker: collection.marker });
   }
 
+  const specifications = await postman.listSpecifications(workspaceId);
+  for (const spec of specifications) {
+    if (!isGcCandidateName(spec.name)) continue;
+    let marker: AssetMarker | undefined;
+    try {
+      marker = markerFromSpecContent(await postman.getSpecContent(spec.uid));
+    } catch {
+      marker = undefined;
+    }
+    candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
+  }
+
   return candidates;
 }
 
@@ -187,7 +216,8 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
       environment: (uid) => options.postman.deleteEnvironment(uid),
       mock: (uid) => options.postman.deleteMock(uid),
       monitor: (uid) => options.postman.deleteMonitor(uid),
-      collection: (uid) => options.postman.deleteCollection(uid)
+      collection: (uid) => options.postman.deleteCollection(uid),
+      spec: (uid) => options.postman.deleteSpec(uid)
     },
     degraded,
     dryRun: options.dryRun,

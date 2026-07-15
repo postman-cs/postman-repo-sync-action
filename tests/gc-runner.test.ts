@@ -49,10 +49,13 @@ function client(overrides: Partial<GcPostmanClient> = {}): GcPostmanClient {
     listMonitors: vi.fn().mockResolvedValue([
       { uid: 'mon-preview', name: 'core-payments @feature-payments - Smoke Monitor', active: true, collectionUid: 'col-1', environmentUid: 'env-preview' }
     ]),
+    listSpecifications: vi.fn().mockResolvedValue([]),
+    getSpecContent: vi.fn().mockResolvedValue(undefined),
     deleteEnvironment: vi.fn().mockResolvedValue(undefined),
     deleteMock: vi.fn().mockResolvedValue(undefined),
     deleteMonitor: vi.fn().mockResolvedValue(undefined),
     deleteCollection: vi.fn().mockResolvedValue(undefined),
+    deleteSpec: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
@@ -90,11 +93,25 @@ describe('collectGcCandidates', () => {
     const mock = candidates.find((c) => c.kind === 'mock');
     expect(mock?.marker?.rawBranch).toBe('feature/payments');
   });
+
+  it('discovers a preview spec from its embedded durable marker', async () => {
+    const postman = client({
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: 'core-payments @feature-payments' }]),
+      getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`)
+    });
+    const candidates = await collectGcCandidates(postman, 'ws-1');
+    expect(candidates.find((candidate) => candidate.kind === 'spec')).toMatchObject({
+      uid: 'spec-preview', marker: { rawBranch: 'feature/payments' }
+    });
+  });
 });
 
 describe('runGc', () => {
   it('branch deleted: removes the whole preview set, leaves canonical assets alone', async () => {
-    const postman = client();
+    const postman = client({
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: 'core-payments @feature-payments' }]),
+      getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`)
+    });
     const exec = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'abc\trefs/heads/main\n', stderr: '' })
     };
@@ -103,7 +120,8 @@ describe('runGc', () => {
     expect(postman.deleteMock).toHaveBeenCalledWith('mock-preview');
     expect(postman.deleteMonitor).toHaveBeenCalledWith('mon-preview');
     expect(postman.deleteCollection).toHaveBeenCalledWith('col-1');
-    expect(summary.counts.delete).toBe(4);
+    expect(postman.deleteSpec).toHaveBeenCalledWith('spec-preview');
+    expect(summary.counts.delete).toBe(5);
     expect(summary.degraded).toBe(false);
   });
 

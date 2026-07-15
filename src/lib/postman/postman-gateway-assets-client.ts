@@ -110,6 +110,39 @@ export class PostmanGatewayAssetsClient {
     });
   }
 
+  async listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications?containerType=workspace&containerId=${workspaceId}`
+    });
+    const data = Array.isArray(response?.data) ? response.data : [];
+    return data.map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null)
+      .map((entry) => ({ uid: String(entry.id ?? entry.uid ?? '').trim(), name: String(entry.name ?? '').trim() }))
+      .filter((entry) => entry.uid && entry.name);
+  }
+
+  async getSpecContent(specId: string): Promise<string | undefined> {
+    const files = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/files`
+    });
+    const entries = Array.isArray(files?.data) ? files.data : [];
+    const root = entries.map((entry) => this.asRecord(entry)).find((entry) => entry?.type === 'ROOT')
+      ?? entries.map((entry) => this.asRecord(entry)).find((entry) => entry !== null);
+    const fileId = String(root?.id ?? '').trim();
+    if (!fileId) return undefined;
+    const file = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/files/${fileId}`, query: { fields: 'content' }
+    });
+    const record = this.dataOf(file);
+    return typeof record?.content === 'string' ? record.content : undefined;
+  }
+
+  async deleteSpec(specId: string): Promise<void> {
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'delete', path: `/specifications/${specId}`
+    });
+  }
+
   private idOf(record: JsonRecord | null): string {
     if (!record) return '';
     const id = record.uid ?? record.id;

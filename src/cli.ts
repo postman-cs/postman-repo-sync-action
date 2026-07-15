@@ -563,14 +563,20 @@ async function runGcCommand(
     { persistGeneratedApiKeySecret: false, env }
   );
   const dependencies = createCliDependencies(inputs, resolved);
-  if (!dependencies.postman.deleteCollection) {
-    throw new Error('gc requires a collection deletion client; this runtime is missing the branch-aware GC capability.');
+  if (!dependencies.postman.deleteCollection || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.deleteSpec) {
+    throw new Error('gc requires the full branch-aware inventory client; this runtime is missing a spec or collection GC capability.');
   }
 
   const summary = await runGc({
     workspaceId: inputs.workspaceId,
     repo,
-    postman: { ...dependencies.postman, deleteCollection: dependencies.postman.deleteCollection },
+    postman: {
+      ...dependencies.postman,
+      deleteCollection: dependencies.postman.deleteCollection,
+      listSpecifications: dependencies.postman.listSpecifications,
+      getSpecContent: dependencies.postman.getSpecContent,
+      deleteSpec: dependencies.postman.deleteSpec
+    },
     exec: createCliExec(initialMasker),
     onlyBranch,
     allPreviews,
