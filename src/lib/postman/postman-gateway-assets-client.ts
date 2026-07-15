@@ -137,6 +137,17 @@ export class PostmanGatewayAssetsClient {
     return typeof record?.content === 'string' ? record.content : undefined;
   }
 
+  async listSpecCollections(specId: string): Promise<Array<{ uid: string; name: string }>> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/collections`
+    });
+    const data = Array.isArray(response?.data) ? response.data : [];
+    return data.map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null)
+      .map((entry) => ({ uid: String(entry.collection ?? entry.collectionId ?? entry.id ?? '').trim(), name: String(entry.name ?? '').trim() }))
+      .filter((entry) => entry.uid);
+  }
+
   async deleteSpec(specId: string): Promise<void> {
     await this.gateway.requestJson<JsonRecord>({
       service: 'specification', method: 'delete', path: `/specifications/${specId}`

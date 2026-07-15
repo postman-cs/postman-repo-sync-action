@@ -35,6 +35,7 @@ export interface GcPostmanClient {
   listMonitors(): Promise<Array<{ uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string }>>;
   listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   getSpecContent(uid: string): Promise<string | undefined>;
+  listSpecCollections(uid: string): Promise<Array<{ uid: string; name: string }>>;
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
@@ -179,6 +180,18 @@ export async function collectGcCandidates(
       marker = undefined;
     }
     candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
+    if (marker) {
+      try {
+        for (const collection of await postman.listSpecCollections(spec.uid)) {
+          if (!ownedCollections.has(collection.uid)) {
+            candidates.push({ kind: 'collection', uid: collection.uid, name: collection.name || `${spec.name} collection`, marker });
+          }
+        }
+      } catch {
+        // The spec itself remains eligible; a transient list failure must not
+        // broaden deletion scope or prevent a later sweep from retrying.
+      }
+    }
   }
 
   return candidates;
