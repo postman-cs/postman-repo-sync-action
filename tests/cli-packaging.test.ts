@@ -1,15 +1,34 @@
 import { execFile } from 'node:child_process';
-import { access, constants, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, constants, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDirs: string[] = [];
+let packageSnapshotRoot = '';
+
+async function snapshotPackage(sourceRoot: string, snapshotRoot: string): Promise<void> {
+  await Promise.all(
+    ['package.json', 'package-lock.json', 'action.yml'].map((name) =>
+      cp(path.join(sourceRoot, name), path.join(snapshotRoot, name))
+    )
+  );
+  await cp(path.join(sourceRoot, 'dist'), path.join(snapshotRoot, 'dist'), { recursive: true });
+}
+
+beforeAll(async () => {
+  packageSnapshotRoot = await mkdtemp(path.join(tmpdir(), 'postman-repo-sync-package-snapshot-'));
+  await snapshotPackage(repoRoot, packageSnapshotRoot);
+});
+
+afterAll(async () => {
+  await rm(packageSnapshotRoot, { recursive: true, force: true });
+});
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -23,7 +42,7 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 describe('CLI packaging contract', () => {
   it('commits a Node shebang and git-index executable mode on dist/cli.cjs', async () => {
-    const cliPath = path.join(repoRoot, 'dist', 'cli.cjs');
+    const cliPath = path.join(packageSnapshotRoot, 'dist', 'cli.cjs');
     const contents = await readFile(cliPath, 'utf8');
     expect(contents.startsWith('#!/usr/bin/env node\n')).toBe(true);
 
@@ -39,8 +58,8 @@ describe('CLI packaging contract', () => {
   });
 
   it('runs ./dist/cli.cjs --help and --version without credentials, network, or writes', async () => {
-    const cliPath = path.join(repoRoot, 'dist', 'cli.cjs');
-    const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')) as {
+    const cliPath = path.join(packageSnapshotRoot, 'dist', 'cli.cjs');
+    const packageJson = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as {
       version: string;
     };
     const sandbox = await makeTempDir('postman-repo-sync-cli-sandbox-');
@@ -78,7 +97,7 @@ describe('CLI packaging contract', () => {
   }, 20_000);
 
   it('keeps an exact dist census of action/cli/index entrypoints', async () => {
-    const distDir = path.join(repoRoot, 'dist');
+    const distDir = path.join(packageSnapshotRoot, 'dist');
     const entries = (
       await execFileAsync('git', ['ls-files', '--', 'dist'], {
         cwd: repoRoot,
@@ -93,6 +112,31 @@ describe('CLI packaging contract', () => {
 
     const onDisk = await readdir(distDir);
     expect(onDisk.slice().sort()).toEqual(['action.cjs', 'cli.cjs', 'index.cjs']);
+  });
+
+  it('keeps its dist snapshot isolated from later source-tree writes', async () => {
+    const sourceRoot = await makeTempDir('postman-repo-sync-package-source-');
+    const snapshotRoot = await makeTempDir('postman-repo-sync-package-copy-');
+    await mkdir(path.join(sourceRoot, 'dist'), { recursive: true });
+    await Promise.all(
+      ['package.json', 'package-lock.json', 'action.yml'].map((name) =>
+        writeFile(path.join(sourceRoot, name), '{}\n', 'utf8')
+      )
+    );
+    await Promise.all(
+      ['action.cjs', 'cli.cjs', 'index.cjs'].map((name) =>
+        writeFile(path.join(sourceRoot, 'dist', name), `${name}\n`, 'utf8')
+      )
+    );
+
+    await snapshotPackage(sourceRoot, snapshotRoot);
+    await writeFile(path.join(sourceRoot, 'dist', '.concurrent-build-marker'), 'changed\n', 'utf8');
+
+    expect((await readdir(path.join(snapshotRoot, 'dist'))).sort()).toEqual([
+      'action.cjs',
+      'cli.cjs',
+      'index.cjs'
+    ]);
   });
 
   it('does not rebuild dist from packaging tests', async () => {
@@ -116,9 +160,9 @@ describe('CLI packaging contract', () => {
 
     const packResult = await execFileAsync(
       'npm',
-      ['pack', '--json', '--pack-destination', packDir],
+      ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir],
       {
-        cwd: repoRoot,
+        cwd: packageSnapshotRoot,
         encoding: 'utf8',
         env: {
           ...process.env,
@@ -136,7 +180,7 @@ describe('CLI packaging contract', () => {
 
     const tarballPath = path.join(packDir, packed.filename);
     await mkdir(prefixDir, { recursive: true });
-    const fixturePackage = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')) as {
+    const fixturePackage = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as {
       name: string;
       private?: boolean;
       scripts?: Record<string, string>;
@@ -144,7 +188,7 @@ describe('CLI packaging contract', () => {
     fixturePackage.name = 'postman-repo-sync-packaging-fixture';
     fixturePackage.private = true;
     delete fixturePackage.scripts;
-    const fixtureLock = JSON.parse(await readFile(path.join(repoRoot, 'package-lock.json'), 'utf8')) as {
+    const fixtureLock = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package-lock.json'), 'utf8')) as {
       name: string;
       packages: Record<string, { name?: string }>;
     };
@@ -204,7 +248,7 @@ describe('CLI packaging contract', () => {
       env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 1024 * 1024
     });
-    const packageJson = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')) as {
+    const packageJson = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as {
       version: string;
     };
     expect(version.stdout.trim()).toBe(packageJson.version);
