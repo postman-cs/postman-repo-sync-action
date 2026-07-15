@@ -52,6 +52,7 @@ import {
   channelAssetName,
   parseChannelRules,
   previewAssetName,
+  parseAssetMarker,
   resolveBranchIdentity,
   buildBranchSlug,
   resolveEffectiveBranchDecision,
@@ -941,13 +942,6 @@ async function upsertEnvironments(
 
   for (const envName of inputs.environments) {
     const runtimeUrl = String(inputs.envRuntimeUrls[envName] || '').trim();
-    const values = buildEnvironmentValues(envName, runtimeUrl);
-    if (assetMarker) {
-      // Dual-channel identity marker (GC discovery channel). The env value
-      // mirrors the description-embedded JSON contract: parseAssetMarker
-      // accepts the same payload behind the x-pm-onboarding key.
-      values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
-    }
     const displayName = `${inputs.projectName} - ${envName}`;
     let existingUid = String(envUids[envName] || '').trim();
 
@@ -968,11 +962,32 @@ async function upsertEnvironments(
     }
 
     if (existingUid) {
+      let marker = assetMarker;
+      if (marker) {
+        try {
+          const existing = await dependencies.postman.getEnvironment(existingUid) as { data?: { values?: Array<{ key?: string; value?: string }> }; values?: Array<{ key?: string; value?: string }> };
+          const values = existing.data?.values ?? existing.values ?? [];
+          const prior = values.find((value) => value.key === 'x-pm-onboarding')?.value;
+          const priorMarker = parseAssetMarker(prior ? `x-pm-onboarding: ${prior}` : undefined);
+          // `createdAt` identifies a branch generation. Preserve it across
+          // successful refreshes; only lastSyncedAt/expiresAt slide forward.
+          if (priorMarker?.repo === marker.repo && priorMarker.rawBranch === marker.rawBranch) {
+            marker = { ...marker, createdAt: priorMarker.createdAt };
+          }
+        } catch {
+          // Marker reads are optimization/safety metadata. Continue with a
+          // fresh marker when the environment cannot be read for refresh.
+        }
+      }
+      const values = buildEnvironmentValues(envName, runtimeUrl);
+      if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
       await dependencies.postman.updateEnvironment(existingUid, displayName, values);
       envUids[envName] = existingUid;
       continue;
     }
 
+    const values = buildEnvironmentValues(envName, runtimeUrl);
+    if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
     envUids[envName] = await dependencies.postman.createEnvironment(
       inputs.workspaceId,
       displayName,
