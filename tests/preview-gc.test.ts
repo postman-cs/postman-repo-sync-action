@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { renderAssetMarker, type AssetMarker } from '../src/lib/repo/branch-decision.js';
 import {
+  clearChannelRetirement,
   decideRetention,
   looksGenerated,
   renderGcSummary,
   runPreviewGc,
+  stampChannelRetirement,
   type GcCandidate,
   type GcContext
 } from '../src/lib/repo/preview-gc.js';
@@ -47,6 +49,38 @@ function context(overrides: Partial<GcContext> = {}): GcContext {
 }
 
 describe('retention state machine (plan §6.5 case table)', () => {
+  it('stamps and clears immutable channel retirement metadata', () => {
+    const active = marker({ role: 'channel' });
+    const retired = stampChannelRetirement(active, 'mapping-removed', new Date('2026-07-15T00:00:00Z'), 10);
+    expect(retired).not.toBe(active);
+    expect(retired).toMatchObject({
+      retirementDetectedAt: '2026-07-15T00:00:00.000Z',
+      retirementReason: 'mapping-removed',
+      deleteAfter: '2026-07-25T00:00:00.000Z'
+    });
+    expect(clearChannelRetirement(retired)).toEqual(active);
+  });
+
+  it('retires a live branch when its channel mapping is removed', () => {
+    const decision = decideRetention(
+      candidate({ marker: marker({ role: 'channel', rawBranch: 'develop' }) }),
+      context({ branchExists: () => 'exists', channelMapped: () => false })
+    );
+    expect(decision).toMatchObject({ action: 'retire', retirementReason: 'mapping-removed' });
+  });
+
+  it('restores retirement metadata when branch and mapping become active again', () => {
+    const decision = decideRetention(
+      candidate({ marker: marker({
+        role: 'channel', rawBranch: 'develop',
+        retirementDetectedAt: '2026-07-01T00:00:00Z',
+        retirementReason: 'mapping-removed', deleteAfter: '2026-08-01T00:00:00Z'
+      }) }),
+      context({ branchExists: () => 'exists', channelMapped: () => true })
+    );
+    expect(decision.action).toBe('restore');
+  });
+
   it('branch deleted → delete (rule 1: branch deletion is authoritative)', () => {
     const decision = decideRetention(candidate(), context({ branchExists: () => 'deleted' }));
     expect(decision.action).toBe('delete');

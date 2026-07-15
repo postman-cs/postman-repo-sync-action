@@ -1004,6 +1004,80 @@ describe('state ownership persistence', () => {
     expect(resources.workspace?.id).toBe('ws-123');
   });
 
+  it('tags the canonical spec only after successful repo-link finalization', async () => {
+    const postman = { ...makePostman(), tagSpecVersion: vi.fn().mockResolvedValue({ id: 'tag-1', name: 'abc1234' }) };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    try {
+      const result = await runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', environments: [], generateCiWorkflow: false
+      }), {
+        core: createCoreStub().core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: makeRepoMutation()
+      });
+      expect(postman.tagSpecVersion).toHaveBeenCalledWith('spec-1', 'abc1234');
+      expect(result['spec-version-tag']).toBe('abc1234');
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
+  it('skips canonical tagging when spec content did not change', async () => {
+    const postman = { ...makePostman(), tagSpecVersion: vi.fn() };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    try {
+      await runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', specContentChanged: false,
+        environments: [], generateCiWorkflow: false
+      }), {
+        core: createCoreStub().core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: makeRepoMutation()
+      });
+      expect(postman.tagSpecVersion).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
+  it('does not tag canonical spec when repo-link finalization fails', async () => {
+    const postman = { ...makePostman(), tagSpecVersion: vi.fn() };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    try {
+      await expect(runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', environments: [], generateCiWorkflow: false
+      }), {
+        core: createCoreStub().core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+        },
+        repoMutation: makeRepoMutation()
+      })).rejects.toThrow('Workspace link failed: link denied');
+      expect(postman.tagSpecVersion).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
   it('warns when system-env-map-json is empty so Catalog filters do not look like a missing link', async () => {
     const { core, warnings, infos } = createCoreStub();
     const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);

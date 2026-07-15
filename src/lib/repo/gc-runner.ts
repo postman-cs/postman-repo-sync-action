@@ -9,10 +9,12 @@
  * skipped (degraded) and TTL-expired assets are still processed.
  */
 
-import { parseAssetMarker, type AssetMarker } from './branch-decision.js';
+import { parseAssetMarker, parseChannelRules, type AssetMarker } from './branch-decision.js';
 import { load as loadYaml } from 'js-yaml';
 import {
   runPreviewGc,
+  clearChannelRetirement,
+  stampChannelRetirement,
   type BranchExistence,
   type GcCandidate,
   type GcSummary
@@ -31,6 +33,7 @@ export interface GcExec {
 export interface GcPostmanClient {
   listEnvironments(workspaceId: string): Promise<Array<{ name: string; uid: string }>>;
   getEnvironment(uid: string): Promise<unknown>;
+  updateEnvironment(uid: string, name: string, values: Array<{ key: string; value: string; enabled: boolean; type: string }>): Promise<void>;
   listMocks(): Promise<Array<{ uid: string; name: string; collection: string; mockUrl: string; environment: string }>>;
   listMonitors(): Promise<Array<{ uid: string; name: string; active: boolean; collectionUid: string; environmentUid: string }>>;
   listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
@@ -53,6 +56,8 @@ export interface GcRunOptions {
   allPreviews?: boolean;
   dryRun?: boolean;
   now?: Date;
+  previewTtlDays?: number;
+  channels?: string;
   log?: (message: string) => void;
 }
 
@@ -91,6 +96,23 @@ function markerFromEnvironment(envelope: unknown): AssetMarker | undefined {
     }
   }
   return undefined;
+}
+
+function environmentValues(envelope: unknown): Array<{ key: string; value: string; enabled: boolean; type: string }> {
+  const record = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : null;
+  const data = record && typeof record.data === 'object' && record.data !== null
+    ? record.data as Record<string, unknown>
+    : record;
+  const values = data && Array.isArray(data.values) ? data.values : [];
+  return values.map((raw) => {
+    const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    return {
+      key: String(value.key ?? ''),
+      value: String(value.value ?? ''),
+      enabled: value.enabled !== false,
+      type: String(value.type ?? 'default')
+    };
+  });
 }
 
 function markerFromSpecContent(content: string | undefined): AssetMarker | undefined {
@@ -213,14 +235,36 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
     if (!remoteBranches) return 'unknown';
     return remoteBranches.has(rawBranch) ? 'exists' : 'deleted';
   };
+  const channelRules = options.channels === undefined ? undefined : parseChannelRules(options.channels);
+  const channelMapped = channelRules
+    ? (rawBranch: string): boolean => channelRules.some((rule) =>
+        rule.pattern.endsWith('*')
+          ? rawBranch.startsWith(rule.pattern.slice(0, -1))
+          : rawBranch === rule.pattern
+      )
+    : undefined;
 
   const candidates = await collectGcCandidates(options.postman, options.workspaceId);
+
+  // The environment is the durable marker surface for a channel set. Once it
+  // carries retirement state, use that state for every same-branch asset so
+  // specs/collections/mocks/monitors converge on deleteAfter in later sweeps.
+  const retiredChannels = candidates
+    .filter((candidate) => candidate.kind === 'environment' && candidate.marker?.role === 'channel' && candidate.marker.retirementReason)
+    .map((candidate) => candidate.marker!);
+  for (const candidate of candidates) {
+    const marker = candidate.marker;
+    if (!marker || marker.role !== 'channel' || marker.retirementReason) continue;
+    const retired = retiredChannels.find((entry) => entry.repo === marker.repo && entry.rawBranch === marker.rawBranch);
+    if (retired) candidate.marker = retired;
+  }
 
   return runPreviewGc({
     context: {
       repo: options.repo,
       now,
       branchExists,
+      channelMapped,
       onlyBranch: options.onlyBranch,
       allPreviews: options.allPreviews
     },
@@ -231,6 +275,32 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
       monitor: (uid) => options.postman.deleteMonitor(uid),
       collection: (uid) => options.postman.deleteCollection(uid),
       spec: (uid) => options.postman.deleteSpec(uid)
+    },
+    retirers: {
+      environment: async (candidate, reason) => {
+        if (!candidate.marker) return;
+        const envelope = await options.postman.getEnvironment(candidate.uid);
+        const values = environmentValues(envelope);
+        const retired = stampChannelRetirement(
+          candidate.marker,
+          reason,
+          now,
+          options.previewTtlDays ?? 30
+        );
+        const markerValue = values.find((value) => value.key === GC_MARKER_ENV_KEY);
+        if (markerValue) markerValue.value = JSON.stringify(retired);
+        else values.push({ key: GC_MARKER_ENV_KEY, value: JSON.stringify(retired), enabled: true, type: 'default' });
+        await options.postman.updateEnvironment(candidate.uid, candidate.name, values);
+      },
+      restoreEnvironment: async (candidate) => {
+        if (!candidate.marker) return;
+        const envelope = await options.postman.getEnvironment(candidate.uid);
+        const values = environmentValues(envelope);
+        const restored = clearChannelRetirement(candidate.marker);
+        const markerValue = values.find((value) => value.key === GC_MARKER_ENV_KEY);
+        if (markerValue) markerValue.value = JSON.stringify(restored);
+        await options.postman.updateEnvironment(candidate.uid, candidate.name, values);
+      }
     },
     degraded,
     dryRun: options.dryRun,

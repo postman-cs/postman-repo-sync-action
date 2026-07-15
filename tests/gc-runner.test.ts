@@ -42,6 +42,7 @@ function client(overrides: Partial<GcPostmanClient> = {}): GcPostmanClient {
       { name: 'core-payments - dev', uid: 'env-canonical' }
     ]),
     getEnvironment: vi.fn().mockResolvedValue(envelopeWithMarker(marker())),
+    updateEnvironment: vi.fn().mockResolvedValue(undefined),
     listMocks: vi.fn().mockResolvedValue([
       { uid: 'mock-preview', name: 'core-payments @feature-payments Mock', collection: 'col-1', mockUrl: 'https://m', environment: 'env-preview' },
       { uid: 'mock-canonical', name: 'core-payments Mock', collection: 'col-2', mockUrl: 'https://m2', environment: 'env-canonical' }
@@ -142,6 +143,47 @@ describe('runGc', () => {
     const summary = await runGc({ workspaceId: 'ws-1', repo: REPO, postman, exec });
     expect(postman.deleteEnvironment).not.toHaveBeenCalled();
     expect(summary.counts.retain).toBe(4);
+  });
+
+  it('retires a deleted channel first, then deletes it after deleteAfter', async () => {
+    const channel = marker({ role: 'channel', rawBranch: 'develop', sanitizedBranch: 'develop', expiresAt: undefined });
+    const postman = client({
+      listEnvironments: vi.fn().mockResolvedValue([{ name: '[DEV] core-payments - dev', uid: 'env-channel' }]),
+      getEnvironment: vi.fn().mockResolvedValue(envelopeWithMarker(channel)),
+      listMocks: vi.fn().mockResolvedValue([]),
+      listMonitors: vi.fn().mockResolvedValue([])
+    });
+    const exec = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'abc\trefs/heads/main\n', stderr: '' })
+    };
+
+    const first = await runGc({
+      workspaceId: 'ws-1', repo: REPO, postman, exec,
+      now: new Date('2026-07-15T00:00:00Z'), previewTtlDays: 7
+    });
+    expect(first.counts.retire).toBe(1);
+    expect(postman.deleteEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).toHaveBeenCalledWith(
+      'env-channel',
+      '[DEV] core-payments - dev',
+      expect.arrayContaining([expect.objectContaining({
+        key: 'x-pm-onboarding',
+        value: expect.stringContaining('2026-07-22T00:00:00.000Z')
+      })])
+    );
+
+    vi.mocked(postman.getEnvironment).mockResolvedValue(envelopeWithMarker({
+      ...channel,
+      retirementDetectedAt: '2026-07-15T00:00:00.000Z',
+      retirementReason: 'branch-deleted',
+      deleteAfter: '2026-07-22T00:00:00.000Z'
+    }));
+    const second = await runGc({
+      workspaceId: 'ws-1', repo: REPO, postman, exec,
+      now: new Date('2026-07-23T00:00:00Z')
+    });
+    expect(second.counts.delete).toBe(1);
+    expect(postman.deleteEnvironment).toHaveBeenCalledWith('env-channel');
   });
 
   it('degraded (no git credential): probes skipped, TTL-expired assets still deleted', async () => {

@@ -582,6 +582,8 @@ async function runGcCommand(
     onlyBranch,
     allPreviews,
     dryRun,
+    previewTtlDays: inputs.previewTtlDays,
+    channels: inputs.channels,
     log: (message) => reporter.info(message)
   });
 
