@@ -168,6 +168,22 @@ describe('cli', () => {
     expect(inputs.repoWriteMode).toBe('commit-only');
   });
 
+  it('ignores an empty runner-form INPUT alias when the normalized alias has a value', () => {
+    const inputs = resolveInputs({
+      INPUT_INTEGRATION_BACKEND: 'bifrost',
+      'INPUT_INTEGRATION-BACKEND': ''
+    } as NodeJS.ProcessEnv);
+    expect(inputs.integrationBackend).toBe('bifrost');
+  });
+
+  it('ignores an empty normalized INPUT alias when the runner-form alias has a value', () => {
+    const inputs = resolveInputs({
+      INPUT_INTEGRATION_BACKEND: '',
+      'INPUT_INTEGRATION-BACKEND': 'bifrost'
+    } as NodeJS.ProcessEnv);
+    expect(inputs.integrationBackend).toBe('bifrost');
+  });
+
   it('rejects unknown flags, missing values, and unexpected positionals', () => {
     expect(() => parseCliArgs(['--not-a-real-flag', 'x'], {})).toThrow(/Unknown option --not-a-real-flag/);
     expect(() => parseCliArgs(['--repo-write-mode'], {})).toThrow(/Missing value for --repo-write-mode/);
