@@ -198,18 +198,18 @@ export function getInput(
   const runnerRaw = runnerName === normalizedName ? undefined : env[runnerName];
   const hasNormalized = normalizedRaw !== undefined;
   const hasRunner = runnerRaw !== undefined;
+  const normalizedValue = normalizeInputValue(normalizedRaw);
+  const runnerValue = normalizeInputValue(runnerRaw);
 
   if (hasNormalized && hasRunner) {
-    const normalizedValue = normalizeInputValue(normalizedRaw);
-    const runnerValue = normalizeInputValue(runnerRaw);
-    if (normalizedValue !== runnerValue) {
+    if (normalizedValue && runnerValue && normalizedValue !== runnerValue) {
       throw new Error(
         `Conflicting values for ${name}: ${normalizedName}=${JSON.stringify(normalizedValue)} vs ${runnerName}=${JSON.stringify(runnerValue)}`
       );
     }
   }
 
-  return normalizeInputValue(hasNormalized ? normalizedRaw : runnerRaw);
+  return normalizedValue || runnerValue;
 }
 
 export function hasInput(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
