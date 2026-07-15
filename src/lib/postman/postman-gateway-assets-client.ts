@@ -495,9 +495,10 @@ export class PostmanGatewayAssetsClient {
             path: `/mocks?workspace=${ws}`,
             body
           },
-          // Downstream mock create can ESOCKETTIMEDOUT under org load; adopt on
-          // ambiguous success so a retried POST never leaves a silent duplicate.
-          { retryTransient: true }
+          // Unsafe create: never blind re-POST. An ESOCKETTIMEDOUT after accept
+          // may still have created the mock; reconcile via discovery below and
+          // let the orchestrator retry the whole create-or-adopt cycle.
+          { retryTransient: false }
         );
         const record = this.dataOf(response);
         const uid = this.idOf(record);

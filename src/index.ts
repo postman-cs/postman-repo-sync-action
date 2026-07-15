@@ -36,6 +36,7 @@ import {
   type PreflightMode
 } from './lib/postman/credential-identity.js';
 import { HttpError } from './lib/http-error.js';
+import { retry } from './lib/retry.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets-client.js';
@@ -1666,11 +1667,26 @@ async function runRepoSyncInner(
       }
 
       if (!resolvedMockUrl) {
-        const mock = await dependencies.postman.createMock(
-          inputs.workspaceId,
-          mockName,
-          inputs.baselineCollectionId,
-          mockEnvUid
+        // Downstream mock create can ESOCKETTIMEDOUT under org load. Retry the
+        // whole create-or-adopt cycle: createMock re-discovers by identity first,
+        // so a POST that actually landed is adopted on retry, never duplicated.
+        const mock = await retry(
+          () => dependencies.postman.createMock(
+            inputs.workspaceId,
+            mockName,
+            inputs.baselineCollectionId,
+            mockEnvUid
+          ),
+          {
+            maxAttempts: 3,
+            delayMs: 2000,
+            backoffMultiplier: 2,
+            onRetry: ({ attempt, error }) => {
+              dependencies.core.warning(
+                `Mock create attempt ${attempt} failed (${error instanceof Error ? error.message : String(error)}); retrying`
+              );
+            }
+          }
         );
         resolvedMockUrl = mock.url;
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
