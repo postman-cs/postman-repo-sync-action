@@ -615,6 +615,8 @@ describe('fresh-process orchestration live discovery reuse', () => {
       postmanCliInstallUrl: '',
       postmanIapubBase: '',
       credentialPreflight: 'warn',
+      branchStrategy: 'legacy',
+  previewTtlDays: 30,
       ...overrides
     };
   }
@@ -663,7 +665,11 @@ describe('fresh-process orchestration live discovery reuse', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMockByCollection,
       findMonitorByCollection,
-      runMonitor: vi.fn().mockResolvedValue(undefined)
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
     };
 
     const first = await runRepoSync(baseInputs(), {

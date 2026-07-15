@@ -42,6 +42,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'access-token-xyz',
     credentialPreflight: 'warn',
+    branchStrategy: 'legacy',
+  previewTtlDays: 30,
     githubToken: '',
     ghFallbackToken: '',
     ciWorkflowBase64: '',

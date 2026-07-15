@@ -82,6 +82,82 @@ export class PostmanGatewayAssetsClient {
     return this.asRecord(envelope.data) ?? envelope;
   }
 
+  /** Native Spec Hub tags attach to the latest changelog group. */
+  async tagSpecVersion(specId: string, name: string): Promise<{ id: string; name: string }> {
+    const trimmed = name.trim().slice(0, 255);
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'post', path: `/specifications/${specId}/tags`, body: { name: trimmed }
+    });
+    const record = this.dataOf(response) ?? {};
+    return { id: String(record.id ?? '').trim(), name: String(record.name ?? trimmed).trim() };
+  }
+
+  async listSpecVersionTags(specId: string): Promise<Array<{ id: string; name: string }>> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/tags`, query: { limit: '50' }
+    });
+    const data = Array.isArray(response?.data) ? response.data : [];
+    return data.map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null)
+      .map((entry) => ({
+        id: String(entry.id ?? '').trim(),
+        // listTags returns `message`; createTag returns `name`. Accept both.
+        name: String(entry.name ?? entry.message ?? '').trim()
+      }))
+      .filter((entry) => entry.id || entry.name);
+  }
+
+  async deleteCollection(collectionUid: string): Promise<void> {
+    const bareId = String(collectionUid).split('-').slice(-5).join('-') || collectionUid;
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'collection', method: 'delete', path: `/v3/collections/${bareId}`
+    });
+  }
+
+  async listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications?containerType=workspace&containerId=${workspaceId}`
+    });
+    const data = Array.isArray(response?.data) ? response.data : [];
+    return data.map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null)
+      .map((entry) => ({ uid: String(entry.id ?? entry.uid ?? '').trim(), name: String(entry.name ?? '').trim() }))
+      .filter((entry) => entry.uid && entry.name);
+  }
+
+  async getSpecContent(specId: string): Promise<string | undefined> {
+    const files = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/files`
+    });
+    const entries = Array.isArray(files?.data) ? files.data : [];
+    const root = entries.map((entry) => this.asRecord(entry)).find((entry) => entry?.type === 'ROOT')
+      ?? entries.map((entry) => this.asRecord(entry)).find((entry) => entry !== null);
+    const fileId = String(root?.id ?? '').trim();
+    if (!fileId) return undefined;
+    const file = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/files/${fileId}`, query: { fields: 'content' }
+    });
+    const record = this.dataOf(file);
+    return typeof record?.content === 'string' ? record.content : undefined;
+  }
+
+  async listSpecCollections(specId: string): Promise<Array<{ uid: string; name: string }>> {
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'get', path: `/specifications/${specId}/collections`
+    });
+    const data = Array.isArray(response?.data) ? response.data : [];
+    return data.map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null)
+      .map((entry) => ({ uid: String(entry.collection ?? entry.collectionId ?? entry.id ?? '').trim(), name: String(entry.name ?? '').trim() }))
+      .filter((entry) => entry.uid);
+  }
+
+  async deleteSpec(specId: string): Promise<void> {
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'specification', method: 'delete', path: `/specifications/${specId}`
+    });
+  }
+
   private idOf(record: JsonRecord | null): string {
     if (!record) return '';
     const id = record.uid ?? record.id;
@@ -419,6 +495,9 @@ export class PostmanGatewayAssetsClient {
             path: `/mocks?workspace=${ws}`,
             body
           },
+          // Unsafe create: never blind re-POST. An ESOCKETTIMEDOUT after accept
+          // may still have created the mock; reconcile via discovery below and
+          // let the orchestrator retry the whole create-or-adopt cycle.
           { retryTransient: false }
         );
         const record = this.dataOf(response);
@@ -466,6 +545,36 @@ export class PostmanGatewayAssetsClient {
         mockUrl: String(m.url ?? m.mockUrl ?? ''),
         environment: String(m.environment ?? '')
       }));
+  }
+
+  /**
+   * Delete an environment through the sync service (GC path). The path id is
+   * the bare model id (public uid tail), mirroring updateEnvironment.
+   */
+  async deleteEnvironment(uid: string): Promise<void> {
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'sync',
+      method: 'delete',
+      path: `/environment/${this.toModelId(uid)}`
+    });
+  }
+
+  /** Delete a mock server (GC path). */
+  async deleteMock(uid: string): Promise<void> {
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'mock',
+      method: 'delete',
+      path: `/mocks/${this.toModelId(uid)}`
+    });
+  }
+
+  /** Delete a collection-based monitor (jobTemplate) (GC path). */
+  async deleteMonitor(uid: string): Promise<void> {
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'monitors',
+      method: 'delete',
+      path: `/jobTemplates/${this.toModelId(uid)}`
+    });
   }
 
   async mockExists(uid: string): Promise<boolean> {

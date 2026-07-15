@@ -5,10 +5,17 @@ import { parse } from 'yaml';
 
 import {
   getCiWorkflowTemplate,
-  renderCiWorkflowTemplate
+  renderCiWorkflowTemplate,
+  renderGcWorkflowTemplate
 } from '../src/lib/ci-workflow-template.js';
 
 describe('renderCiWorkflowTemplate', () => {
+  it('keys concurrency on the resolved head branch rather than the raw merge ref', () => {
+    const workflow = renderCiWorkflowTemplate();
+
+    expect(workflow).toContain('group: postman-onboard-${{ github.head_ref || github.ref_name }}');
+    expect(workflow).toContain('cancel-in-progress: false');
+  });
   it('produces multi-line YAML output with real newlines', () => {
     const ciWorkflow = renderCiWorkflowTemplate();
 
@@ -298,5 +305,18 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     expect(() => getCiWorkflowTemplate('azure-devops', { postmanRegion: 'ap' })).toThrow(
       /postman-region/
     );
+  });
+});
+
+describe('renderGcWorkflowTemplate', () => {
+  it('emits a dedicated marker-guarded GitHub GC workflow with lifecycle triggers', () => {
+    const workflow = renderGcWorkflowTemplate();
+
+    expect(parse(workflow)).toMatchObject({ name: 'Postman Preview GC' });
+    expect(workflow).toContain('delete:');
+    expect(workflow).toContain('types: [closed]');
+    expect(workflow).toContain('cron: "0 2 * * *"');
+    expect(workflow).toContain('cli.cjs gc');
+    expect(workflow).toContain('gc-summary-json');
   });
 });

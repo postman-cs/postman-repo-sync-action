@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 
 import {
   createRepoSyncDependencies,
+  decideBranchTier,
+  runGatedSkip,
   resolveInputs,
   resolvePostmanApiKeyAndTeamId,
   runRepoSync,
@@ -16,6 +18,8 @@ import {
 import { runCredentialPreflight } from './lib/postman/credential-identity.js';
 import { mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
+import { runGc } from './lib/repo/gc-runner.js';
+import { renderGcSummary } from './lib/repo/preview-gc.js';
 
 interface CliConfig {
   inputEnv: NodeJS.ProcessEnv;
@@ -76,17 +80,27 @@ const CLI_INPUT_NAMES = [
   'ssl-client-cert',
   'ssl-client-key',
   'ssl-client-passphrase',
-  'ssl-extra-ca-certs',
-  'spec-id',
-  'spec-path',
+   'ssl-extra-ca-certs',
+   'spec-id',
+   'spec-content-changed',
+   'spec-path',
   'team-id',
   'postman-region',
-  'postman-stack'
+  'postman-stack',
+  'branch-strategy',
+  'canonical-branch',
+  'channels',
+  'preview-ttl'
 ] as const;
 
 const HELP_TEXT = `Usage: postman-repo-sync [options]
 
 Sync Postman artifacts into a git repository.
+
+Subcommands:
+  gc [--branch <name> | --all-previews] [--dry-run]
+                                 Garbage-collect preview/channel asset sets
+                                 (marker-guarded; strangers are never deleted)
 
 Options:
   --help                         Show this help and exit
@@ -402,9 +416,26 @@ export async function runCli(
   }
 
   const env = runtime.env ?? process.env;
+
+  if (argv[0] === 'gc') {
+    await runGcCommand(argv.slice(1), env, writeStdout);
+    return;
+  }
+
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
   const reporter = new ConsoleReporter();
+
+  // Match the action entrypoint: a gated branch must never mint an access
+  // token, run credential preflight, or construct a Postman client.
+  const branchDecision = decideBranchTier(inputs, config.inputEnv);
+  if (branchDecision.tier === 'gated') {
+    const result = runGatedSkip(inputs, branchDecision, reporter);
+    await writeOptionalFile(config.resultJsonPath, JSON.stringify(result, null, 2));
+    await writeOptionalFile(config.dotenvPath, toDotenv(result));
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
 
   // PMAK-only runs: mint the access token up front (mirrors runAction) so the
   // gateway asset ops and Bifrost paths below get the full access-token surface
@@ -469,6 +500,95 @@ export async function runCli(
   await writeOptionalFile(config.dotenvPath, toDotenv(result));
 
   writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+/**
+ * Manual GC escape hatch (PRD R18): \`cli.cjs gc --branch <name> | --all-previews\`.
+ * Provider GC wrappers (scheduled sweeps, branch-delete hooks) are thin
+ * invocations of this command. Deletion is marker-guarded (lib/repo/preview-gc);
+ * strangers and channel sets outside their deleteAfter window are never touched.
+ */
+async function runGcCommand(
+  argv: string[],
+  env: NodeJS.ProcessEnv,
+  writeStdout: (chunk: string) => void
+): Promise<void> {
+  let onlyBranch: string | undefined;
+  let allPreviews = false;
+  let dryRun = false;
+  const passthrough: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--branch') {
+      onlyBranch = argv[index + 1];
+      if (!onlyBranch || onlyBranch.startsWith('--')) {
+        throw new Error('Missing value for --branch');
+      }
+      index += 1;
+    } else if (arg === '--all-previews') {
+      allPreviews = true;
+    } else if (arg === '--dry-run') {
+      dryRun = true;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+  if (onlyBranch && allPreviews) {
+    throw new Error('Use either --branch <name> or --all-previews, not both');
+  }
+
+  const config = parseCliArgs(passthrough, env);
+  const inputs = resolveInputs(config.inputEnv);
+  if (!inputs.workspaceId) {
+    throw new Error('gc requires --workspace-id (the workspace holding the preview/channel sets)');
+  }
+  const repo = inputs.repoUrl || inputs.repository;
+  if (!repo) {
+    throw new Error('gc requires --repo-url or --repository to scope marker ownership');
+  }
+
+  const reporter = new ConsoleReporter();
+  await mintAccessTokenIfNeeded(inputs, reporter);
+  const initialMasker = createSecretMasker([
+    inputs.postmanApiKey,
+    inputs.postmanAccessToken,
+    inputs.githubToken,
+    inputs.ghFallbackToken
+  ]);
+  const resolved = await resolvePostmanApiKeyAndTeamId(
+    inputs,
+    reporter,
+    createCliExec(initialMasker),
+    initialMasker,
+    { persistGeneratedApiKeySecret: false, env }
+  );
+  const dependencies = createCliDependencies(inputs, resolved);
+  if (!dependencies.postman.deleteCollection || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
+    throw new Error('gc requires the full branch-aware inventory client; this runtime is missing a spec or collection GC capability.');
+  }
+
+  const summary = await runGc({
+    workspaceId: inputs.workspaceId,
+    repo,
+    postman: {
+      ...dependencies.postman,
+      deleteCollection: dependencies.postman.deleteCollection,
+      listSpecifications: dependencies.postman.listSpecifications,
+      getSpecContent: dependencies.postman.getSpecContent,
+      listSpecCollections: dependencies.postman.listSpecCollections,
+      deleteSpec: dependencies.postman.deleteSpec
+    },
+    exec: createCliExec(initialMasker),
+    onlyBranch,
+    allPreviews,
+    dryRun,
+    previewTtlDays: inputs.previewTtlDays,
+    channels: inputs.channels,
+    log: (message) => reporter.info(message)
+  });
+
+  reporter.info(renderGcSummary(summary));
+  writeStdout(JSON.stringify(summary, null, 2) + '\n');
 }
 
 const currentModulePath = typeof __filename === 'string' ? __filename : '';

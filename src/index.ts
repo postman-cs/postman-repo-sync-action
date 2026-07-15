@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 import { convertAndSplitAnyCollection } from './postman-v3/converter.js';
-import { getCiWorkflowTemplate, renderCiWorkflowTemplate } from './lib/ci-workflow-template.js';
+import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
 import { createTelemetryContext } from '@postman-cse/automation-telemetry-core';
@@ -36,6 +36,7 @@ import {
   type PreflightMode
 } from './lib/postman/credential-identity.js';
 import { HttpError } from './lib/http-error.js';
+import { retry } from './lib/retry.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets-client.js';
@@ -47,6 +48,20 @@ import {
   type SecretMasker
 } from './lib/secrets.js';
 import { validateCertMaterial } from './lib/ssl-validation.js';
+import {
+  BRANCH_DECISION_ENV,
+  channelAssetName,
+  parseChannelRules,
+  previewAssetName,
+  parseAssetMarker,
+  resolveBranchIdentity,
+  buildBranchSlug,
+  resolveEffectiveBranchDecision,
+  serializeBranchDecision,
+  type AssetMarker,
+  type BranchDecision,
+  type BranchStrategy
+} from './lib/repo/branch-decision.js';
 
 type EnvironmentValues = {
   key: string;
@@ -83,6 +98,11 @@ export interface ResolvedInputs {
   postmanApiKey: string;
   postmanAccessToken: string;
   credentialPreflight: PreflightMode;
+  branchStrategy: BranchStrategy;
+  canonicalBranch?: string;
+  channels?: string;
+  /** Sliding preview TTL in days (plan §6.5 rule 3). Default 30. */
+  previewTtlDays: number;
   adoToken: string;
   githubToken: string;
   ghFallbackToken: string;
@@ -100,6 +120,7 @@ export interface ResolvedInputs {
   sslClientPassphrase: string;
   sslExtraCaCerts: string;
   specId: string;
+  specContentChanged?: boolean;
   specPath: string;
   teamId: string;
   repository: string;
@@ -121,6 +142,10 @@ interface RepoSyncOutputs {
   'monitor-id': string;
   'repo-sync-summary-json': string;
   'commit-sha': string;
+  'sync-status': string;
+  'branch-decision': string;
+  'spec-version-tag': string;
+  'spec-version-url': string;
 }
 
 interface CoreLike {
@@ -159,7 +184,11 @@ export interface RepoSyncDependencies {
     | 'findMonitorByCollection'
     | 'findMockByCollection'
     | 'runMonitor'
-  >;
+    | 'listEnvironments'
+    | 'deleteEnvironment'
+    | 'deleteMock'
+    | 'deleteMonitor'
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -287,6 +316,18 @@ function parseCredentialPreflight(value: string | undefined): PreflightMode {
   );
 }
 
+function parseBranchStrategy(value: string | undefined): BranchStrategy {
+  const definition = postmanRepoSyncActionContract.inputs['branch-strategy'];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || '').trim() || (definition.default ?? 'legacy');
+  if (allowed.includes(normalized)) {
+    return normalized as BranchStrategy;
+  }
+  throw new Error(
+    `Unsupported branch-strategy "${normalized}". Supported values: ${allowed.join(', ')}`
+  );
+}
+
 function normalizeReleaseLabel(value: string): string {
   const cleaned = normalizeInputValue(value)
     .replace(/^refs\/heads\//, '')
@@ -350,6 +391,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
     specId: getInput('spec-id', env),
+    specContentChanged: parseBooleanInput(getInput('spec-content-changed', env), true),
     specPath: getInput('spec-path', env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
@@ -383,6 +425,10 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanApiKey: getInput('postman-api-key', env),
     postmanAccessToken: getInput('postman-access-token', env),
     credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
+    branchStrategy: parseBranchStrategy(getInput('branch-strategy', env)),
+    canonicalBranch: getInput('canonical-branch', env) || undefined,
+    channels: getInput('channels', env) || undefined,
+    previewTtlDays: Math.max(1, Number.parseInt(getInput('preview-ttl', env) || '30', 10) || 30),
     adoToken: getInput('ado-token', env) || normalizeInputValue(env.SYSTEM_ACCESSTOKEN),
     githubToken: getInput('github-token', env),
     ghFallbackToken: getInput('gh-fallback-token', env),
@@ -415,6 +461,58 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   };
 }
 
+/**
+ * Machine-identity marker for preview/channel asset sets (plan §6.2 dual-channel;
+ * fields feed the §6.5 retention machine). Stored as an environment value with
+ * key `x-pm-onboarding` — the discovery channel the GC sweep reads. Sliding
+ * TTL: lastSyncedAt/expiresAt refresh on every successful upsert.
+ */
+export function buildBranchAssetMarker(
+  decision: BranchDecision,
+  inputs: Pick<ResolvedInputs, 'repoUrl' | 'repository' | 'previewTtlDays'>,
+  now: Date = new Date()
+): AssetMarker | undefined {
+  if (decision.tier !== 'preview' && decision.tier !== 'channel') {
+    return undefined;
+  }
+  const rawBranch = decision.identity.headBranch;
+  const repo = inputs.repoUrl || inputs.repository;
+  if (!rawBranch || !repo) {
+    return undefined;
+  }
+  const ttlMs = inputs.previewTtlDays * 24 * 60 * 60 * 1000;
+  return {
+    repo,
+    rawBranch,
+    sanitizedBranch: buildBranchSlug(rawBranch).suffix,
+    role: decision.tier,
+    headSha: decision.identity.headSha,
+    createdAt: now.toISOString(),
+    lastSyncedAt: now.toISOString(),
+    ...(decision.tier === 'preview' ? { expiresAt: new Date(now.getTime() + ttlMs).toISOString() } : {})
+  };
+}
+
+/** Reject canonical collection IDs on standalone preview/channel runs. */
+export function assertBranchAssetIds(
+  inputs: Pick<ResolvedInputs, 'baselineCollectionId' | 'smokeCollectionId' | 'contractCollectionId'>,
+  decision: BranchDecision,
+  branchOwnedIds = process.env.POSTMAN_BRANCH_ASSET_IDS === 'owned'
+): void {
+  if (decision.tier === 'legacy' || decision.tier === 'canonical' || branchOwnedIds) return;
+  const provided = [
+    ['baseline-collection-id', inputs.baselineCollectionId],
+    ['smoke-collection-id', inputs.smokeCollectionId],
+    ['contract-collection-id', inputs.contractCollectionId]
+  ].filter(([, value]) => Boolean(value));
+  if (provided.length > 0) {
+    throw new Error(
+      `CONTRACT_BRANCH_CANONICAL_WRITE: a ${decision.tier} repo-sync run cannot accept explicit collection IDs (${provided.map(([name]) => name).join(', ')}). ` +
+      'Run bootstrap in the same branch-aware pipeline so it can produce branch-owned IDs.'
+    );
+  }
+}
+
 function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentValues {
   return [
     { key: 'baseUrl', value: baseUrl, type: 'default' },
@@ -432,15 +530,35 @@ type CloudResourceMap = Record<string, string>;
 const LEGACY_BASELINE_COLLECTION_PREFIX = '[Baseline]';
 
 type PostmanResourcesState = {
+  /** State schema version. Absent = v1 (legacy). v2 is canonical-only. */
+  version?: number;
   workspace?: {
     id?: string;
   };
+  localResources?: Record<string, string[]>;
   cloudResources?: {
     collections?: CloudResourceMap;
     environments?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
-};
+  canonical?: {
+    collections?: CloudResourceMap;
+    environments?: CloudResourceMap;
+    specs?: CloudResourceMap;
+  };
+} & Record<string, unknown>;
+
+const RESOURCES_STATE_VERSION = 2;
+const SUPPORTED_STATE_VERSIONS = new Set([1, RESOURCES_STATE_VERSION]);
+
+/** Contract violation raised when tracked state exists but cannot be trusted. */
+export class StateUnreadableError extends Error {
+  readonly code = 'CONTRACT_STATE_UNREADABLE';
+  constructor(message: string) {
+    super(`CONTRACT_STATE_UNREADABLE: ${message}`);
+    this.name = 'StateUnreadableError';
+  }
+}
 
 type SpecReference = {
   repoRelativePath: string;
@@ -448,11 +566,43 @@ type SpecReference = {
 };
 
 function readResourcesState(): PostmanResourcesState | null {
+  let raw: string;
   try {
-    return loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as PostmanResourcesState;
+    raw = readFileSync('.postman/resources.yaml', 'utf8');
   } catch {
+    // Missing state is a first run: fall through to discover/create.
     return null;
   }
+  // Malformed is NOT missing: an unreadable tracked-state file must fail loud
+  // instead of silently reopening the duplicate-creation path.
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(raw);
+  } catch (error) {
+    throw new StateUnreadableError(
+      `.postman/resources.yaml exists but is not parseable YAML (${error instanceof Error ? error.message : String(error)}). Fix or delete the file; refusing to treat tracked state as absent.`
+    );
+  }
+  if (parsed === null || parsed === undefined) {
+    return null;
+  }
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new StateUnreadableError(
+      '.postman/resources.yaml exists but does not contain a YAML mapping. Fix or delete the file; refusing to treat tracked state as absent.'
+    );
+  }
+  const state = parsed as PostmanResourcesState;
+  if (state.version !== undefined && !SUPPORTED_STATE_VERSIONS.has(Number(state.version))) {
+    throw new StateUnreadableError(
+      `.postman/resources.yaml declares unsupported state version ${String(state.version)} (supported: 1, ${RESOURCES_STATE_VERSION}). Upgrade the action or fix the file.`
+    );
+  }
+  // State v2 is canonical-only on disk. Existing materialization code reads
+  // cloudResources, so present a transient alias and strip it in the writer.
+  if (state.canonical && !state.cloudResources) {
+    state.cloudResources = { ...state.canonical };
+  }
+  return state;
 }
 
 function findCloudResourceId(
@@ -611,7 +761,11 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'mock-url': '',
     'monitor-id': '',
     'repo-sync-summary-json': '{}',
-    'commit-sha': ''
+    'commit-sha': '',
+    'sync-status': '',
+    'branch-decision': '',
+    'spec-version-tag': '',
+    'spec-version-url': ''
   };
 }
 
@@ -658,6 +812,10 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, 'credential-preflight') || 'warn',
+    INPUT_BRANCH_STRATEGY: readInput(actionCore, 'branch-strategy'),
+    INPUT_CANONICAL_BRANCH: readInput(actionCore, 'canonical-branch'),
+    INPUT_CHANNELS: readInput(actionCore, 'channels'),
+    INPUT_PREVIEW_TTL: readInput(actionCore, 'preview-ttl'),
     INPUT_ADO_TOKEN: adoToken,
     INPUT_GITHUB_TOKEN: githubToken,
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
@@ -792,7 +950,8 @@ async function persistSslSecrets(
 async function upsertEnvironments(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
-  resourcesState: PostmanResourcesState | null
+  resourcesState: PostmanResourcesState | null,
+  assetMarker?: AssetMarker
 ): Promise<Record<string, string>> {
   const envUids = {
     ...getEnvironmentUidsFromResources(resourcesState),
@@ -804,7 +963,6 @@ async function upsertEnvironments(
 
   for (const envName of inputs.environments) {
     const runtimeUrl = String(inputs.envRuntimeUrls[envName] || '').trim();
-    const values = buildEnvironmentValues(envName, runtimeUrl);
     const displayName = `${inputs.projectName} - ${envName}`;
     let existingUid = String(envUids[envName] || '').trim();
 
@@ -825,11 +983,32 @@ async function upsertEnvironments(
     }
 
     if (existingUid) {
+      let marker = assetMarker;
+      if (marker) {
+        try {
+          const existing = await dependencies.postman.getEnvironment(existingUid) as { data?: { values?: Array<{ key?: string; value?: string }> }; values?: Array<{ key?: string; value?: string }> };
+          const values = existing.data?.values ?? existing.values ?? [];
+          const prior = values.find((value) => value.key === 'x-pm-onboarding')?.value;
+          const priorMarker = parseAssetMarker(prior ? `x-pm-onboarding: ${prior}` : undefined);
+          // `createdAt` identifies a branch generation. Preserve it across
+          // successful refreshes; only lastSyncedAt/expiresAt slide forward.
+          if (priorMarker?.repo === marker.repo && priorMarker.rawBranch === marker.rawBranch) {
+            marker = { ...marker, createdAt: priorMarker.createdAt };
+          }
+        } catch {
+          // Marker reads are optimization/safety metadata. Continue with a
+          // fresh marker when the environment cannot be read for refresh.
+        }
+      }
+      const values = buildEnvironmentValues(envName, runtimeUrl);
+      if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
       await dependencies.postman.updateEnvironment(existingUid, displayName, values);
       envUids[envName] = existingUid;
       continue;
     }
 
+    const values = buildEnvironmentValues(envName, runtimeUrl);
+    if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
     envUids[envName] = await dependencies.postman.createEnvironment(
       inputs.workspaceId,
       displayName,
@@ -947,38 +1126,41 @@ function buildResourcesManifest(
   localSpecRefs: string[],
   mappedSpecRef?: string,
   specId?: string,
-  existingSpecs?: CloudResourceMap
+  existingSpecs?: CloudResourceMap,
+  priorState?: PostmanResourcesState | null
 ): string {
-  const manifest: Record<string, unknown> = {};
+  // Merge-preserving writer (state v2): round-trip every unknown field from
+  // the prior tracked state instead of rebuilding the document from scratch,
+  // so fields written by other actions (or newer versions) survive a sync.
+  const manifest: Record<string, unknown> = { ...(priorState ?? {}) };
+  delete manifest.version;
+  delete manifest.workspace;
+  delete manifest.localResources;
+  delete manifest.cloudResources;
+  delete manifest.canonical;
+  manifest.version = RESOURCES_STATE_VERSION;
   if (workspaceId) {
     manifest.workspace = { id: workspaceId };
   }
 
-  const localResources: Record<string, string[]> = {};
   const cloudResources: Record<string, Record<string, string>> = {};
 
   // Collections
   const collectionKeys = Object.keys(collectionMap);
   if (collectionKeys.length > 0) {
-    localResources.collections = collectionKeys;
     cloudResources.collections = collectionMap;
   }
 
   // Environments
   const envEntries = Object.entries(envMap);
   if (envEntries.length > 0) {
-    localResources.environments = envEntries.map(
-      ([envName]) => `../${artifactDir}/environments/${envName}.postman_environment.json`
-    );
     cloudResources.environments = {};
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
   }
 
-  if (localSpecRefs.length > 0) {
-    localResources.specs = localSpecRefs;
-  }
+  void localSpecRefs;
 
   // Preserve existing cloudResources.specs and merge any newly mapped entry.
   const specs: CloudResourceMap = { ...(existingSpecs || {}) };
@@ -989,11 +1171,8 @@ function buildResourcesManifest(
     cloudResources.specs = specs;
   }
 
-  if (Object.keys(localResources).length > 0) {
-    manifest.localResources = localResources;
-  }
   if (Object.keys(cloudResources).length > 0) {
-    manifest.cloudResources = cloudResources;
+    manifest.canonical = cloudResources;
   }
 
   return dumpYaml(manifest, {
@@ -1084,6 +1263,7 @@ async function exportArtifacts(
     priorWorkspaceId?: string;
     existingSpecs?: CloudResourceMap;
     releaseLabel?: string;
+    priorState?: PostmanResourcesState | null;
   }
 ): Promise<void> {
   if (!inputs.workspaceId) {
@@ -1176,7 +1356,8 @@ async function exportArtifacts(
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpecCloudKey,
     inputs.specId || undefined,
-    options.existingSpecs
+    options.existingSpecs,
+    options.priorState
   ));
 
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
@@ -1241,6 +1422,17 @@ async function commitAndPushGeneratedFiles(
     }
 
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
+
+    // GC workflow: dedicated generated workflow for preview retention (R18a).
+    // Emitted alongside the CI workflow when generate-ci-workflow is enabled;
+    // never rides the smoke/contract CI template.
+    if (inputs.provider === 'github' || inputs.provider === 'unknown') {
+      const gcPath = '.github/workflows/postman-preview-gc.yml';
+      if (inputs.ciWorkflowPath.endsWith('.github/workflows/ci.yml') || inputs.ciWorkflowPath === '.github/workflows/ci.yml') {
+        ensureDir('.github/workflows');
+        writeFileSync(gcPath, renderGcWorkflowTemplate());
+      }
+    }
   }
 
   if (!dependencies.repoMutation || inputs.repoWriteMode === 'none') {
@@ -1249,11 +1441,14 @@ async function commitAndPushGeneratedFiles(
 
   const provisionPath = '.github/workflows/provision.yml';
   const provisionExists = inputs.provider === 'github' && existsSync(provisionPath);
+  const gcWorkflowPath = '.github/workflows/postman-preview-gc.yml';
+  const gcExists = inputs.generateCiWorkflow && existsSync(gcWorkflowPath);
 
   const stagePaths = [
     inputs.artifactDir,
     '.postman',
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
+    gcExists ? gcWorkflowPath : null,
     provisionExists ? provisionPath : null
   ].filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === provisionPath)) as string[];
 
@@ -1314,6 +1509,38 @@ async function runRepoSyncInner(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
+  // Branch-aware sync: the effective BranchDecision (inherited from bootstrap
+  // via POSTMAN_BRANCH_DECISION, or resolved locally; legacy under default
+  // inputs). Gated runs never reach here (runAction short-circuits), so the
+  // non-canonical tiers seen here are preview and channel.
+  const branchDecision = decideBranchTier(inputs);
+  assertBranchAssetIds(inputs, branchDecision);
+  const isCanonicalWriter = branchDecision.tier === 'legacy' || branchDecision.tier === 'canonical';
+  if (!isCanonicalWriter) {
+    // Preview/channel runs: branch-scoped asset names; no repo-link mutation;
+    // no canonical state write-back; no git push of generated state.
+    if (branchDecision.tier === 'preview' && branchDecision.identity.headBranch) {
+      inputs = {
+        ...inputs,
+        projectName: previewAssetName(inputs.projectName, branchDecision.identity.headBranch),
+        workspaceLinkEnabled: false,
+        environmentSyncEnabled: false,
+        repoWriteMode: 'none'
+      };
+    } else if (branchDecision.tier === 'channel' && branchDecision.channel) {
+      inputs = {
+        ...inputs,
+        projectName: channelAssetName(inputs.projectName, branchDecision.channel.code),
+        workspaceLinkEnabled: false,
+        environmentSyncEnabled: false,
+        repoWriteMode: 'none'
+      };
+    }
+    dependencies.core.info(
+      `branch-aware sync: ${branchDecision.tier} run — branch-scoped asset set "${inputs.projectName}", no workspace repo-link mutation, no state write-back`
+    );
+  }
+
   const outputs = createOutputs(inputs);
   const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
   const releaseLabel = deriveReleaseLabel(inputs);
@@ -1321,7 +1548,15 @@ async function runRepoSyncInner(
     throw new Error('release-label is required when collection-sync-mode or spec-sync-mode is version');
   }
   const assetProjectName = createAssetProjectName(inputs, releaseLabel);
-  const resourcesState = readResourcesState();
+  const trackedState = readResourcesState();
+  // State v2 (canonical-only): asset ids in tracked state belong to the
+  // canonical set; non-canonical runs may reuse the workspace id (shared
+  // infrastructure) but never canonical asset ids (ref-aware v1 migration).
+  const resourcesState = isCanonicalWriter
+    ? trackedState
+    : trackedState?.workspace
+      ? { workspace: trackedState.workspace }
+      : null;
 
   // .postman/ file fallback (works for all CI providers, not just GitHub)
   if (resourcesState) {
@@ -1354,7 +1589,8 @@ async function runRepoSyncInner(
     }
   }
 
-  const envUids = await upsertEnvironments(inputs, dependencies, resourcesState);
+  const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
+  const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
 
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -1431,11 +1667,26 @@ async function runRepoSyncInner(
       }
 
       if (!resolvedMockUrl) {
-        const mock = await dependencies.postman.createMock(
-          inputs.workspaceId,
-          mockName,
-          inputs.baselineCollectionId,
-          mockEnvUid
+        // Downstream mock create can ESOCKETTIMEDOUT under org load. Retry the
+        // whole create-or-adopt cycle: createMock re-discovers by identity first,
+        // so a POST that actually landed is adopted on retry, never duplicated.
+        const mock = await retry(
+          () => dependencies.postman.createMock(
+            inputs.workspaceId,
+            mockName,
+            inputs.baselineCollectionId,
+            mockEnvUid
+          ),
+          {
+            maxAttempts: 3,
+            delayMs: 2000,
+            backoffMultiplier: 2,
+            onRetry: ({ attempt, error }) => {
+              dependencies.core.warning(
+                `Mock create attempt ${attempt} failed (${error instanceof Error ? error.message : String(error)}); retrying`
+              );
+            }
+          }
         );
         resolvedMockUrl = mock.url;
         dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
@@ -1518,9 +1769,13 @@ async function runRepoSyncInner(
       );
     } catch (error) {
       outputs['workspace-link-status'] = 'failed';
-      dependencies.core.warning(
-        `Workspace link failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      const message = `Workspace link failed: ${error instanceof Error ? error.message : String(error)}`;
+      // A canonical non-legacy run is the finalize boundary: reporting success
+      // here would allow a later version tag to claim fully linked onboarding.
+      if (branchDecision.tier === 'canonical') {
+        throw new Error(message, { cause: error });
+      }
+      dependencies.core.warning(message);
     }
   }
 
@@ -1528,7 +1783,8 @@ async function runRepoSyncInner(
     workspaceLinkStatus: outputs['workspace-link-status'],
     priorWorkspaceId: resourcesState?.workspace?.id,
     existingSpecs: resourcesState?.cloudResources?.specs,
-    releaseLabel
+    releaseLabel,
+    priorState: resourcesState
   });
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
@@ -1537,6 +1793,51 @@ async function runRepoSyncInner(
     outputs['resolved-current-ref'] = commit.resolvedCurrentRef;
   }
   outputs['repo-sync-summary-json'] = createRepoSummary(outputs, envUids, commit.pushed);
+
+  // Publish the native Spec Hub tag only after all repo-sync responsibilities
+  // succeeded. A version tag therefore means full onboarding, not just upload.
+  if (
+    branchDecision.tier === 'canonical' &&
+    inputs.specId &&
+    inputs.specContentChanged !== false &&
+    dependencies.postman.tagSpecVersion
+  ) {
+    const shortSha = (branchDecision.identity.headSha ?? '').slice(0, 7);
+    const tagName = inputs.releaseLabel
+      ? `${inputs.releaseLabel}${shortSha ? ` (${shortSha})` : ''}`
+      : shortSha || `sync-${new Date().toISOString().slice(0, 10)}`;
+    try {
+      const tag = await dependencies.postman.tagSpecVersion(inputs.specId, tagName);
+      outputs['spec-version-tag'] = tag.name || tagName;
+      if (tag.id) {
+        outputs['spec-version-url'] = `https://web.postman.co/workspace/${encodeURIComponent(inputs.workspaceId)}/specification/${encodeURIComponent(inputs.specId)}?tagId=${encodeURIComponent(tag.id)}&versionLabel=${encodeURIComponent(tag.name || tagName)}`;
+      }
+      dependencies.core.info(`Tagged spec version at finalize: ${tag.name || tagName}`);
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status === 409) {
+        const tags = await dependencies.postman.listSpecVersionTags?.(inputs.specId).catch(() => []) ?? [];
+        const latest = tags[0];
+        if (latest && (latest.name === tagName || /\([0-9a-f]{7}\)$/.test(latest.name) || /^[0-9a-f]{7}$/.test(latest.name))) {
+          outputs['spec-version-tag'] = latest.name;
+          outputs['spec-version-url'] = `https://web.postman.co/workspace/${encodeURIComponent(inputs.workspaceId)}/specification/${encodeURIComponent(inputs.specId)}?tagId=${encodeURIComponent(latest.id)}&versionLabel=${encodeURIComponent(latest.name)}`;
+          dependencies.core.info(`Latest changelog group already tagged as "${latest.name}"; adopting.`);
+        } else {
+          dependencies.core.warning('Latest changelog group already carries a hand-applied tag; leaving it in place.');
+        }
+      } else {
+        dependencies.core.warning(`Spec version tagging failed (non-fatal): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  // Branch-aware sync: surface the run's BranchDecision (inherited from
+  // bootstrap via POSTMAN_BRANCH_DECISION or resolved locally) on executed runs.
+  if (inputs.branchStrategy !== 'legacy' || process.env[BRANCH_DECISION_ENV]) {
+    const decision = decideBranchTier(inputs);
+    outputs['sync-status'] = 'synced';
+    outputs['branch-decision'] = serializeBranchDecision(decision);
+  }
 
   for (const [name, value] of Object.entries(outputs)) {
     dependencies.core.setOutput(name, value);
@@ -1807,7 +2108,19 @@ export function createRepoSyncDependencies(
     listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
     monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
     findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
-    runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets)
+    runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets),
+    listEnvironments: gatewayAssets.listEnvironments.bind(gatewayAssets),
+    // GC path (preview/channel retention machine — lib/repo/preview-gc.ts).
+    deleteEnvironment: gatewayAssets.deleteEnvironment.bind(gatewayAssets),
+    deleteMock: gatewayAssets.deleteMock.bind(gatewayAssets),
+    deleteMonitor: gatewayAssets.deleteMonitor.bind(gatewayAssets),
+    deleteCollection: gatewayAssets.deleteCollection.bind(gatewayAssets),
+    listSpecifications: gatewayAssets.listSpecifications.bind(gatewayAssets),
+    getSpecContent: gatewayAssets.getSpecContent.bind(gatewayAssets),
+    listSpecCollections: gatewayAssets.listSpecCollections.bind(gatewayAssets),
+    deleteSpec: gatewayAssets.deleteSpec.bind(gatewayAssets),
+    tagSpecVersion: gatewayAssets.tagSpecVersion.bind(gatewayAssets),
+    listSpecVersionTags: gatewayAssets.listSpecVersionTags.bind(gatewayAssets)
   };
 
   const repoMutation =
@@ -1852,11 +2165,71 @@ export function createRepoSyncDependencies(
   };
 }
 
+/**
+ * Resolve the run's immutable BranchDecision BEFORE any credential is
+ * validated or minted (decide step of decide -> execute -> finalize). An
+ * inherited POSTMAN_BRANCH_DECISION env decision (exported by bootstrap) wins
+ * so one decision spans bootstrap, repo-sync, smoke-flow, and insights within
+ * a single run.
+ */
+export function decideBranchTier(
+  inputs: Pick<ResolvedInputs, 'branchStrategy' | 'canonicalBranch' | 'channels'>,
+  env: NodeJS.ProcessEnv = process.env
+): BranchDecision {
+  return resolveEffectiveBranchDecision(
+    {
+      strategy: inputs.branchStrategy,
+      identity: resolveBranchIdentity(env, { defaultBranch: inputs.canonicalBranch }),
+      canonicalBranch: inputs.canonicalBranch,
+      channels: parseChannelRules(inputs.channels)
+    },
+    env
+  );
+}
+
+/**
+ * Gated tier (publish-gate / fork-PR / tag): repo-sync writes canonical
+ * artifacts (collections export, envs, mocks, monitors, workspace link, git
+ * push), so a gated run skips the entire sync. No token is minted and no
+ * Postman API is called: zero writes by construction.
+ */
+export function runGatedSkip(
+  inputs: ResolvedInputs,
+  decision: BranchDecision,
+  actionCore: Pick<CoreLike, 'info' | 'setOutput'>
+): RepoSyncOutputs {
+  actionCore.info(
+    `branch-aware sync: gated run (${decision.reason}) — repo-sync skipped, zero workspace writes`
+  );
+  const outputs = createOutputs(inputs);
+  outputs['sync-status'] = 'skipped-branch-gate';
+  outputs['branch-decision'] = serializeBranchDecision(decision);
+  outputs['repo-sync-summary-json'] = JSON.stringify({
+    status: 'skipped-branch-gate',
+    reason: decision.reason
+  });
+  for (const [name, value] of Object.entries(outputs)) {
+    actionCore.setOutput(name, value);
+  }
+  return outputs;
+}
+
 export async function runAction(
   actionCore: CoreLike = core,
   actionExec: ExecLike = exec
 ): Promise<RepoSyncOutputs> {
   const inputs = readActionInputs(actionCore);
+
+  // Decide step (branch-aware sync): resolve the immutable BranchDecision from
+  // provider CI env BEFORE any credential validation or token mint.
+  const branchDecision = decideBranchTier(inputs);
+  if (branchDecision.tier === 'gated') {
+    return runGatedSkip(inputs, branchDecision, actionCore);
+  }
+  if (branchDecision.tier !== 'legacy') {
+    actionCore.info(`branch-aware sync: tier=${branchDecision.tier} (${branchDecision.reason})`);
+    process.env[BRANCH_DECISION_ENV] = serializeBranchDecision(branchDecision);
+  }
 
   // PMAK-only runs: eagerly mint the short-lived access token from the service
   // -account PMAK so the whole access-token surface (credential preflight,

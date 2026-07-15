@@ -161,6 +161,10 @@ with:
 | `postman-access-token` | Postman access token minted by postman-resolve-service-token-action. Required for all asset operations (environment create/get/update, collection read, mock, monitor) which run through the access-token gateway. Also used for workspace linking, system environment association, and generated API-key creation. When omitted, the action mints one from postman-api-key (service-account PMAK); if that mint also fails the action fails fast — PMAK is never an asset-routing fallback. | no |  |
 | `team-id` | Postman team ID resolved by postman-resolve-service-token-action. Primary team scope for all downstream actions; included as x-entity-team-id in org-mode Bifrost calls. Falls back to POSTMAN_TEAM_ID when omitted. Set explicitly for org-mode teams. | no | `""` |
 | `credential-preflight` | Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token. | no | `warn` |
+| `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
+| `canonical-branch` | Explicit canonical branch (the sole writer of canonical assets and tracked state). Defaults to the provider-resolved default branch; required on providers without a default-branch variable (Bitbucket, Azure DevOps) when branch-strategy is not legacy. | no |  |
+| `channels` | Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets. | no |  |
+| `preview-ttl` | Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks). | no | `30` |
 | `github-token` | GitHub token used for repo variable persistence and commits. | no |  |
 | `gh-fallback-token` | Fallback token for repository variable APIs and workflow-file pushes. | no |  |
 | `org-mode` | Whether the Postman team uses org-mode. When true, x-entity-team-id is included in Postman integration API calls. Non-org teams must omit this header. | no | `false` |
@@ -170,6 +174,7 @@ with:
 | `ssl-client-passphrase` | Optional passphrase for encrypted ssl-client-key. | no |  |
 | `ssl-extra-ca-certs` | Optional base64-encoded PEM CA certificate bundle for custom trust. | no |  |
 | `spec-id` | Spec Hub UID emitted by bootstrap's spec-id output. When set, it is persisted into .postman/resources.yaml cloudResources so later runs and the generated CI workflow can resolve the spec without re-discovery. | no |  |
+| `spec-content-changed` | Whether bootstrap changed canonical spec content. Native Spec Hub tag publication is skipped on no-op syncs. | no | `true` |
 | `spec-path` | Optional repo-root-relative path to the local OpenAPI file. Recorded in .postman/resources.yaml and .postman/workflows.yaml metadata so the committed artifacts point back at the spec source in this repository; the file itself is not uploaded by this action. | no |  |
 | `postman-region` | Postman data residency region for public API and Postman CLI calls. One of: us or eu. | no | `us` |
 <!-- inputs-table:end -->
@@ -187,6 +192,10 @@ with:
 | `monitor-id` | Created or reused smoke monitor ID. |
 | `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
 | `commit-sha` | Commit SHA produced by repo-write-mode, if any. |
+| `sync-status` | Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy. |
+| `branch-decision` | Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION). |
+| `spec-version-tag` | Native Spec Hub version tag created after successful canonical repo-sync finalization. |
+| `spec-version-url` | Read-only URL for the tagged Spec Hub snapshot. |
 <!-- outputs-table:end -->
 
 ## How it works

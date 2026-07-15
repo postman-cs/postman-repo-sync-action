@@ -61,6 +61,10 @@ describe('postman-repo-sync-action contract', () => {
       'postman-access-token',
       'team-id',
       'credential-preflight',
+      'branch-strategy',
+      'canonical-branch',
+      'channels',
+      'preview-ttl',
       'github-token',
       'gh-fallback-token',
       'org-mode',
@@ -68,9 +72,10 @@ describe('postman-repo-sync-action contract', () => {
       'ssl-client-cert',
       'ssl-client-key',
       'ssl-client-passphrase',
-      'ssl-extra-ca-certs',
-      'spec-id',
-      'spec-path',
+        'ssl-extra-ca-certs',
+        'spec-id',
+        'spec-content-changed',
+        'spec-path',
       'postman-region',
       'postman-stack'
     ]);
@@ -84,7 +89,11 @@ describe('postman-repo-sync-action contract', () => {
       'mock-url',
       'monitor-id',
       'repo-sync-summary-json',
-      'commit-sha'
+      'commit-sha',
+      'sync-status',
+      'branch-decision',
+      'spec-version-tag',
+      'spec-version-url'
     ]);
   });
 
@@ -211,7 +220,9 @@ describe('postman-repo-sync-action contract', () => {
     expect(readme).toContain('[Security](SECURITY.md)');
     expect(readme).toContain('[Support](SUPPORT.md)');
     expect(readme).toContain('[Release policy](RELEASE_POLICY.md)');
-    expect(readme).not.toMatch(/preview/i);
+    // "preview" is a shipped branch-strategy mode (branch-aware sync); only
+    // pre-release phrasing stays banned from marketplace docs.
+    expect(readme).not.toMatch(/preview feature|public preview|private preview|in preview/i);
     expect(publicDocs).not.toMatch(/\binternal\b/i);
 
     expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v1');

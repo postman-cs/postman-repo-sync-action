@@ -221,6 +221,29 @@ export const postmanRepoSyncActionContract: {
       default: 'warn',
       allowedValues: ['enforce', 'warn']
     },
+    'branch-strategy': {
+      description:
+        'Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets.',
+      required: false,
+      default: 'legacy',
+      allowedValues: ['legacy', 'preview', 'publish-gate']
+    },
+    'canonical-branch': {
+      description:
+        'Explicit canonical branch (the sole writer of canonical assets and tracked state). Defaults to the provider-resolved default branch; required on providers without a default-branch variable (Bitbucket, Azure DevOps) when branch-strategy is not legacy.',
+      required: false
+    },
+    'channels': {
+      description:
+        'Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets.',
+      required: false
+    },
+    'preview-ttl': {
+      description:
+        'Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks).',
+      required: false,
+      default: '30'
+    },
     'github-token': {
       description: 'GitHub token used for repo variable persistence and commits.',
       required: false
@@ -257,6 +280,11 @@ export const postmanRepoSyncActionContract: {
     'spec-id': {
       description: 'Spec UID from bootstrap, persisted into .postman/resources.yaml cloudResources.',
       required: false
+    },
+    'spec-content-changed': {
+      description: 'Whether bootstrap changed canonical spec content; controls final native Spec Hub tag publication.',
+      required: false,
+      default: 'true'
     },
     'spec-path': {
       description: 'Optional repo-root-relative path to the local spec file for resources/workflows metadata.',
@@ -302,6 +330,18 @@ export const postmanRepoSyncActionContract: {
     },
     'commit-sha': {
       description: 'Commit SHA produced by repo-write-mode, if any.'
+    },
+    'sync-status': {
+      description: 'Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy.'
+    },
+    'branch-decision': {
+      description: 'Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION).'
+    },
+    'spec-version-tag': {
+      description: 'Native Spec Hub version tag created after successful canonical repo-sync finalization.'
+    },
+    'spec-version-url': {
+      description: 'Read-only URL for the tagged Spec Hub snapshot.'
     }
   },
   behavior: {
