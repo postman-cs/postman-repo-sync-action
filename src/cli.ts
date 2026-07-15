@@ -90,6 +90,7 @@ const CLI_INPUT_NAMES = [
   'branch-strategy',
   'canonical-branch',
   'channels',
+  'sections',
   'preview-ttl'
 ] as const;
 

@@ -68,6 +68,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanAccessToken: 'postman-access-token',
     credentialPreflight: 'warn',
     branchStrategy: 'legacy',
+    sections: 'off',
   previewTtlDays: 30,
     adoToken: '',
     githubToken: 'github-token',

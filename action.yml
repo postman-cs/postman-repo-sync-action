@@ -132,6 +132,10 @@ inputs:
   channels:
     description: 'Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets.'
     required: false
+  sections:
+    description: 'Cosmetic workspace Sections (panels). off (default) no-op. auto groups this run''s assets into Canonical / Channel CODE / Previews shelves. Fail-open; never fails sync.'
+    required: false
+    default: off
   preview-ttl:
     description: Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks).
     required: false

@@ -238,6 +238,13 @@ export const postmanRepoSyncActionContract: {
         'Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets.',
       required: false
     },
+    'sections': {
+      description:
+        'Cosmetic workspace Sections (panels) grouping. off (default) does nothing. auto creates/maintains one section per branch tier and moves only assets this run minted. Panel API errors never fail the sync.',
+      required: false,
+      default: 'off',
+      allowedValues: ['auto', 'off']
+    },
     'preview-ttl': {
       description:
         'Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks).',
