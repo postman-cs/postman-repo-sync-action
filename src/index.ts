@@ -186,7 +186,7 @@ export interface RepoSyncDependencies {
     | 'deleteEnvironment'
     | 'deleteMock'
     | 'deleteMonitor'
-  > & Partial<Pick<PostmanGatewayAssetsClient, 'tagSpecVersion' | 'listSpecVersionTags'>>;
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'deleteCollection' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -2062,6 +2062,7 @@ export function createRepoSyncDependencies(
     deleteEnvironment: gatewayAssets.deleteEnvironment.bind(gatewayAssets),
     deleteMock: gatewayAssets.deleteMock.bind(gatewayAssets),
     deleteMonitor: gatewayAssets.deleteMonitor.bind(gatewayAssets),
+    deleteCollection: gatewayAssets.deleteCollection.bind(gatewayAssets),
     tagSpecVersion: gatewayAssets.tagSpecVersion.bind(gatewayAssets),
     listSpecVersionTags: gatewayAssets.listSpecVersionTags.bind(gatewayAssets)
   };

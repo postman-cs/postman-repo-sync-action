@@ -52,6 +52,7 @@ function client(overrides: Partial<GcPostmanClient> = {}): GcPostmanClient {
     deleteEnvironment: vi.fn().mockResolvedValue(undefined),
     deleteMock: vi.fn().mockResolvedValue(undefined),
     deleteMonitor: vi.fn().mockResolvedValue(undefined),
+    deleteCollection: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
 }
@@ -81,7 +82,7 @@ describe('inventoryRemoteBranches', () => {
 describe('collectGcCandidates', () => {
   it('only generated-name shapes become candidates; canonical assets are invisible to GC', async () => {
     const candidates = await collectGcCandidates(client(), 'ws-1');
-    expect(candidates.map((c) => c.uid)).toEqual(['env-preview', 'mock-preview', 'mon-preview']);
+    expect(candidates.map((c) => c.uid)).toEqual(['env-preview', 'mock-preview', 'mon-preview', 'col-1']);
   });
 
   it('mocks and monitors inherit the marker from their preview environment', async () => {
@@ -101,7 +102,8 @@ describe('runGc', () => {
     expect(postman.deleteEnvironment).toHaveBeenCalledWith('env-preview');
     expect(postman.deleteMock).toHaveBeenCalledWith('mock-preview');
     expect(postman.deleteMonitor).toHaveBeenCalledWith('mon-preview');
-    expect(summary.counts.delete).toBe(3);
+    expect(postman.deleteCollection).toHaveBeenCalledWith('col-1');
+    expect(summary.counts.delete).toBe(4);
     expect(summary.degraded).toBe(false);
   });
 
@@ -116,7 +118,7 @@ describe('runGc', () => {
     };
     const summary = await runGc({ workspaceId: 'ws-1', repo: REPO, postman, exec });
     expect(postman.deleteEnvironment).not.toHaveBeenCalled();
-    expect(summary.counts.retain).toBe(3);
+    expect(summary.counts.retain).toBe(4);
   });
 
   it('degraded (no git credential): probes skipped, TTL-expired assets still deleted', async () => {
@@ -150,7 +152,7 @@ describe('runGc', () => {
       onlyBranch: 'feature/payments'
     });
     expect(exec.getExecOutput).not.toHaveBeenCalled();
-    expect(summary.counts.delete).toBe(3);
+    expect(summary.counts.delete).toBe(4);
   });
 
   it('dry run decides but deletes nothing', async () => {
@@ -165,7 +167,7 @@ describe('runGc', () => {
       dryRun: true
     });
     expect(postman.deleteEnvironment).not.toHaveBeenCalled();
-    expect(summary.counts.delete).toBe(3);
+    expect(summary.counts.delete).toBe(4);
   });
 
   it('stranger assets from another repo are never deleted', async () => {

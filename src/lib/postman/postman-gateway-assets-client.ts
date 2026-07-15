@@ -103,6 +103,13 @@ export class PostmanGatewayAssetsClient {
       .filter((entry) => entry.id || entry.name);
   }
 
+  async deleteCollection(collectionUid: string): Promise<void> {
+    const bareId = String(collectionUid).split('-').slice(-5).join('-') || collectionUid;
+    await this.gateway.requestJson<JsonRecord>({
+      service: 'collection', method: 'delete', path: `/v3/collections/${bareId}`
+    });
+  }
+
   private idOf(record: JsonRecord | null): string {
     if (!record) return '';
     const id = record.uid ?? record.id;

@@ -35,6 +35,7 @@ export interface GcPostmanClient {
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
+  deleteCollection(uid: string): Promise<void>;
 }
 
 export interface GcRunOptions {
@@ -135,6 +136,22 @@ export async function collectGcCandidates(
     candidates.push({ kind: 'monitor', uid: monitor.uid, name: monitor.name, marker: envMatch?.marker });
   }
 
+  // Mocks and monitors refer to the generated baseline/smoke collections. They
+  // do not expose a durable description field, so inherit the proven marker
+  // from their branch-scoped environment and collect each owned collection once.
+  const ownedCollections = new Map<string, { name: string; marker?: AssetMarker }>();
+  for (const mock of mocks) {
+    const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === mock.environment)?.marker;
+    if (marker && mock.collection) ownedCollections.set(mock.collection, { name: `${mock.name} collection`, marker });
+  }
+  for (const monitor of monitors) {
+    const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === monitor.environmentUid)?.marker;
+    if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { name: `${monitor.name} collection`, marker });
+  }
+  for (const [uid, collection] of ownedCollections) {
+    candidates.push({ kind: 'collection', uid, name: collection.name, marker: collection.marker });
+  }
+
   return candidates;
 }
 
@@ -169,7 +186,8 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
     deleters: {
       environment: (uid) => options.postman.deleteEnvironment(uid),
       mock: (uid) => options.postman.deleteMock(uid),
-      monitor: (uid) => options.postman.deleteMonitor(uid)
+      monitor: (uid) => options.postman.deleteMonitor(uid),
+      collection: (uid) => options.postman.deleteCollection(uid)
     },
     degraded,
     dryRun: options.dryRun,

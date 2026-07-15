@@ -563,11 +563,14 @@ async function runGcCommand(
     { persistGeneratedApiKeySecret: false, env }
   );
   const dependencies = createCliDependencies(inputs, resolved);
+  if (!dependencies.postman.deleteCollection) {
+    throw new Error('gc requires a collection deletion client; this runtime is missing the branch-aware GC capability.');
+  }
 
   const summary = await runGc({
     workspaceId: inputs.workspaceId,
     repo,
-    postman: dependencies.postman,
+    postman: { ...dependencies.postman, deleteCollection: dependencies.postman.deleteCollection },
     exec: createCliExec(initialMasker),
     onlyBranch,
     allPreviews,
