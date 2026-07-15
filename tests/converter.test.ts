@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -166,5 +166,41 @@ describe('convertAndSplitAnyCollection (auto-detect)', () => {
       dir
     );
     expect(existsSync(join(dir, '.resources', 'definition.yaml'))).toBe(true);
+  });
+});
+
+describe('stale artifact removal on re-sync', () => {
+  it('deletes files that existed before but are not re-emitted by the current write', async () => {
+    const dir = freshDir();
+    await convertAndSplitCollection(v2Collection, dir);
+    const first = walk(dir);
+    expect(first.some((f) => f.endsWith('Get thing.request.yaml'))).toBe(true);
+
+    // Second sync: upstream dropped 'Folder A' (and its 'Get thing' request).
+    const shrunk = {
+      ...v2Collection,
+      item: (v2Collection.item as Array<Record<string, unknown>>).filter(
+        (i) => i.name !== 'Folder A'
+      )
+    };
+    await convertAndSplitCollection(shrunk, dir);
+
+    const after = walk(dir);
+    // The removed request's yaml must be gone — the on-disk tree is a mirror,
+    // not an additive union.
+    expect(after.some((f) => f.endsWith('Get thing.request.yaml'))).toBe(false);
+    // The surviving request is still present.
+    expect(after.some((f) => f.endsWith('Create thing.request.yaml'))).toBe(true);
+    // The now-empty 'Folder A' directory is pruned.
+    expect(after.some((f) => f.includes(`${sep}Folder A${sep}`))).toBe(false);
+  });
+
+  it('leaves the tree untouched when the same collection is written twice', async () => {
+    const dir = freshDir();
+    await convertAndSplitCollection(v2Collection, dir);
+    const first = walk(dir).sort();
+    await convertAndSplitCollection(v2Collection, dir);
+    const second = walk(dir).sort();
+    expect(second).toEqual(first);
   });
 });

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import * as V2 from '@postman/runtime.models/v2';
 import { transform, FormatVersion } from '@postman/runtime.models/transforms';
@@ -161,10 +162,64 @@ function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/**
+ * Recursively list every file (posix-relative to `base`) under `dir`.
+ */
+async function listFilesRelative(dir: string, base: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...(await listFilesRelative(abs, base)));
+    } else if (entry.isFile()) {
+      out.push(path.relative(base, abs).split(path.sep).join('/'));
+    }
+  }
+  return out;
+}
+
+/**
+ * Remove now-empty directories under `dir` bottom-up (leaves `dir` itself in
+ * place). Best-effort: a non-empty directory rejects and is skipped.
+ */
+async function pruneEmptyDirs(dir: string): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const child = path.join(dir, entry.name);
+      await pruneEmptyDirs(child);
+      try {
+        await fs.rmdir(child);
+      } catch {
+        // not empty — keep it
+      }
+    }
+  }
+}
+
 async function writeSplitCollection(v3: never, outputDir: string): Promise<void> {
   const { files, rootPath } = await splitCollection(v3);
 
   await fs.mkdir(outputDir, { recursive: true });
+
+  // Files that existed before this write. Any not re-emitted below is a stale
+  // artifact of a prior sync (a request/folder removed upstream) and must be
+  // deleted so the on-disk tree is an exact mirror of the current collection —
+  // an additive-only write would leave orphaned yaml behind.
+  const preexisting = new Set(await listFilesRelative(outputDir, outputDir));
+
+  const written = new Set<string>();
   for (const file of files) {
     let rel = file.path;
     if (rootPath && rel.startsWith(rootPath)) {
@@ -175,5 +230,12 @@ async function writeSplitCollection(v3: never, outputDir: string): Promise<void>
     const dest = path.join(outputDir, rel);
     await fs.mkdir(path.dirname(dest), { recursive: true });
     await fs.writeFile(dest, file.content, 'utf8');
+    written.add(rel.split(path.sep).join('/'));
   }
+
+  for (const rel of preexisting) {
+    if (written.has(rel)) continue;
+    await fs.rm(path.join(outputDir, rel), { force: true });
+  }
+  await pruneEmptyDirs(outputDir);
 }
