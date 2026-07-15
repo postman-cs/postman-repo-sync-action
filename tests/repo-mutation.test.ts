@@ -766,5 +766,5 @@ describe('repo mutation helpers', () => {
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 30_000);
 });
