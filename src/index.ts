@@ -492,6 +492,26 @@ export function buildBranchAssetMarker(
   };
 }
 
+/** Reject canonical collection IDs on standalone preview/channel runs. */
+export function assertBranchAssetIds(
+  inputs: Pick<ResolvedInputs, 'baselineCollectionId' | 'smokeCollectionId' | 'contractCollectionId'>,
+  decision: BranchDecision,
+  branchOwnedIds = process.env.POSTMAN_BRANCH_ASSET_IDS === 'owned'
+): void {
+  if (decision.tier === 'legacy' || decision.tier === 'canonical' || branchOwnedIds) return;
+  const provided = [
+    ['baseline-collection-id', inputs.baselineCollectionId],
+    ['smoke-collection-id', inputs.smokeCollectionId],
+    ['contract-collection-id', inputs.contractCollectionId]
+  ].filter(([, value]) => Boolean(value));
+  if (provided.length > 0) {
+    throw new Error(
+      `CONTRACT_BRANCH_CANONICAL_WRITE: a ${decision.tier} repo-sync run cannot accept explicit collection IDs (${provided.map(([name]) => name).join(', ')}). ` +
+      'Run bootstrap in the same branch-aware pipeline so it can produce branch-owned IDs.'
+    );
+  }
+}
+
 function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentValues {
   return [
     { key: 'baseUrl', value: baseUrl, type: 'default' },
@@ -1493,6 +1513,7 @@ async function runRepoSyncInner(
   // inputs). Gated runs never reach here (runAction short-circuits), so the
   // non-canonical tiers seen here are preview and channel.
   const branchDecision = decideBranchTier(inputs);
+  assertBranchAssetIds(inputs, branchDecision);
   const isCanonicalWriter = branchDecision.tier === 'legacy' || branchDecision.tier === 'canonical';
   if (!isCanonicalWriter) {
     // Preview/channel runs: branch-scoped asset names; no repo-link mutation;

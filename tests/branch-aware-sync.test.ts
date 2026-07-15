@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dump as dumpYaml } from 'js-yaml';
 
-import { decideBranchTier, runGatedSkip, resolveInputs } from '../src/index.js';
+import { assertBranchAssetIds, decideBranchTier, runGatedSkip, resolveInputs } from '../src/index.js';
 import { BRANCH_DECISION_ENV } from '../src/lib/repo/branch-decision.js';
 
 let originalCwd = '';
@@ -100,6 +100,24 @@ describe('repo-sync gated skip', () => {
     expect(setOutput).toHaveBeenCalledWith('sync-status', 'skipped-branch-gate');
     // Zero writes by construction: nothing hit the filesystem beyond outputs.
     expect(outputs['commit-sha']).toBe('');
+  });
+});
+
+describe('repo-sync canonical asset guard', () => {
+  it('refuses explicit collection IDs on a standalone preview run', () => {
+    const env = githubBranchEnv({ INPUT_BRANCH_STRATEGY: 'preview' });
+    const inputs = resolveInputs(env);
+    const decision = decideBranchTier(inputs, env);
+    expect(decision.tier).toBe('preview');
+    expect(() => assertBranchAssetIds({ baselineCollectionId: 'canonical-col', smokeCollectionId: '', contractCollectionId: '' }, decision, false))
+      .toThrow(/CONTRACT_BRANCH_CANONICAL_WRITE/);
+  });
+
+  it('allows branch-owned IDs handed off by the composite', () => {
+    const env = githubBranchEnv({ INPUT_BRANCH_STRATEGY: 'preview' });
+    const decision = decideBranchTier(resolveInputs(env), env);
+    expect(() => assertBranchAssetIds({ baselineCollectionId: 'preview-col', smokeCollectionId: '', contractCollectionId: '' }, decision, true))
+      .not.toThrow();
   });
 });
 
