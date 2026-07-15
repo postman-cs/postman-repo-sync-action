@@ -99,7 +99,11 @@ export class PostmanGatewayAssetsClient {
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
       .filter((entry): entry is JsonRecord => entry !== null)
-      .map((entry) => ({ id: String(entry.id ?? '').trim(), name: String(entry.name ?? '').trim() }))
+      .map((entry) => ({
+        id: String(entry.id ?? '').trim(),
+        // listTags returns `message`; createTag returns `name`. Accept both.
+        name: String(entry.name ?? entry.message ?? '').trim()
+      }))
       .filter((entry) => entry.id || entry.name);
   }
 
@@ -491,7 +495,9 @@ export class PostmanGatewayAssetsClient {
             path: `/mocks?workspace=${ws}`,
             body
           },
-          { retryTransient: false }
+          // Downstream mock create can ESOCKETTIMEDOUT under org load; adopt on
+          // ambiguous success so a retried POST never leaves a silent duplicate.
+          { retryTransient: true }
         );
         const record = this.dataOf(response);
         const uid = this.idOf(record);
