@@ -980,6 +980,74 @@ describe('state ownership persistence', () => {
     expect(resources.workspace?.id).toBe('ws-123');
   });
 
+  it('warns when system-env-map-json is empty so Catalog filters do not look like a missing link', async () => {
+    const { core, warnings, infos } = createCoreStub();
+    const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: true,
+        systemEnvMap: {}
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments,
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(result['environment-sync-status']).toBe('skipped');
+    expect(result['workspace-link-status']).toBe('success');
+    expect(associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(warnings.some((message) => message.includes('system-env-map-json is empty'))).toBe(
+      true
+    );
+    expect(
+      warnings.some((message) => message.includes('Catalog system-environment filters'))
+    ).toBe(true);
+    expect(
+      infos.some((message) =>
+        message.includes('workspace-link-status=success workspace-id=ws-123')
+      )
+    ).toBe(true);
+  });
+
+  it('warns when system-env-map-json keys do not match synced environments', async () => {
+    const { core, warnings } = createCoreStub();
+    const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: true,
+        systemEnvMap: { staging: 'sys-staging' }
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments,
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(
+      warnings.some(
+        (message) =>
+          message.includes('system-env-map-json keys (staging)') &&
+          message.includes('did not match any synced environment (prod)')
+      )
+    ).toBe(true);
+  });
+
   it('omits workspace.id on failed link with no prior durable id while still writing artifact maps', async () => {
     const result = await runRepoSync(
       createInputs({

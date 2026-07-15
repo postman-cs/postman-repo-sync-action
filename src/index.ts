@@ -1378,6 +1378,28 @@ async function runRepoSyncInner(
           }`
         );
       }
+    } else if (Object.keys(envUids).length > 0) {
+      // Catalog indexes the git filesystem link without system-env associations, but the
+      // Catalog UI system-environment filter (Prod/Stage/Dev) hides services that have no
+      // mapping — operators then report "not in catalog" even when the link succeeded.
+      const configuredKeys = Object.keys(inputs.systemEnvMap).filter((key) =>
+        Boolean(String(inputs.systemEnvMap[key] ?? '').trim())
+      );
+      if (configuredKeys.length === 0) {
+        dependencies.core.warning(
+          'system-env-map-json is empty while environment-sync-enabled is true. ' +
+            'Workspace↔git linking still registers the service in API Catalog, but Catalog ' +
+            'system-environment filters (Prod/Stage/Dev) hide services until Postman environments ' +
+            'are associated. Pass system-env-map-json like {"prod":"<system-env-uuid>"} or clear ' +
+            'the Catalog system-environment filter to see the service.'
+        );
+      } else {
+        dependencies.core.warning(
+          `system-env-map-json keys (${configuredKeys.join(', ')}) did not match any synced ` +
+            `environment (${Object.keys(envUids).join(', ')}). No system-environment associations ` +
+            'were made; Catalog system-environment filters may hide this service.'
+        );
+      }
     }
   }
 
@@ -1491,6 +1513,9 @@ async function runRepoSyncInner(
         inputs.repoUrl
       );
       outputs['workspace-link-status'] = 'success';
+      dependencies.core.info(
+        `workspace-link-status=success workspace-id=${inputs.workspaceId} repo=${inputs.repoUrl}`
+      );
     } catch (error) {
       outputs['workspace-link-status'] = 'failed';
       dependencies.core.warning(
