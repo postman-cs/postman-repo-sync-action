@@ -31,6 +31,7 @@ type ResourcesYamlShape = {
   };
   canonical?: {
     collections?: Record<string, string>;
+    additionalCollections?: Record<string, string>;
     environments?: Record<string, string>;
     specs?: Record<string, string>;
   };
@@ -558,6 +559,82 @@ describe('repo sync action', () => {
       '../postman/collections/core-payments': 'col-baseline-existing',
       '../postman/collections/[Smoke] core-payments': 'col-smoke-existing',
       '../postman/collections/[Contract] core-payments': 'col-contract-existing'
+    });
+  });
+
+  it('preserves bootstrap-owned additional collection ids when writing resources.yaml', async () => {
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      `version: 2
+workspace:
+  id: ws-123
+canonical:
+  additionalCollections:
+    ../postman/additional-collections/imported-baseline.postman_collection.json: col-imported-baseline
+    ../postman/additional-collections/imported-tested.postman_collection.json: col-imported-tested
+`
+    );
+
+    const postman = {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi
+        .fn()
+        .mockResolvedValueOnce(createCollectionFixture('core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+        .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        collectionSyncMode: 'refresh'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    const resourcesYaml = loadYaml(
+      readFileSync('.postman/resources.yaml', 'utf8')
+    ) as ResourcesYamlShape;
+
+    expect(resourcesYaml.canonical?.additionalCollections).toEqual({
+      '../postman/additional-collections/imported-baseline.postman_collection.json': 'col-imported-baseline',
+      '../postman/additional-collections/imported-tested.postman_collection.json': 'col-imported-tested'
     });
   });
 

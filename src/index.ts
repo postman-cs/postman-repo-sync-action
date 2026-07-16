@@ -538,11 +538,13 @@ type PostmanResourcesState = {
   localResources?: Record<string, string[]>;
   cloudResources?: {
     collections?: CloudResourceMap;
+    additionalCollections?: CloudResourceMap;
     environments?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
   canonical?: {
     collections?: CloudResourceMap;
+    additionalCollections?: CloudResourceMap;
     environments?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
@@ -1149,6 +1151,13 @@ function buildResourcesManifest(
   const collectionKeys = Object.keys(collectionMap);
   if (collectionKeys.length > 0) {
     cloudResources.collections = collectionMap;
+  }
+
+  // Additional collections are created by bootstrap. Repo-sync rewrites this
+  // manifest, so it must carry those bootstrap-owned IDs forward unchanged.
+  const additionalCollections = priorState?.cloudResources?.additionalCollections;
+  if (additionalCollections && Object.keys(additionalCollections).length > 0) {
+    cloudResources.additionalCollections = { ...additionalCollections };
   }
 
   // Environments
