@@ -4,6 +4,9 @@ export type PostmanRegion = 'us' | 'eu';
 export interface PostmanEndpointProfile {
   apiBaseUrl: string;
   bifrostBaseUrl: string;
+  /** App `/_api` alias of the Bifrost proxy: cold serial fallback when the
+   * primary budget is exhausted on a transient failure. */
+  fallbackBaseUrl: string;
   cliInstallUrl: string;
   iapubBaseUrl: string;
 }
@@ -12,12 +15,14 @@ export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProf
   prod: {
     apiBaseUrl: 'https://api.getpostman.com',
     bifrostBaseUrl: 'https://bifrost-premium-https-v4.gw.postman.com',
+    fallbackBaseUrl: 'https://go.postman.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
     iapubBaseUrl: 'https://iapub.postman.co'
   },
   beta: {
     apiBaseUrl: 'https://api.getpostman-beta.com',
     bifrostBaseUrl: 'https://bifrost-https-v4.gw.postman-beta.com',
+    fallbackBaseUrl: 'https://go.postman-beta.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn-beta.io/install/unix.sh',
     iapubBaseUrl: 'https://iapub.postman.co'
   }

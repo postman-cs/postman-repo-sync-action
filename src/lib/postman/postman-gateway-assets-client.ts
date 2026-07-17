@@ -232,10 +232,18 @@ export class PostmanGatewayAssetsClient {
     return pending;
   }
 
+  /**
+   * Reconcile an ambiguous create. Returns the adopted match, `undefined`
+   * when every discovery read succeeded and found nothing (the create is
+   * conclusively absent, so a fallback resend cannot duplicate), or `null`
+   * when the outcome is inconclusive (non-ambiguous error, or a discovery
+   * read itself failed — in that case a resend could duplicate a committed
+   * twin and must not fire).
+   */
   private async discoverAfterAmbiguousCreate<T>(
     discover: () => Promise<T | null>,
     error: unknown
-  ): Promise<T | null> {
+  ): Promise<T | null | undefined> {
     if (!this.isAmbiguousCreateOutcome(error)) {
       return null;
     }
@@ -243,12 +251,32 @@ export class PostmanGatewayAssetsClient {
       if (attempt > 0) {
         await this.sleep(this.reconcileDelayMs);
       }
-      const found = await discover();
+      let found: T | null;
+      try {
+        found = await discover();
+      } catch {
+        return null;
+      }
       if (found) {
         return found;
       }
     }
-    return null;
+    return undefined;
+  }
+
+  /**
+   * After an ambiguous create failed AND discovery proved the asset absent,
+   * re-attempt the create once with the cold `/_api` fallback enabled: the
+   * reconcile above guarantees no committed twin, so the resend cannot
+   * duplicate. Returns null when the resend also fails (caller rethrows the
+   * original error).
+   */
+  private async resendAbsentCreate<T>(operation: () => Promise<T>): Promise<T | null> {
+    try {
+      return await operation();
+    } catch {
+      return null;
+    }
   }
 
   private publicEnvironmentUid(data: JsonRecord | null, bareId: string): string {
@@ -304,18 +332,20 @@ export class PostmanGatewayAssetsClient {
         name: envName,
         values: normalizedValues
       };
-
-      try {
-        const response = await this.gateway.requestJson<JsonRecord>(
+      const send = (fallback?: 'auto') =>
+        this.gateway.requestJson<JsonRecord>(
           {
             service: 'sync',
             method: 'post',
             path: `/environment/import?workspace=${ws}`,
-            body
+            body,
+            ...(fallback ? { fallback } : {})
           },
           { retryTransient: false }
         );
-        const data = this.dataOf(response);
+
+      try {
+        const data = this.dataOf(await send());
         const bareId = this.idOf(data);
         if (!bareId) {
           throw new Error('Environment import did not return a UID');
@@ -329,6 +359,17 @@ export class PostmanGatewayAssetsClient {
         if (adopted) {
           await this.updateEnvironment(adopted, envName, values);
           return adopted;
+        }
+        if (adopted === undefined) {
+          // Reconcile conclusively proved the create absent: one resend with
+          // the cold /_api fallback enabled.
+          const retried = await this.resendAbsentCreate(async () => {
+            const data = this.dataOf(await send('auto'));
+            const bareId = this.idOf(data);
+            if (!bareId) throw new Error('Environment import did not return a UID');
+            return this.publicEnvironmentUid(data, bareId);
+          });
+          if (retried) return retried;
         }
         throw error;
       }
@@ -487,19 +528,21 @@ export class PostmanGatewayAssetsClient {
         ...(environment ? { environment } : {})
       };
 
-      try {
-        const response = await this.gateway.requestJson<JsonRecord>(
+      const send = (fallback?: 'auto') =>
+        this.gateway.requestJson<JsonRecord>(
           {
             service: 'mock',
             method: 'post',
             path: `/mocks?workspace=${ws}`,
-            body
+            body,
+            ...(fallback ? { fallback } : {})
           },
           // Unsafe create: never blind re-POST. An ESOCKETTIMEDOUT after accept
           // may still have created the mock; reconcile via discovery below and
           // let the orchestrator retry the whole create-or-adopt cycle.
           { retryTransient: false }
         );
+      const parseMock = (response: JsonRecord | null) => {
         const record = this.dataOf(response);
         const uid = this.idOf(record);
         if (!uid) {
@@ -509,6 +552,9 @@ export class PostmanGatewayAssetsClient {
           uid,
           url: String(record?.url ?? record?.mockUrl ?? '').trim()
         };
+      };
+      try {
+        return parseMock(await send());
       } catch (error) {
         const adopted = await this.discoverAfterAmbiguousCreate(
           () => this.findMockByCollection(collection, environment, mockName),
@@ -516,6 +562,10 @@ export class PostmanGatewayAssetsClient {
         );
         if (adopted) {
           return { uid: adopted.uid, url: adopted.mockUrl };
+        }
+        if (adopted === undefined) {
+          const retried = await this.resendAbsentCreate(async () => parseMock(await send('auto')));
+          if (retried) return retried;
         }
         throw error;
       }
@@ -669,21 +719,26 @@ export class PostmanGatewayAssetsClient {
         ...(environment ? { environment } : {})
       };
 
-      try {
-        const response = await this.gateway.requestJson<JsonRecord>(
+      const send = (fallback?: 'auto') =>
+        this.gateway.requestJson<JsonRecord>(
           {
             service: 'monitors',
             method: 'post',
             path: `/jobTemplates?workspace=${ws}`,
-            body
+            body,
+            ...(fallback ? { fallback } : {})
           },
           { retryTransient: false }
         );
+      const parseMonitor = (response: JsonRecord | null) => {
         const uid = this.idOf(this.dataOf(response));
         if (!uid) {
           throw new Error('Monitor create did not return a UID');
         }
         return uid;
+      };
+      try {
+        return parseMonitor(await send());
       } catch (error) {
         const adopted = await this.discoverAfterAmbiguousCreate(
           () => this.findMonitorByCollection(collection, environment, monitorName),
@@ -691,6 +746,10 @@ export class PostmanGatewayAssetsClient {
         );
         if (adopted?.uid) {
           return adopted.uid;
+        }
+        if (adopted === undefined) {
+          const retried = await this.resendAbsentCreate(async () => parseMonitor(await send('auto')));
+          if (retried) return retried;
         }
         throw error;
       }

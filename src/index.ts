@@ -128,6 +128,7 @@ export interface ResolvedInputs {
   postmanStack: PostmanStack;
   postmanApiBase: string;
   postmanBifrostBase: string;
+  postmanFallbackBase: string;
   postmanCliInstallUrl: string;
   postmanIapubBase: string;
 }
@@ -456,6 +457,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanStack,
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
+    postmanFallbackBase: endpointProfile.fallbackBaseUrl,
     postmanCliInstallUrl: endpointProfile.cliInstallUrl,
     postmanIapubBase: endpointProfile.iapubBaseUrl
   };
@@ -1994,6 +1996,8 @@ export async function resolvePostmanApiKeyAndTeamId(
       const gateway = new AccessTokenGatewayClient({
         tokenProvider,
         bifrostBaseUrl: inputs.postmanBifrostBase,
+        // No fallback on the org-mode probe: the expected non-org 400 must
+        // surface verbatim, not be re-fired against the /_api alias.
         secretMasker: masker
       });
       const squads = await gateway.getSquads(teamId);
@@ -2077,6 +2081,7 @@ export function createRepoSyncDependencies(
   const gateway = new AccessTokenGatewayClient({
     tokenProvider,
     bifrostBaseUrl: inputs.postmanBifrostBase,
+    fallbackBaseUrl: inputs.postmanFallbackBase,
     teamId: resolved.teamId,
     orgMode: inputs.orgMode,
     secretMasker: masker

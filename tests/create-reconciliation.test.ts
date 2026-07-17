@@ -252,7 +252,10 @@ describe('accepted write followed by an ambiguous response', () => {
       COLLECTION_UID,
       ENVIRONMENT_UID
     )).rejects.toThrow('socket hang up');
-    expect(posts).toBe(1);
+    // Empty discovery reads prove the create absent, so one fallback resend
+    // fires; it hits the same failing transport and the original error is
+    // rethrown. An inconclusive discovery (read error) would suppress it.
+    expect(posts).toBe(2);
     expect(listReads).toBe(4);
   });
 });
@@ -381,7 +384,10 @@ describe('exact live identity and duplicate handling', () => {
       'Acme Mock',
       COLLECTION_UID,
       ENVIRONMENT_UID
-    )).rejects.toThrow(/multiple mocks.*mock-a.*mock-b/i);
+    // The duplicate-match discovery read throws inside reconcile, which is
+    // inconclusive: the fallback resend stays suppressed and the original 503
+    // surfaces instead of adopting either twin.
+    )).rejects.toThrow(/503/);
     expect(posts).toBe(1);
   });
 
@@ -451,8 +457,11 @@ describe('exact live identity and duplicate handling', () => {
       'Acme Mock',
       COLLECTION_UID,
       ENVIRONMENT_UID
+    // Only a wrong-environment sibling exists, so discovery proves the
+    // create conclusively absent: the fallback resend fires once (second 503)
+    // and the original error is rethrown. The wrong-env sibling is never adopted.
     )).rejects.toThrow('503');
-    expect(posts).toBe(1);
+    expect(posts).toBe(2);
   });
 });
 
@@ -612,6 +621,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       postmanStack: 'prod',
       postmanApiBase: 'https://api.getpostman.com',
       postmanBifrostBase: 'https://bifrost.example.com',
+      postmanFallbackBase: 'https://fallback.example.com/_api',
       postmanCliInstallUrl: '',
       postmanIapubBase: '',
       credentialPreflight: 'warn',

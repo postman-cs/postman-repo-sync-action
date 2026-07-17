@@ -14,6 +14,11 @@ export interface GatewayRequest {
   body?: unknown;
   /** Extra route-specific headers (e.g. x-app-version, X-Entity-Type). */
   headers?: Record<string, string>;
+  /** Cold `/_api` fallback eligibility. `'auto'` opts an unsafe mutation in
+   * (only valid after the caller has reconciled and knows the create is
+   * absent); safe requests always fall back, unsafe requests never do unless
+   * `'auto'` is set. */
+  fallback?: 'auto';
 }
 
 export interface AccessTokenGatewayClientOptions {
@@ -25,6 +30,12 @@ export interface AccessTokenGatewayClientOptions {
   secretMasker?: SecretMasker;
   /** Max transient (5xx / network) retries per request (default 3). */
   maxRetries?: number;
+  /** Cold fallback base URL for one last-ditch attempt after the primary
+   * budget is exhausted on a transient failure (e.g. the app's `/_api` alias).
+   * Only used when the request would otherwise throw a transient error; the
+   * fallback is a single serial attempt, never hedged in parallel. Disabled
+   * when unset or when POSTMAN_ITEM_CREATE_FALLBACK=off. */
+  fallbackBaseUrl?: string;
   /** Base backoff in ms; attempt n waits baseDelayMs * 2^(n-1) (default 400). */
   retryBaseDelayMs?: number;
   sleepImpl?: (ms: number) => Promise<void>;
@@ -74,6 +85,7 @@ export class AccessTokenGatewayClient {
   private readonly fetchImpl: typeof fetch;
   private readonly secretMasker: SecretMasker;
   private readonly maxRetries: number;
+  private readonly fallbackBaseUrl?: string;
   private readonly retryBaseDelayMs: number;
   private readonly sleepImpl: (ms: number) => Promise<void>;
 
@@ -88,6 +100,9 @@ export class AccessTokenGatewayClient {
     this.secretMasker =
       options.secretMasker ?? createSecretMasker([this.tokenProvider.current()]);
     this.maxRetries = options.maxRetries ?? 3;
+    const fallbackEnv = typeof process !== 'undefined' ? process.env?.POSTMAN_ITEM_CREATE_FALLBACK : undefined;
+    this.fallbackBaseUrl =
+      fallbackEnv === 'off' ? undefined : options.fallbackBaseUrl?.replace(/\/+$/, '');
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? 400;
     this.sleepImpl = options.sleepImpl ?? defaultSleep;
   }
@@ -109,8 +124,8 @@ export class AccessTokenGatewayClient {
     return headers;
   }
 
-  private async send(request: GatewayRequest): Promise<Response> {
-    const url = `${this.bifrostBaseUrl}/ws/proxy`;
+  private async send(request: GatewayRequest, baseUrl?: string): Promise<Response> {
+    const url = `${baseUrl ?? this.bifrostBaseUrl}/ws/proxy`;
     return this.fetchImpl(url, {
       method: 'POST',
       headers: this.buildHeaders(request.headers),
@@ -122,6 +137,49 @@ export class AccessTokenGatewayClient {
         ...(request.body !== undefined ? { body: request.body } : {})
       })
     });
+  }
+
+  /**
+   * One cold, serial attempt against the fallback base URL after the primary
+   * budget is exhausted on a transient failure. Never hedged in parallel with
+   * the primary; only fires when the request would otherwise throw. Callers
+   * with `retryTransient: false` still reconcile first — the fallback attempt
+   * here is the resend, so it is only used for requests whose mutation is
+   * known idempotent or already reconciled by the caller's adopt-on-ambiguous
+   * loop.
+   */
+  private async tryFallback(request: GatewayRequest): Promise<Response | null> {
+    if (!this.fallbackBaseUrl) return null;
+    try {
+      return await this.send(request, this.fallbackBaseUrl);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Run the fallback attempt and classify its response the same way the
+   * primary path would. Returns the success response, or null when the
+   * fallback also failed transiently (caller then throws the original error).
+   * Non-transient fallback failures (4xx) surface as their own HttpError since
+   * they are the freshest authoritative answer.
+   */
+  private fallbackEligible(request: GatewayRequest, retryTransient: boolean): boolean {
+    if (!this.fallbackBaseUrl) return false;
+    return retryTransient || request.fallback === 'auto';
+  }
+
+  private async attemptFallback(
+    request: GatewayRequest,
+    retryTransient: boolean
+  ): Promise<Response | null> {
+    if (!this.fallbackEligible(request, retryTransient)) return null;
+    const response = await this.tryFallback(request);
+    if (!response) return null;
+    if (response.ok) return response;
+    const body = await response.text().catch(() => '');
+    if (isRetryableSafeReadResponse(response.status)) return null;
+    throw this.toHttpError(request, response, body);
   }
 
   /**
@@ -149,6 +207,8 @@ export class AccessTokenGatewayClient {
           await this.sleepImpl(delay);
           continue;
         }
+        const fallbackResponse = await this.attemptFallback(request, retryTransient);
+        if (fallbackResponse) return fallbackResponse;
         throw error;
       }
       if (response.ok) {
@@ -177,6 +237,8 @@ export class AccessTokenGatewayClient {
         continue;
       }
 
+      const fallbackResponse = await this.attemptFallback(request, retryTransient);
+      if (fallbackResponse) return fallbackResponse;
       throw this.toHttpError(request, response, body);
     }
   }
