@@ -1,6 +1,6 @@
 {
   "name": "@postman-cse/onboarding-repo-sync",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Postman repo sync GitHub Action.",
   "type": "module",
   "main": "dist/index.cjs",
