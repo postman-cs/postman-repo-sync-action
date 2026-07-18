@@ -164,6 +164,7 @@ with:
 | `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
 | `canonical-branch` | Explicit canonical branch (the sole writer of canonical assets and tracked state). Defaults to the provider-resolved default branch; required on providers without a default-branch variable (Bitbucket, Azure DevOps) when branch-strategy is not legacy. | no |  |
 | `channels` | Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets. | no |  |
+| `sections` | Cosmetic workspace Sections (panels). off (default) no-op. auto groups this run's assets into Canonical / Channel CODE / Previews shelves. Fail-open; never fails sync. | no | `off` |
 | `preview-ttl` | Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks). | no | `30` |
 | `github-token` | GitHub token used for repo variable persistence and commits. | no |  |
 | `gh-fallback-token` | Fallback token for repository variable APIs and workflow-file pushes. | no |  |

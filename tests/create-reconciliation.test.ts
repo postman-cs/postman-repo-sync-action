@@ -626,6 +626,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       postmanIapubBase: '',
       credentialPreflight: 'warn',
       branchStrategy: 'legacy',
+      sections: 'off',
   previewTtlDays: 30,
       ...overrides
     };

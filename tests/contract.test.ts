@@ -64,6 +64,7 @@ describe('postman-repo-sync-action contract', () => {
       'branch-strategy',
       'canonical-branch',
       'channels',
+      'sections',
       'preview-ttl',
       'github-token',
       'gh-fallback-token',

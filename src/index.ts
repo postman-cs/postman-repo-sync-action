@@ -43,6 +43,12 @@ import { PostmanGatewayAssetsClient } from './lib/postman/postman-gateway-assets
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
 import {
+  applyWorkspaceSections,
+  createWorkspacePanelsClient,
+  shouldApplySections,
+  type WorkspacePanelsClient
+} from './lib/postman/workspace-panels-client.js';
+import {
   createMutableSecretMasker,
   createSecretMasker,
   type SecretMasker
@@ -101,6 +107,8 @@ export interface ResolvedInputs {
   branchStrategy: BranchStrategy;
   canonicalBranch?: string;
   channels?: string;
+  /** Cosmetic workspace Sections grouping. auto|off; default off. Never fails sync. */
+  sections: 'auto' | 'off';
   /** Sliding preview TTL in days (plan §6.5 rule 3). Default 30. */
   previewTtlDays: number;
   adoToken: string;
@@ -199,6 +207,8 @@ export interface RepoSyncDependencies {
     'associateSystemEnvironments' | 'connectWorkspaceToRepository'
   >;
   repoMutation?: RepoMutationService;
+  /** Cosmetic Sections client; absent or sections=off → no panel calls. */
+  panels?: WorkspacePanelsClient;
 }
 
 export interface RepoSyncDependencyFactories {
@@ -429,6 +439,10 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     branchStrategy: parseBranchStrategy(getInput('branch-strategy', env)),
     canonicalBranch: getInput('canonical-branch', env) || undefined,
     channels: getInput('channels', env) || undefined,
+    sections: (() => {
+      const raw = String(getInput('sections', env) || 'off').trim().toLowerCase();
+      return raw === 'auto' ? 'auto' : 'off';
+    })(),
     previewTtlDays: Math.max(1, Number.parseInt(getInput('preview-ttl', env) || '30', 10) || 30),
     adoToken: getInput('ado-token', env) || normalizeInputValue(env.SYSTEM_ACCESSTOKEN),
     githubToken: getInput('github-token', env),
@@ -1841,6 +1855,40 @@ async function runRepoSyncInner(
     outputs['branch-decision'] = serializeBranchDecision(decision);
   }
 
+  // Cosmetic Sections (panels): place envs/collections this run owns. Fail-open.
+  if (
+    dependencies.panels &&
+    shouldApplySections(inputs.sections, branchDecision.tier) &&
+    inputs.workspaceId
+  ) {
+    const elements = [
+      ...Object.values(envUids)
+        .filter(Boolean)
+        .map((elementId) => ({ elementType: 'environment' as const, elementId })),
+      inputs.baselineCollectionId
+        ? { elementType: 'collection' as const, elementId: inputs.baselineCollectionId }
+        : null,
+      inputs.smokeCollectionId
+        ? { elementType: 'collection' as const, elementId: inputs.smokeCollectionId }
+        : null,
+      inputs.contractCollectionId
+        ? { elementType: 'collection' as const, elementId: inputs.contractCollectionId }
+        : null,
+      inputs.specId ? { elementType: 'specification' as const, elementId: inputs.specId } : null
+    ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    await applyWorkspaceSections({
+      mode: inputs.sections,
+      workspaceId: inputs.workspaceId,
+      decision: branchDecision,
+      elements,
+      client: dependencies.panels,
+      log: {
+        info: (message) => dependencies.core.info(message),
+        warning: (message) => dependencies.core.warning(message)
+      }
+    });
+  }
+
   for (const [name, value] of Object.entries(outputs)) {
     dependencies.core.setOutput(name, value);
   }
@@ -2161,11 +2209,17 @@ export function createRepoSyncDependencies(
     secretMasker: masker
   });
 
+  const panels =
+    inputs.sections === 'auto'
+      ? createWorkspacePanelsClient({ gateway, teamId: resolved.teamId })
+      : undefined;
+
   return {
     teamId: resolved.teamId,
     core: factories.core,
     postman,
     internalIntegration,
+    panels,
     repoMutation
   };
 }
