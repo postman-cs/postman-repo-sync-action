@@ -142,6 +142,22 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     };
   }
 
+  /**
+   * One-line non-fatal preflight reason: operation + entity (repo/path) + cause +
+   * operator action. Secrets are redacted via secretMasker, then CR/LF and other
+   * line-breaking whitespace are collapsed to spaces so CI logs stay one line.
+   * Display-only: does not alter request repoUrl/path or probe classification.
+   */
+  private unknownFilesystemLookupReason(
+    repoUrl: string,
+    fsPath: string,
+    cause: string
+  ): string {
+    return this.secretMasker(
+      `filesystem lookup for repository ${repoUrl} path ${fsPath} ${cause}; verify Bifrost connectivity/credentials then rerun`
+    ).replace(/[\r\n\v\f\u2028\u2029]+/g, ' ');
+  }
+
   async associateSystemEnvironments(
     workspaceId: string,
     associations: GovernanceAssociation[]
@@ -226,7 +242,11 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       } catch {
         return {
           state: 'unknown',
-          reason: `filesystem lookup returned non-JSON body (HTTP ${response.status})`
+          reason: this.unknownFilesystemLookupReason(
+            repoUrl,
+            fsPath,
+            `returned non-JSON body (HTTP ${response.status})`
+          )
         };
       }
 
@@ -251,7 +271,11 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
         if (!id) {
           return {
             state: 'unknown',
-            reason: 'filesystem lookup returned 200 without a workspace id'
+            reason: this.unknownFilesystemLookupReason(
+              repoUrl,
+              fsPath,
+              'returned 200 without a workspace id'
+            )
           };
         }
         const name =
@@ -273,18 +297,31 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
         }
         return {
           state: 'unknown',
-          reason: 'filesystem lookup returned 403 without error.meta.workspaceId'
+          reason: this.unknownFilesystemLookupReason(
+            repoUrl,
+            fsPath,
+            'returned 403 without error.meta.workspaceId'
+          )
         };
       }
 
       return {
         state: 'unknown',
-        reason: `filesystem lookup returned HTTP ${response.status}`
+        reason: this.unknownFilesystemLookupReason(
+          repoUrl,
+          fsPath,
+          `returned HTTP ${response.status}`
+        )
       };
     } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
       return {
         state: 'unknown',
-        reason: error instanceof Error ? error.message : String(error)
+        reason: this.unknownFilesystemLookupReason(
+          repoUrl,
+          fsPath,
+          `failed: ${cause}`
+        )
       };
     }
   }

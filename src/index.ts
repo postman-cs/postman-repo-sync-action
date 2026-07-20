@@ -201,6 +201,51 @@ export interface RepoSyncDependencies {
     | 'findWorkspaceForRepo'
   >;
   repoMutation?: RepoMutationService;
+  /** Optional secret masker; production wiring supplies the mutable masker from createRepoSyncDependencies. Direct tests may omit it. */
+  secretMasker?: SecretMasker;
+}
+
+const identitySecretMasker: SecretMasker = (input) => input;
+
+function resolveRepoSyncMasker(dependencies: RepoSyncDependencies): SecretMasker {
+  return dependencies.secretMasker ?? identitySecretMasker;
+}
+
+function causeText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * Collapse CR/LF and other line-breaking sequences for CI log safety.
+ * Display-only: callers must not feed this into API/control-flow values.
+ */
+function toOneLineDisplay(value: string): string {
+  return String(value ?? '')
+    .replace(/[\r\n\u0085\u2028\u2029\v\f]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * One-line orchestration diagnostic: operation + concrete entity + masked cause + remediation.
+ * Masks first, then normalizes line breaks in every interpolated field.
+ */
+function formatOrchestrationIssue(params: {
+  operation: string;
+  entity: string;
+  cause: unknown;
+  remediation: string;
+  mask: SecretMasker;
+  detail?: string;
+}): string {
+  const operation = toOneLineDisplay(params.mask(params.operation));
+  const entity = toOneLineDisplay(params.mask(params.entity));
+  const maskedCause = toOneLineDisplay(params.mask(causeText(params.cause)));
+  const detail = toOneLineDisplay(params.mask(params.detail ?? ''));
+  const remediation = toOneLineDisplay(params.mask(params.remediation));
+
+  const body = `${operation} failed for ${entity}: ${maskedCause}${detail}`.replace(/[.]+$/u, '');
+  return toOneLineDisplay(`${body}. ${remediation}`);
 }
 
 export interface RepoSyncDependencyFactories {
@@ -965,6 +1010,9 @@ async function upsertEnvironments(
     return envUids;
   }
 
+  const mask = resolveRepoSyncMasker(dependencies);
+  const envRemediation = 'verify access-token/team/workspace permissions then rerun';
+
   for (const envName of inputs.environments) {
     const runtimeUrl = String(inputs.envRuntimeUrls[envName] || '').trim();
     const displayName = `${inputs.projectName} - ${envName}`;
@@ -974,14 +1022,27 @@ async function upsertEnvironments(
     // exact workspace display name so a fresh checkout without tracked UIDs
     // still updates instead of creating a duplicate.
     if (!existingUid) {
-      const discovered = await dependencies.postman.findEnvironmentByName(
-        inputs.workspaceId,
-        displayName
-      );
-      if (discovered?.uid) {
-        existingUid = discovered.uid;
-        dependencies.core.info(
-          `Discovered existing environment for ${displayName}: ${existingUid}`
+      try {
+        const discovered = await dependencies.postman.findEnvironmentByName(
+          inputs.workspaceId,
+          displayName
+        );
+        if (discovered?.uid) {
+          existingUid = discovered.uid;
+          dependencies.core.info(
+            `Discovered existing environment for ${displayName}: ${existingUid}`
+          );
+        }
+      } catch (error) {
+        throw new Error(
+          formatOrchestrationIssue({
+            operation: 'Environment discovery',
+            entity: `workspace ${inputs.workspaceId} environment "${displayName}"`,
+            cause: error,
+            remediation: envRemediation,
+            mask
+          }),
+          { cause: error }
         );
       }
     }
@@ -1006,18 +1067,44 @@ async function upsertEnvironments(
       }
       const values = buildEnvironmentValues(envName, runtimeUrl);
       if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
-      await dependencies.postman.updateEnvironment(existingUid, displayName, values);
+      try {
+        await dependencies.postman.updateEnvironment(existingUid, displayName, values);
+      } catch (error) {
+        throw new Error(
+          formatOrchestrationIssue({
+            operation: 'Environment update',
+            entity: `workspace ${inputs.workspaceId} environment "${displayName}" (uid ${existingUid})`,
+            cause: error,
+            remediation: envRemediation,
+            mask
+          }),
+          { cause: error }
+        );
+      }
       envUids[envName] = existingUid;
       continue;
     }
 
     const values = buildEnvironmentValues(envName, runtimeUrl);
     if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
-    envUids[envName] = await dependencies.postman.createEnvironment(
-      inputs.workspaceId,
-      displayName,
-      values
-    );
+    try {
+      envUids[envName] = await dependencies.postman.createEnvironment(
+        inputs.workspaceId,
+        displayName,
+        values
+      );
+    } catch (error) {
+      throw new Error(
+        formatOrchestrationIssue({
+          operation: 'Environment create',
+          entity: `workspace ${inputs.workspaceId} environment "${displayName}"`,
+          cause: error,
+          remediation: envRemediation,
+          mask
+        }),
+        { cause: error }
+      );
+    }
   }
 
   return envUids;
@@ -1513,6 +1600,8 @@ async function runRepoSyncInner(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
+  const mask = resolveRepoSyncMasker(dependencies);
+
   // Branch-aware sync: the effective BranchDecision (inherited from bootstrap
   // via POSTMAN_BRANCH_DECISION, or resolved locally; legacy under default
   // inputs). Gated runs never reach here (runAction short-circuits), so the
@@ -1657,9 +1746,17 @@ async function runRepoSyncInner(
         outputs['environment-sync-status'] = 'success';
       } catch (error) {
         outputs['environment-sync-status'] = 'failed';
+        const associationSummary = associations
+          .map((entry) => `${entry.envUid}->${entry.systemEnvId}`)
+          .join(', ');
         dependencies.core.warning(
-          `System environment association failed: ${error instanceof Error ? error.message : String(error)
-          }`
+          formatOrchestrationIssue({
+            operation: 'System environment association',
+            entity: `workspace ${inputs.workspaceId} (${associationSummary})`,
+            cause: error,
+            remediation: 'verify access-token/team/system-env mapping then rerun',
+            mask
+          })
         );
       }
     } else if (Object.keys(envUids).length > 0) {
@@ -1703,14 +1800,27 @@ async function runRepoSyncInner(
       }
 
       if (!resolvedMockUrl && inputs.baselineCollectionId) {
-        const discovered = await dependencies.postman.findMockByCollection(
-          inputs.baselineCollectionId,
-          mockEnvUid,
-          mockName
-        );
-        if (discovered) {
-          resolvedMockUrl = discovered.mockUrl;
-          dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
+        try {
+          const discovered = await dependencies.postman.findMockByCollection(
+            inputs.baselineCollectionId,
+            mockEnvUid,
+            mockName
+          );
+          if (discovered) {
+            resolvedMockUrl = discovered.mockUrl;
+            dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
+          }
+        } catch (error) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: 'Mock discovery',
+              entity: `mock "${mockName}" workspace ${inputs.workspaceId} collection ${inputs.baselineCollectionId} environment ${mockEnvUid}`,
+              cause: error,
+              remediation: 'verify collection/environment access then rerun',
+              mask
+            }),
+            { cause: error }
+          );
         }
       }
 
@@ -1718,26 +1828,49 @@ async function runRepoSyncInner(
         // Downstream mock create can ESOCKETTIMEDOUT under org load. Retry the
         // whole create-or-adopt cycle: createMock re-discovers by identity first,
         // so a POST that actually landed is adopted on retry, never duplicated.
-        const mock = await retry(
-          () => dependencies.postman.createMock(
-            inputs.workspaceId,
-            mockName,
-            inputs.baselineCollectionId,
-            mockEnvUid
-          ),
-          {
-            maxAttempts: 3,
-            delayMs: 2000,
-            backoffMultiplier: 2,
-            onRetry: ({ attempt, error }) => {
-              dependencies.core.warning(
-                `Mock create attempt ${attempt} failed (${error instanceof Error ? error.message : String(error)}); retrying`
-              );
+        const mockEntity =
+          `mock "${mockName}" workspace ${inputs.workspaceId} collection ${inputs.baselineCollectionId} environment ${mockEnvUid}`;
+        const mockRemediation = 'verify collection/environment access then rerun';
+        try {
+          const mock = await retry(
+            () => dependencies.postman.createMock(
+              inputs.workspaceId,
+              mockName,
+              inputs.baselineCollectionId,
+              mockEnvUid
+            ),
+            {
+              maxAttempts: 3,
+              delayMs: 2000,
+              backoffMultiplier: 2,
+              onRetry: ({ attempt, maxAttempts, error }) => {
+                dependencies.core.warning(
+                  formatOrchestrationIssue({
+                    operation: `Mock create attempt ${attempt}/${maxAttempts}`,
+                    entity: mockEntity,
+                    cause: error,
+                    remediation: mockRemediation,
+                    mask,
+                    detail: '; retrying'
+                  })
+                );
+              }
             }
-          }
-        );
-        resolvedMockUrl = mock.url;
-        dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
+          );
+          resolvedMockUrl = mock.url;
+          dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
+        } catch (error) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: 'Mock create',
+              entity: mockEntity,
+              cause: error,
+              remediation: mockRemediation,
+              mask
+            }),
+            { cause: error }
+          );
+        }
       }
 
       outputs['mock-url'] = resolvedMockUrl;
@@ -1752,37 +1885,75 @@ async function runRepoSyncInner(
       let resolvedMonitorId = '';
       const monitorName = `${assetProjectName} - Smoke Monitor`;
 
+      const monitorRemediation =
+        'verify monitor IDs/access or set monitor-cron then rerun';
+
       if (inputs.monitorId) {
         const valid = await dependencies.postman.monitorExists(inputs.monitorId);
         if (valid) {
           resolvedMonitorId = inputs.monitorId;
           dependencies.core.info(`Reusing monitor from explicit input: ${resolvedMonitorId}`);
         } else {
-          dependencies.core.warning(`Explicit monitor-id ${inputs.monitorId} not found in Postman, falling through to discovery.`);
+          dependencies.core.warning(
+            formatOrchestrationIssue({
+              operation: 'Explicit monitor-id lookup',
+              entity: `monitor-id ${inputs.monitorId} workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: 'not found in Postman',
+              remediation: monitorRemediation,
+              mask,
+              detail: '; falling through to discovery'
+            })
+          );
         }
       }
 
       if (!resolvedMonitorId && inputs.smokeCollectionId) {
-        const discovered = await dependencies.postman.findMonitorByCollection(
-          inputs.smokeCollectionId,
-          monitorEnvUid,
-          monitorName
-        );
-        if (discovered) {
-          resolvedMonitorId = discovered.uid;
-          dependencies.core.info(`Discovered existing monitor for collection ${inputs.smokeCollectionId}: ${resolvedMonitorId}`);
+        try {
+          const discovered = await dependencies.postman.findMonitorByCollection(
+            inputs.smokeCollectionId,
+            monitorEnvUid,
+            monitorName
+          );
+          if (discovered) {
+            resolvedMonitorId = discovered.uid;
+            dependencies.core.info(`Discovered existing monitor for collection ${inputs.smokeCollectionId}: ${resolvedMonitorId}`);
+          }
+        } catch (error) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: 'Monitor discovery',
+              entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: error,
+              remediation: monitorRemediation,
+              mask
+            }),
+            { cause: error }
+          );
         }
       }
 
       if (!resolvedMonitorId) {
-        resolvedMonitorId = await dependencies.postman.createMonitor(
-          inputs.workspaceId,
-          monitorName,
-          inputs.smokeCollectionId,
-          monitorEnvUid,
-          effectiveCron || undefined
-        );
-        dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured; will trigger a one-time run)'}`);
+        try {
+          resolvedMonitorId = await dependencies.postman.createMonitor(
+            inputs.workspaceId,
+            monitorName,
+            inputs.smokeCollectionId,
+            monitorEnvUid,
+            effectiveCron || undefined
+          );
+          dependencies.core.info(`Created new monitor: ${resolvedMonitorId}${effectiveCron ? '' : ' (disabled — no cron configured; will trigger a one-time run)'}`);
+        } catch (error) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: 'Monitor create',
+              entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: error,
+              remediation: monitorRemediation,
+              mask
+            }),
+            { cause: error }
+          );
+        }
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
@@ -1793,7 +1964,13 @@ async function runRepoSyncInner(
           dependencies.core.info(`Triggered one-time run for monitor: ${resolvedMonitorId}`);
         } catch (error) {
           dependencies.core.warning(
-            `Failed to trigger one-time run for monitor ${resolvedMonitorId}: ${error instanceof Error ? error.message : String(error)}`
+            formatOrchestrationIssue({
+              operation: 'Monitor one-time run',
+              entity: `monitor ${resolvedMonitorId} name "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: error,
+              remediation: monitorRemediation,
+              mask
+            })
           );
         }
       }
@@ -1884,18 +2061,61 @@ async function runRepoSyncInner(
       dependencies.core.info(`Tagged spec version at finalize: ${tag.name || tagName}`);
     } catch (error) {
       const status = (error as { status?: number }).status;
+      const specEntity = `spec ${inputs.specId} tag "${tagName}" workspace ${inputs.workspaceId}`;
+      const specRemediation = 'inspect existing tags/access and rerun';
       if (status === 409) {
-        const tags = await dependencies.postman.listSpecVersionTags?.(inputs.specId).catch(() => []) ?? [];
+        let tags: Array<{ id: string; name: string }> = [];
+        let listError: unknown;
+        if (dependencies.postman.listSpecVersionTags) {
+          try {
+            tags = await dependencies.postman.listSpecVersionTags(inputs.specId);
+          } catch (lookupError) {
+            listError = lookupError;
+          }
+        }
         const latest = tags[0];
-        if (latest && (latest.name === tagName || /\([0-9a-f]{7}\)$/.test(latest.name) || /^[0-9a-f]{7}$/.test(latest.name))) {
+        if (
+          !listError &&
+          latest &&
+          (latest.name === tagName || /\([0-9a-f]{7}\)$/.test(latest.name) || /^[0-9a-f]{7}$/.test(latest.name))
+        ) {
           outputs['spec-version-tag'] = latest.name;
           outputs['spec-version-url'] = `https://web.postman.co/workspace/${encodeURIComponent(inputs.workspaceId)}/specification/${encodeURIComponent(inputs.specId)}?tagId=${encodeURIComponent(latest.id)}&versionLabel=${encodeURIComponent(latest.name)}`;
           dependencies.core.info(`Latest changelog group already tagged as "${latest.name}"; adopting.`);
+        } else if (listError) {
+          dependencies.core.warning(
+            formatOrchestrationIssue({
+              operation: 'Spec Hub tagging conflict',
+              entity: specEntity,
+              cause: `create=${causeText(error)}; listSpecVersionTags=${causeText(listError)}`,
+              remediation: specRemediation,
+              mask,
+              detail: '; could not list existing tags to confirm adoption'
+            })
+          );
         } else {
-          dependencies.core.warning('Latest changelog group already carries a hand-applied tag; leaving it in place.');
+          dependencies.core.warning(
+            formatOrchestrationIssue({
+              operation: 'Spec Hub tagging conflict',
+              entity: specEntity,
+              cause: error,
+              remediation: specRemediation,
+              mask,
+              detail: '; latest changelog group already carries a hand-applied or nonmatching tag; leaving it in place'
+            })
+          );
         }
       } else {
-        dependencies.core.warning(`Spec version tagging failed (non-fatal): ${error instanceof Error ? error.message : String(error)}`);
+        dependencies.core.warning(
+          formatOrchestrationIssue({
+            operation: 'Spec version tagging',
+            entity: specEntity,
+            cause: error,
+            remediation: specRemediation,
+            mask,
+            detail: ' (non-fatal)'
+          })
+        );
       }
     }
   }
@@ -1955,7 +2175,16 @@ export async function resolvePostmanApiKeyAndTeamId(
         'status' in error &&
         (error.status === 401 || error.status === 403)
       ) {
-        actionCore.warning('Provided postman-api-key is invalid or expired.');
+        const status = (error as { status: number }).status;
+        actionCore.warning(
+          formatOrchestrationIssue({
+            operation: 'PMAK GET /me validation',
+            entity: `status ${status}`,
+            cause: error,
+            remediation: 'replace postman-api-key or provide a valid postman-access-token then rerun',
+            mask: masker
+          })
+        );
       } else {
         throw error;
       }
@@ -1982,6 +2211,9 @@ export async function resolvePostmanApiKeyAndTeamId(
     apiKey = await internalIntegration.createApiKey(keyName);
     actionCore.setSecret(apiKey);
 
+    const persistSecretRemediation =
+      'grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun';
+
     if (inputs.provider === 'azure-devops') {
       if (options.persistGeneratedApiKeySecret ?? true) {
         actionCore.warning(
@@ -2004,16 +2236,50 @@ export async function resolvePostmanApiKeyAndTeamId(
             ignoreReturnCode: true
           });
           if (ghCommand.exitCode !== 0) {
-            actionCore.warning(`Failed to save POSTMAN_API_KEY secret: ${ghCommand.stderr}`);
+            actionCore.warning(
+              formatOrchestrationIssue({
+                operation: 'gh secret set POSTMAN_API_KEY',
+                entity: `repository ${repo}`,
+                cause: ghCommand.stderr || `exit code ${ghCommand.exitCode}`,
+                remediation: persistSecretRemediation,
+                mask: masker
+              })
+            );
           }
         } catch (error: unknown) {
           actionCore.warning(
-            `Error saving POSTMAN_API_KEY secret: ${error instanceof Error ? error.message : String(error)}`
+            formatOrchestrationIssue({
+              operation: 'gh secret set POSTMAN_API_KEY',
+              entity: `repository ${repo}`,
+              cause: error,
+              remediation: persistSecretRemediation,
+              mask: masker
+            })
           );
         }
+      } else {
+        actionCore.warning(
+          formatOrchestrationIssue({
+            operation: 'gh secret set POSTMAN_API_KEY',
+            entity: 'repository (missing)',
+            cause: 'repository context is empty',
+            remediation: 'set repository context or persist POSTMAN_API_KEY manually then rerun',
+            mask: masker
+          })
+        );
       }
     } else if (options.persistGeneratedApiKeySecret ?? true) {
-      actionCore.warning('No GitHub token provided; cannot save generated POSTMAN_API_KEY secret.');
+      actionCore.warning(
+        formatOrchestrationIssue({
+          operation: 'gh secret set POSTMAN_API_KEY',
+          entity: inputs.repository
+            ? `repository ${inputs.repository}`
+            : 'repository (unknown)',
+          cause: 'no GitHub token provided',
+          remediation: 'provide github-token/gh-fallback-token or set POSTMAN_API_KEY manually then rerun',
+          mask: masker
+        })
+      );
     } else {
       actionCore.info('Skipping generated POSTMAN_API_KEY GitHub secret persistence for this run.');
     }
@@ -2086,7 +2352,13 @@ export async function resolvePostmanApiKeyAndTeamId(
         /squad feature is not available/i.test(error.responseBody);
       if (!isNonOrgSquads) {
         actionCore.warning(
-          `Org-mode auto-detection via ums squads failed (non-fatal; set org-mode explicitly if Bifrost calls fail): ${error instanceof Error ? error.message : String(error)}`
+          formatOrchestrationIssue({
+            operation: 'Org-mode auto-detection via ums squads',
+            entity: `team ${teamId}`,
+            cause: error,
+            remediation: 'set org-mode and team-id explicitly then rerun',
+            mask: masker
+          })
         );
       }
     }
@@ -2233,7 +2505,8 @@ export function createRepoSyncDependencies(
     core: factories.core,
     postman,
     internalIntegration,
-    repoMutation
+    repoMutation,
+    secretMasker: masker
   };
 }
 

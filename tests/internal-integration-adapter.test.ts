@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
+import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -144,27 +145,126 @@ describe('internal integration adapter', () => {
     });
 
     it('returns unknown for non-fatal probe failures (network / unexpected status)', async () => {
+      const repoUrl = 'https://github.com/postman-cs/repo-sync-demo';
+      const fsPath = '/';
+      const syntheticToken = 'synthetic-access-token-abc123';
+      const secretMasker = createSecretMasker([syntheticToken]);
+      const remediation = 'verify Bifrost connectivity/credentials then rerun';
+
       const networkAdapter = createInternalIntegrationAdapter({
         backend: 'bifrost',
         accessToken: 'token-123',
         teamId: '11430732',
-        fetchImpl: vi.fn<typeof fetch>().mockRejectedValue(new Error('socket hang up'))
+        secretMasker,
+        fetchImpl: vi
+          .fn<typeof fetch>()
+          .mockRejectedValue(
+            new Error(`socket hang up while using ${syntheticToken}`)
+          )
       });
-      await expect(
-        networkAdapter.findWorkspaceForRepo('https://github.com/postman-cs/repo-sync-demo')
-      ).resolves.toMatchObject({ state: 'unknown' });
+      const networkResult = await networkAdapter.findWorkspaceForRepo(repoUrl, fsPath);
+      expect(networkResult.state).toBe('unknown');
+      if (networkResult.state !== 'unknown') {
+        throw new Error('expected unknown');
+      }
+      expect(networkResult.reason).toContain('filesystem lookup');
+      expect(networkResult.reason).toContain(`repository ${repoUrl}`);
+      expect(networkResult.reason).toContain(`path ${fsPath}`);
+      expect(networkResult.reason).toContain('failed: socket hang up');
+      expect(networkResult.reason).toContain(remediation);
+      expect(networkResult.reason).toContain(REDACTED);
+      expect(networkResult.reason).not.toContain(syntheticToken);
 
       const statusAdapter = createInternalIntegrationAdapter({
         backend: 'bifrost',
         accessToken: 'token-123',
         teamId: '11430732',
+        secretMasker,
         fetchImpl: vi
           .fn<typeof fetch>()
           .mockResolvedValue(jsonResponse({ error: { name: 'serverError' } }, { status: 500 }))
       });
-      await expect(
-        statusAdapter.findWorkspaceForRepo('https://github.com/postman-cs/repo-sync-demo')
-      ).resolves.toMatchObject({ state: 'unknown' });
+      const statusResult = await statusAdapter.findWorkspaceForRepo(repoUrl, fsPath);
+      expect(statusResult.state).toBe('unknown');
+      if (statusResult.state !== 'unknown') {
+        throw new Error('expected unknown');
+      }
+      expect(statusResult.reason).toContain('filesystem lookup');
+      expect(statusResult.reason).toContain(`repository ${repoUrl}`);
+      expect(statusResult.reason).toContain(`path ${fsPath}`);
+      expect(statusResult.reason).toContain('returned HTTP 500');
+      expect(statusResult.reason).toContain(remediation);
+
+      const nonJsonAdapter = createInternalIntegrationAdapter({
+        backend: 'bifrost',
+        accessToken: 'token-123',
+        teamId: '11430732',
+        secretMasker,
+        fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+          new Response('not-json', { status: 502, statusText: 'Bad Gateway' })
+        )
+      });
+      const nonJsonResult = await nonJsonAdapter.findWorkspaceForRepo(repoUrl, fsPath);
+      expect(nonJsonResult.state).toBe('unknown');
+      if (nonJsonResult.state !== 'unknown') {
+        throw new Error('expected unknown');
+      }
+      expect(nonJsonResult.reason).toContain('filesystem lookup');
+      expect(nonJsonResult.reason).toContain(`repository ${repoUrl}`);
+      expect(nonJsonResult.reason).toContain(`path ${fsPath}`);
+      expect(nonJsonResult.reason).toContain('returned non-JSON body (HTTP 502)');
+      expect(nonJsonResult.reason).toContain(remediation);
+
+      const missingIdAdapter = createInternalIntegrationAdapter({
+        backend: 'bifrost',
+        accessToken: 'token-123',
+        teamId: '11430732',
+        secretMasker,
+        fetchImpl: vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(jsonResponse({ data: { name: 'No Id Workspace' } }))
+      });
+      const missingIdResult = await missingIdAdapter.findWorkspaceForRepo(repoUrl, fsPath);
+      expect(missingIdResult.state).toBe('unknown');
+      if (missingIdResult.state !== 'unknown') {
+        throw new Error('expected unknown');
+      }
+      expect(missingIdResult.reason).toContain('filesystem lookup');
+      expect(missingIdResult.reason).toContain(`repository ${repoUrl}`);
+      expect(missingIdResult.reason).toContain(`path ${fsPath}`);
+      expect(missingIdResult.reason).toContain('returned 200 without a workspace id');
+      expect(missingIdResult.reason).toContain(remediation);
+
+      const hostileRepoUrl = `https://github.com/postman-cs/repo-sync-demo\nforged-line`;
+      const hostilePath = `/\rsecret-path`;
+      const hostileAdapter = createInternalIntegrationAdapter({
+        backend: 'bifrost',
+        accessToken: 'token-123',
+        teamId: '11430732',
+        secretMasker,
+        fetchImpl: vi
+          .fn<typeof fetch>()
+          .mockRejectedValue(
+            new Error(`socket hang up\nwith ${syntheticToken}\rand forged`)
+          )
+      });
+      const hostileResult = await hostileAdapter.findWorkspaceForRepo(
+        hostileRepoUrl,
+        hostilePath
+      );
+      expect(hostileResult.state).toBe('unknown');
+      if (hostileResult.state !== 'unknown') {
+        throw new Error('expected unknown');
+      }
+      expect(hostileResult.reason).toContain('filesystem lookup');
+      expect(hostileResult.reason).toContain('repository https://github.com/postman-cs/repo-sync-demo forged-line');
+      expect(hostileResult.reason).toContain('path / secret-path');
+      expect(hostileResult.reason).toContain('failed: socket hang up');
+      expect(hostileResult.reason).toContain(remediation);
+      expect(hostileResult.reason).toContain(REDACTED);
+      expect(hostileResult.reason).not.toContain(syntheticToken);
+      expect(hostileResult.reason).not.toContain('\n');
+      expect(hostileResult.reason).not.toContain('\r');
     });
   });
 

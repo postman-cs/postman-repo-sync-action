@@ -25,6 +25,7 @@ import {
 } from '../src/index.js';
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
+import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
 
 type ResourcesYamlShape = {
   workspace?: {
@@ -1091,6 +1092,127 @@ describe('state ownership persistence', () => {
     }
   });
 
+  it('warns on Spec Hub tag 409 confirmed nonmatching/hand-applied tag without failing the run', async () => {
+    const conflict = Object.assign(new Error('tag already exists'), { status: 409 });
+    const postman = {
+      ...makePostman(),
+      tagSpecVersion: vi.fn().mockRejectedValue(conflict),
+      listSpecVersionTags: vi.fn().mockResolvedValue([{ id: 'hand-1', name: 'manual-tag' }])
+    };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    const { core, warnings } = createCoreStub();
+    try {
+      const result = await runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', environments: [], generateCiWorkflow: false
+      }), {
+        core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation()
+      });
+      expect(result['spec-version-tag']).toBe('');
+      expect(result['spec-version-url']).toBe('');
+      const conflictWarning = warnings.find((line) => line.includes('Spec Hub tagging conflict'));
+      expect(conflictWarning).toBeDefined();
+      expect(conflictWarning).toContain('spec spec-1');
+      expect(conflictWarning).toContain('tag "abc1234"');
+      expect(conflictWarning).toContain('workspace ws-123');
+      expect(conflictWarning).toContain('tag already exists');
+      expect(conflictWarning).toContain('hand-applied or nonmatching tag');
+      expect(conflictWarning).toContain('inspect existing tags/access and rerun');
+      expect(conflictWarning).not.toContain('listSpecVersionTags=');
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
+  it('warns on Spec Hub 409 when listSpecVersionTags fails and preserves create plus lookup causes', async () => {
+    const conflict = Object.assign(new Error('tag already exists'), { status: 409 });
+    const postman = {
+      ...makePostman(),
+      tagSpecVersion: vi.fn().mockRejectedValue(conflict),
+      listSpecVersionTags: vi.fn().mockRejectedValue(new Error('list tags denied'))
+    };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    const { core, warnings } = createCoreStub();
+    try {
+      const result = await runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', environments: [], generateCiWorkflow: false
+      }), {
+        core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation()
+      });
+      expect(result['spec-version-tag']).toBe('');
+      expect(result['spec-version-url']).toBe('');
+      const conflictWarning = warnings.find((line) => line.includes('Spec Hub tagging conflict'));
+      expect(conflictWarning).toBeDefined();
+      expect(conflictWarning).toContain('spec spec-1');
+      expect(conflictWarning).toContain('tag "abc1234"');
+      expect(conflictWarning).toContain('workspace ws-123');
+      expect(conflictWarning).toContain('create=tag already exists');
+      expect(conflictWarning).toContain('listSpecVersionTags=list tags denied');
+      expect(conflictWarning).toContain('could not list existing tags to confirm adoption');
+      expect(conflictWarning).toContain('inspect existing tags/access and rerun');
+      expect(conflictWarning).not.toContain('hand-applied');
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
+  it('warns on Spec Hub non-409 tagging failure without failing the run', async () => {
+    const postman = {
+      ...makePostman(),
+      tagSpecVersion: vi.fn().mockRejectedValue(new Error('tagging denied'))
+    };
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical', strategy: 'publish-gate', canonicalBranch: 'main', reason: 'test',
+      identity: { provider: 'github', headBranch: 'main', headSha: 'abc123456789', refKind: 'default-branch', isPrContext: false, isForkPr: false }
+    });
+    const { core, warnings } = createCoreStub();
+    try {
+      const result = await runRepoSync(createInputs({
+        branchStrategy: 'publish-gate', specId: 'spec-1', environments: [], generateCiWorkflow: false
+      }), {
+        core,
+        postman,
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn(),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation()
+      });
+      expect(result['workspace-link-status']).toBe('success');
+      expect(result['spec-version-tag']).toBe('');
+      const failureWarning = warnings.find((line) => line.includes('Spec version tagging'));
+      expect(failureWarning).toBeDefined();
+      expect(failureWarning).toContain('spec spec-1');
+      expect(failureWarning).toContain('tag "abc1234"');
+      expect(failureWarning).toContain('workspace ws-123');
+      expect(failureWarning).toContain('tagging denied');
+      expect(failureWarning).toContain('non-fatal');
+      expect(failureWarning).toContain('inspect existing tags/access and rerun');
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
   it('warns when system-env-map-json is empty so Catalog filters do not look like a missing link', async () => {
     const { core, warnings, infos } = createCoreStub();
     const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
@@ -1159,6 +1281,233 @@ describe('state ownership persistence', () => {
           message.includes('did not match any synced environment (prod)')
       )
     ).toBe(true);
+  });
+
+  it('surfaces environment create failure with operation, entity, cause, and remediation', async () => {
+    const postman = {
+      ...makePostman(),
+      createEnvironment: vi.fn().mockRejectedValue(new Error('env create denied'))
+    };
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          repoMutation: makeRepoMutation()
+        }
+      )
+    ).rejects.toThrow(
+      /Environment create failed for workspace ws-123 environment "core-payments - prod": env create denied\. verify access-token\/team\/workspace permissions then rerun/
+    );
+    expect(postman.createEnvironment).toHaveBeenCalled();
+  });
+
+  it('surfaces environment discovery failure with operation, entity, cause, and remediation', async () => {
+    const postman = {
+      ...makePostman(),
+      findEnvironmentByName: vi.fn().mockRejectedValue(new Error('env discovery denied')),
+      createEnvironment: vi.fn(),
+      updateEnvironment: vi.fn()
+    };
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          repoMutation: makeRepoMutation()
+        }
+      )
+    ).rejects.toThrow(
+      /Environment discovery failed for workspace ws-123 environment "core-payments - prod": env discovery denied\. verify access-token\/team\/workspace permissions then rerun/
+    );
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('surfaces environment update failure with operation, entity, cause, and remediation', async () => {
+    const postman = {
+      ...makePostman(),
+      updateEnvironment: vi.fn().mockRejectedValue(new Error('env update denied')),
+      createEnvironment: vi.fn()
+    };
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          environmentUids: { prod: 'env-existing' },
+          generateCiWorkflow: false,
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          repoMutation: makeRepoMutation()
+        }
+      )
+    ).rejects.toThrow(
+      /Environment update failed for workspace ws-123 environment "core-payments - prod" \(uid env-existing\): env update denied\. verify access-token\/team\/workspace permissions then rerun/
+    );
+    expect(postman.updateEnvironment).toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('keeps association failure non-fatal with workspace/association context and failed sync status', async () => {
+    const { core, warnings } = createCoreStub();
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: true,
+        systemEnvMap: { prod: 'sys-prod' }
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockRejectedValue(new Error('assoc denied')),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(result['environment-sync-status']).toBe('failed');
+    expect(result['workspace-link-status']).toBe('success');
+    const associationWarning = warnings.find((line) =>
+      line.includes('System environment association failed')
+    );
+    expect(associationWarning).toBeDefined();
+    expect(associationWarning).toContain('workspace ws-123');
+    expect(associationWarning).toContain('env-prod->sys-prod');
+    expect(associationWarning).toContain('assoc denied');
+    expect(associationWarning).toContain('verify access-token/team/system-env mapping then rerun');
+  });
+
+  it('masks synthetic secrets from injected secretMasker in orchestration failures', async () => {
+    const secret = 'super-secret-token-xyz';
+    const postman = {
+      ...makePostman(),
+      createEnvironment: vi.fn().mockRejectedValue(new Error(`denied with ${secret}`))
+    };
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          repoMutation: makeRepoMutation(),
+          secretMasker: createSecretMasker([secret])
+        }
+      )
+    ).rejects.toThrow(
+      new RegExp(
+        `Environment create failed for workspace ws-123 environment "core-payments - prod": denied with ${REDACTED.replace(/[[\]]/g, '\\$&')}\\. verify access-token/team/workspace permissions then rerun`
+      )
+    );
+  });
+
+  it('keeps throw-path orchestration diagnostics one-line under CR/LF-bearing entity and cause with secrets', async () => {
+    const secret = 'crlf-throw-secret-xyz';
+    const postman = {
+      ...makePostman(),
+      createEnvironment: vi
+        .fn()
+        .mockRejectedValue(new Error(`denied\r\nwith ${secret}\nand forged log line`))
+    };
+    let thrown: unknown;
+    try {
+      await runRepoSync(
+        createInputs({
+          workspaceId: 'ws-123\r\ninjected',
+          projectName: 'core\npayments',
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          repoMutation: makeRepoMutation(),
+          secretMasker: createSecretMasker([secret])
+        }
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain('Environment create failed');
+    expect(message).toContain('ws-123 injected');
+    expect(message).toContain('core payments - prod');
+    expect(message).toContain('denied with');
+    expect(message).toContain('forged log line');
+    expect(message).toContain('verify access-token/team/workspace permissions then rerun');
+    expect(message).toContain(REDACTED);
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain('\n');
+    expect(message).not.toContain('\r');
+    expect(postman.createEnvironment).toHaveBeenCalled();
+  });
+
+  it('keeps non-fatal association diagnostics one-line under CR/LF-bearing cause with secrets', async () => {
+    const secret = 'crlf-warn-secret-xyz';
+    const { core, warnings } = createCoreStub();
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: true,
+        systemEnvMap: { prod: 'sys-prod' }
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi
+            .fn()
+            .mockRejectedValue(new Error(`assoc\r\ndenied ${secret}\nnext-line`)),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation(),
+        secretMasker: createSecretMasker([secret])
+      }
+    );
+
+    expect(result['environment-sync-status']).toBe('failed');
+    expect(result['workspace-link-status']).toBe('success');
+    const associationWarning = warnings.find((line) =>
+      line.includes('System environment association failed')
+    );
+    expect(associationWarning).toBeDefined();
+    expect(associationWarning).toContain('workspace ws-123');
+    expect(associationWarning).toContain('assoc denied');
+    expect(associationWarning).toContain('next-line');
+    expect(associationWarning).toContain('verify access-token/team/system-env mapping then rerun');
+    expect(associationWarning).toContain(REDACTED);
+    expect(associationWarning).not.toContain(secret);
+    expect(associationWarning).not.toContain('\n');
+    expect(associationWarning).not.toContain('\r');
   });
 
   it('omits workspace.id on failed link with no prior durable id while still writing artifact maps', async () => {
@@ -1466,9 +1815,22 @@ describe('monitor resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null)
     });
     const github = makeGithub();
-    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'stale-mon' }), makeDeps(postman, github));
-    
+    const { core, warnings } = createCoreStub();
+    await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'stale-mon' }), {
+      ...makeDeps(postman, github),
+      core
+    });
+
     expect(postman.createMonitor).toHaveBeenCalled();
+    const absent = warnings.find((line) => line.includes('Explicit monitor-id lookup'));
+    expect(absent).toBeDefined();
+    expect(absent).toContain('monitor-id stale-mon');
+    expect(absent).toContain('workspace ws-123');
+    expect(absent).toContain('collection col-smoke');
+    expect(absent).toContain('environment env-prod');
+    expect(absent).toContain('not found in Postman');
+    expect(absent).toContain('falling through to discovery');
+    expect(absent).toContain('verify monitor IDs/access or set monitor-cron then rerun');
   });
 
   it('discovers existing monitor by smoke collection ID', async () => {
@@ -1544,12 +1906,54 @@ describe('monitor resolution paths', () => {
       deleteMonitor: vi.fn().mockResolvedValue(undefined)
     });
     const github = makeGithub();
+    const { core, warnings } = createCoreStub();
     await expect(
       runRepoSync(
         createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorCron: '' }),
-        makeDeps(postman, github)
+        { ...makeDeps(postman, github), core }
       )
     ).resolves.toBeDefined();
+    const runWarning = warnings.find((line) => line.includes('Monitor one-time run'));
+    expect(runWarning).toBeDefined();
+    expect(runWarning).toContain('monitor mon-new');
+    expect(runWarning).toContain('workspace ws-123');
+    expect(runWarning).toContain('collection col-smoke');
+    expect(runWarning).toContain('environment env-prod');
+    expect(runWarning).toContain('boom');
+    expect(runWarning).toContain('verify monitor IDs/access or set monitor-cron then rerun');
+  });
+
+  it('surfaces monitor create failure with operation, entity, cause, and remediation', async () => {
+    const postman = makePostman({
+      createMonitor: vi.fn().mockRejectedValue(new Error('monitor denied')),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const github = makeGithub();
+    await expect(
+      runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toThrow(
+      /Monitor create failed for monitor "core-payments - Smoke Monitor" workspace ws-123 collection col-smoke environment env-prod: monitor denied\. verify monitor IDs\/access or set monitor-cron then rerun/
+    );
+  });
+
+  it('surfaces monitor discovery failure with operation, entity, cause, and remediation', async () => {
+    const postman = makePostman({
+      findMonitorByCollection: vi.fn().mockRejectedValue(new Error('monitor discovery denied')),
+      createMonitor: vi.fn()
+    });
+    const github = makeGithub();
+    await expect(
+      runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toThrow(
+      /Monitor discovery failed for monitor "core-payments - Smoke Monitor" workspace ws-123 collection col-smoke environment env-prod: monitor discovery denied\. verify monitor IDs\/access or set monitor-cron then rerun/
+    );
+    expect(postman.createMonitor).not.toHaveBeenCalled();
   });
 });
 
@@ -1635,6 +2039,56 @@ describe('mock resolution paths', () => {
       'col-baseline',
       'env-prod'
     );
+  });
+
+  it('warns with mock retry context and preserves 3-attempt final failure semantics', async () => {
+    vi.useFakeTimers();
+    try {
+      const postman = makePostman({
+        findMockByCollection: vi.fn().mockResolvedValue(null),
+        createMock: vi.fn().mockRejectedValue(new Error('ESOCKETTIMEDOUT'))
+      });
+      const github = makeGithub();
+      const { core, warnings } = createCoreStub();
+      const run = runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false, smokeCollectionId: '' }),
+        { ...makeDeps(postman, github), core }
+      );
+      const expectation = expect(run).rejects.toThrow(
+        /Mock create failed for mock "core-payments Mock" workspace ws-123 collection col-baseline environment env-prod: ESOCKETTIMEDOUT\. verify collection\/environment access then rerun/
+      );
+      await vi.runAllTimersAsync();
+      await expectation;
+      expect(postman.createMock).toHaveBeenCalledTimes(3);
+      const retryWarning = warnings.find((line) => line.includes('Mock create attempt 1/3'));
+      expect(retryWarning).toBeDefined();
+      expect(retryWarning).toContain('mock "core-payments Mock"');
+      expect(retryWarning).toContain('workspace ws-123');
+      expect(retryWarning).toContain('collection col-baseline');
+      expect(retryWarning).toContain('environment env-prod');
+      expect(retryWarning).toContain('ESOCKETTIMEDOUT');
+      expect(retryWarning).toContain('retrying');
+      expect(retryWarning).toContain('verify collection/environment access then rerun');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces mock discovery failure with operation, entity, cause, and remediation', async () => {
+    const postman = makePostman({
+      findMockByCollection: vi.fn().mockRejectedValue(new Error('mock discovery denied')),
+      createMock: vi.fn()
+    });
+    const github = makeGithub();
+    await expect(
+      runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false, smokeCollectionId: '' }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toThrow(
+      /Mock discovery failed for mock "core-payments Mock" workspace ws-123 collection col-baseline environment env-prod: mock discovery denied\. verify collection\/environment access then rerun/
+    );
+    expect(postman.createMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1889,16 +2343,16 @@ describe('org-mode auto-detection', () => {
     const execLike = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
     };
+    const leak = 'squad-secret-leak-xyz';
 
     globalThis.fetch = orgModeFetchRouter({
       meStatus: 401,
       sessionTeam: 10490519,
       squadsStatus: 500,
-      squadsBody: { error: { message: 'UnexpectedError' } }
+      squadsBody: { error: { message: `UnexpectedError ${leak}` } }
     });
 
-    const { createSecretMasker } = await import('../src/lib/secrets.js');
-    const masker = createSecretMasker(['pmak-test']);
+    const masker = createSecretMasker(['pmak-test', leak]);
 
     const inputs = createInputs({
       postmanApiKey: 'pmak-invalid',
@@ -1918,10 +2372,317 @@ describe('org-mode auto-detection', () => {
     );
 
     expect(result.teamId).toBe('10490519');
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
     expect(inputs.orgMode).toBe(false);
     expect(actionCore.info).not.toHaveBeenCalledWith(expect.stringContaining('Org-mode auto-detected'));
-    expect(actionCore.warning).toHaveBeenCalledWith(
-      expect.stringContaining('Org-mode auto-detection via ums squads failed')
+    const squadWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('Org-mode auto-detection via ums squads failed'));
+    expect(squadWarning).toBeDefined();
+    expect(squadWarning).toContain('team 10490519');
+    expect(squadWarning).toContain('set org-mode and team-id explicitly then rerun');
+    expect(squadWarning).toContain(REDACTED);
+    expect(squadWarning).not.toContain(leak);
+  });
+
+  it('warns on PMAK GET /me 401/403 with status, masked cause, and remediation', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+    const leak = 'pmak-body-secret-abc';
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    globalThis.fetch = vi.fn<typeof fetch>().mockImplementation(async (input: string | URL | Request) => {
+      const urlStr = input instanceof Request ? input.url : String(input);
+      if (urlStr === 'https://api.getpostman.com/me') {
+        return json({ error: { name: 'AuthenticationError', detail: leak } }, 401);
+      }
+      if (urlStr === 'https://iapub.postman.co/api/sessions/current') {
+        return json({
+          identity: { team: 10490519 },
+          consumerType: 'service_account'
+        });
+      }
+      return new Response('', { status: 404 });
+    });
+
+    const masker = createSecretMasker(['pmak-invalid', leak]);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: false, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    expect(result.teamId).toBe('10490519');
+    const meWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('PMAK GET /me validation failed'));
+    expect(meWarning).toBeDefined();
+    expect(meWarning).toContain('status 401');
+    expect(meWarning).toContain('replace postman-api-key or provide a valid postman-access-token then rerun');
+    expect(meWarning).toContain(REDACTED);
+    expect(meWarning).not.toContain(leak);
+  });
+
+  it('keeps gh secret persistence warnings one-line under CR/LF-bearing stderr with secrets', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const leak = 'gh-crlf-secret-xyz';
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({
+        exitCode: 1,
+        stderr: `permission\r\ndenied ${leak}\nforged`,
+        stdout: ''
+      })
+    };
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsBody: { data: [] }
+    });
+    const masker = createSecretMasker(['pmak-invalid', leak]);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      repository: 'postman-cs/repo-sync-demo',
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    const persistWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+    expect(persistWarning).toBeDefined();
+    expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
+    expect(persistWarning).toContain('permission denied');
+    expect(persistWarning).toContain('forged');
+    expect(persistWarning).toContain(
+      'grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun'
+    );
+    expect(persistWarning).toContain(REDACTED);
+    expect(persistWarning).not.toContain(leak);
+    expect(persistWarning).not.toContain('\n');
+    expect(persistWarning).not.toContain('\r');
+  });
+
+  it('warns when gh secret set returns nonzero with repository, masked stderr, and remediation', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const leak = 'gh-stderr-secret-xyz';
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({
+        exitCode: 1,
+        stderr: `permission denied ${leak}`,
+        stdout: ''
+      })
+    };
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsBody: { data: [] }
+    });
+    const masker = createSecretMasker(['pmak-invalid', leak]);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      repository: 'postman-cs/repo-sync-demo',
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    expect(result.teamId).toBe('10490519');
+    const persistWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+    expect(persistWarning).toBeDefined();
+    expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
+    expect(persistWarning).toContain('grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun');
+    expect(persistWarning).toContain(REDACTED);
+    expect(persistWarning).not.toContain(leak);
+  });
+
+  it('warns when gh secret set throws with repository, masked cause, and remediation', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const leak = 'gh-throw-secret-xyz';
+    const execLike = {
+      getExecOutput: vi.fn().mockRejectedValue(new Error(`spawn gh failed ${leak}`))
+    };
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsBody: { data: [] }
+    });
+    const masker = createSecretMasker(['pmak-invalid', leak]);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      repository: 'postman-cs/repo-sync-demo',
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    const persistWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+    expect(persistWarning).toBeDefined();
+    expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
+    expect(persistWarning).toContain('grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun');
+    expect(persistWarning).toContain(REDACTED);
+    expect(persistWarning).not.toContain(leak);
+  });
+
+  it('warns when GitHub token is present but repository context is empty', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn()
+    };
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsBody: { data: [] }
+    });
+    const masker = createSecretMasker(['pmak-invalid']);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      repository: '',
+      githubToken: 'github-token',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    expect(execLike.getExecOutput).not.toHaveBeenCalled();
+    const missingRepoWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('repository (missing)'));
+    expect(missingRepoWarning).toBeDefined();
+    expect(missingRepoWarning).toContain('gh secret set POSTMAN_API_KEY failed');
+    expect(missingRepoWarning).toContain('repository context is empty');
+    expect(missingRepoWarning).toContain(
+      'set repository context or persist POSTMAN_API_KEY manually then rerun'
+    );
+  });
+
+  it('warns when no GitHub token is provided and names repository when known', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn()
+    };
+    globalThis.fetch = orgModeFetchRouter({
+      meStatus: 401,
+      sessionTeam: 10490519,
+      squadsBody: { data: [] }
+    });
+    const masker = createSecretMasker(['pmak-invalid']);
+    const inputs = createInputs({
+      postmanApiKey: 'pmak-invalid',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true,
+      repository: 'postman-cs/repo-sync-demo',
+      githubToken: '',
+      ghFallbackToken: ''
+    });
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      { persistGeneratedApiKeySecret: true, env: {} }
+    );
+
+    expect(result.apiKey).toBe('pmak-generated-from-mock');
+    expect(execLike.getExecOutput).not.toHaveBeenCalled();
+    const noTokenWarning = actionCore.warning.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes('no GitHub token provided'));
+    expect(noTokenWarning).toBeDefined();
+    expect(noTokenWarning).toContain('gh secret set POSTMAN_API_KEY failed');
+    expect(noTokenWarning).toContain('repository postman-cs/repo-sync-demo');
+    expect(noTokenWarning).toContain(
+      'provide github-token/gh-fallback-token or set POSTMAN_API_KEY manually then rerun'
     );
   });
 });
@@ -2859,10 +3620,13 @@ describe('runAction credential preflight', () => {
       line.includes('System environment association failed')
     );
     expect(adviceWarning).toBeDefined();
+    expect(adviceWarning).toContain('workspace');
+    expect(adviceWarning).toContain('->');
     expect(adviceWarning).toContain('Bifrost rejected the access token (UNAUTHENTICATED)');
     expect(adviceWarning).toContain(
       'POST https://api.getpostman.com/service-account-tokens'
     );
+    expect(adviceWarning).toContain('verify access-token/team/system-env mapping then rerun');
     expect(events.some((entry) => entry.includes('iapub.postman.co'))).toBe(true);
   });
 });
