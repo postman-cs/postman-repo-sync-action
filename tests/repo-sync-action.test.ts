@@ -3,7 +3,8 @@ vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
   createInternalIntegrationAdapter: vi.fn(() => ({
     createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
     associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-    connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+    connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+    findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
   }))
 }));
 
@@ -312,7 +313,8 @@ describe('repo sync action', () => {
     };
     const internalIntegration = {
       associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
     };
     const repoMutation = {
       commitAndPush: vi.fn().mockResolvedValue({
@@ -478,7 +480,8 @@ describe('repo sync action', () => {
         github,
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: {
           commitAndPush: vi.fn().mockResolvedValue({
@@ -539,7 +542,8 @@ describe('repo sync action', () => {
         },
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: {
           commitAndPush: vi.fn().mockResolvedValue({
@@ -606,7 +610,8 @@ describe('repo sync action', () => {
         },
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
@@ -734,7 +739,8 @@ describe('repo sync action', () => {
         },
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: repoMutation as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
       }
@@ -821,7 +827,8 @@ describe('repo sync action', () => {
         },
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: {
           commitAndPush: vi.fn().mockResolvedValue({
@@ -882,7 +889,8 @@ describe('repo sync action', () => {
         },
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: {
           commitAndPush: vi.fn().mockResolvedValue({
@@ -994,7 +1002,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1019,7 +1028,8 @@ describe('state ownership persistence', () => {
         postman,
         internalIntegration: {
           associateSystemEnvironments: vi.fn(),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       });
@@ -1045,7 +1055,8 @@ describe('state ownership persistence', () => {
         postman,
         internalIntegration: {
           associateSystemEnvironments: vi.fn(),
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       });
@@ -1069,7 +1080,8 @@ describe('state ownership persistence', () => {
         postman,
         internalIntegration: {
           associateSystemEnvironments: vi.fn(),
-          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied')),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       })).rejects.toThrow('Workspace link failed: link denied');
@@ -1094,7 +1106,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments,
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1131,7 +1144,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments,
-          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1159,7 +1173,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied')),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1215,7 +1230,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied')),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1241,7 +1257,8 @@ describe('state ownership persistence', () => {
         postman: makePostman(),
         internalIntegration: {
           associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied'))
+          connectWorkspaceToRepository: vi.fn().mockRejectedValue(new Error('link denied')),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
         },
         repoMutation: makeRepoMutation()
       }
@@ -1426,7 +1443,8 @@ describe('monitor resolution paths', () => {
     github,
     internalIntegration: {
       associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
     },
     repoMutation: {
       commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
@@ -1575,7 +1593,8 @@ describe('mock resolution paths', () => {
     github,
     internalIntegration: {
       associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
     },
     repoMutation: {
       commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
@@ -1961,7 +1980,8 @@ describe('repo-variable fallback resolution', () => {
     github,
     internalIntegration: {
       associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
     },
     repoMutation: {
       commitAndPush: vi.fn().mockResolvedValue({ commitSha: '', pushed: false, resolvedCurrentRef: 'main' })
@@ -2103,6 +2123,377 @@ describe('repo-variable fallback resolution', () => {
   });
 });
 
+describe('repo-link admission guard', () => {
+  let originalCwd = '';
+  let testDir = '';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'repo-sync-admission-'));
+    process.chdir(testDir);
+    process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
+    process.env.GITHUB_REF_NAME = 'feature/repo-sync';
+    delete process.env.GITHUB_HEAD_REF;
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REF_NAME;
+  });
+
+  function makePostman() {
+    return {
+      createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      findEnvironmentByName: vi.fn().mockResolvedValue(null),
+      createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+      createMonitor: vi.fn().mockResolvedValue('mon-1'),
+      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('core-payments')),
+      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      listMonitors: vi.fn().mockResolvedValue([]),
+      listMocks: vi.fn().mockResolvedValue([]),
+      monitorExists: vi.fn().mockResolvedValue(false),
+      mockExists: vi.fn().mockResolvedValue(false),
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      runMonitor: vi.fn().mockResolvedValue(undefined),
+      listEnvironments: vi.fn().mockResolvedValue([]),
+      deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+      deleteMock: vi.fn().mockResolvedValue(undefined),
+      deleteMonitor: vi.fn().mockResolvedValue(undefined)
+    };
+  }
+
+  function makeRepoMutation() {
+    return {
+      commitAndPush: vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      })
+    } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation'];
+  }
+
+  it('fails before env/mock/monitor writes on linked-visible conflict with another workspace', async () => {
+    const postman = makePostman();
+    const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+    const findWorkspaceForRepo = vi.fn().mockResolvedValue({
+      state: 'linked-visible',
+      workspace: { id: 'ws-other', name: 'Payments Service' }
+    });
+    const commitAndPush = vi.fn().mockResolvedValue({
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: 'feature/repo-sync'
+    });
+    const expectedMessage =
+      'REPOSITORY_LINK_CONFLICT_VISIBLE: Repository https://github.com/postman-cs/repo-sync-demo at path / is already linked to workspace ws-other ("Payments Service"). No Postman assets were changed. Reuse that workspace or disconnect it in Workspace Settings, then rerun.';
+
+    let caught: unknown;
+    try {
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: true
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          internalIntegration: {
+            associateSystemEnvironments,
+            connectWorkspaceToRepository,
+            findWorkspaceForRepo
+          },
+          repoMutation: { commitAndPush } as unknown as Parameters<
+            typeof runRepoSync
+          >[1]['repoMutation']
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(expectedMessage);
+
+    expect(findWorkspaceForRepo).toHaveBeenCalledWith(
+      'https://github.com/postman-cs/repo-sync-demo',
+      '/'
+    );
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+    expect(connectWorkspaceToRepository).not.toHaveBeenCalled();
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(commitAndPush).not.toHaveBeenCalled();
+    expect(existsSync('.postman/resources.yaml')).toBe(false);
+  });
+
+  it('fails before writes on linked-invisible conflict', async () => {
+    const postman = makePostman();
+    const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+    const commitAndPush = vi.fn().mockResolvedValue({
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: 'feature/repo-sync'
+    });
+    const expectedMessage =
+      'REPOSITORY_LINK_CONFLICT_INVISIBLE: Repository https://github.com/postman-cs/repo-sync-demo at path / is linked to workspace ws-hidden, but these credentials cannot view it. No Postman assets were changed. Ask its owner or a team admin to disconnect it.';
+
+    let caught: unknown;
+    try {
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: true
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          internalIntegration: {
+            associateSystemEnvironments,
+            connectWorkspaceToRepository,
+            findWorkspaceForRepo: vi.fn().mockResolvedValue({
+              state: 'linked-invisible',
+              workspaceId: 'ws-hidden'
+            })
+          },
+          repoMutation: { commitAndPush } as unknown as Parameters<
+            typeof runRepoSync
+          >[1]['repoMutation']
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(expectedMessage);
+
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+    expect(connectWorkspaceToRepository).not.toHaveBeenCalled();
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(commitAndPush).not.toHaveBeenCalled();
+    expect(existsSync('.postman/resources.yaml')).toBe(false);
+  });
+
+  it('appends org-mode remediation on linked-invisible conflicts', async () => {
+    const postman = makePostman();
+    const associateSystemEnvironments = vi.fn().mockResolvedValue(undefined);
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+    const commitAndPush = vi.fn().mockResolvedValue({
+      commitSha: '',
+      pushed: false,
+      resolvedCurrentRef: 'feature/repo-sync'
+    });
+    const expectedMessage =
+      "REPOSITORY_LINK_CONFLICT_INVISIBLE: Repository https://github.com/postman-cs/repo-sync-demo at path / is linked to workspace ws-hidden, but these credentials cannot view it. No Postman assets were changed. Ask its owner or a team admin to disconnect it. Verify workspace-team-id; if the owner is in another sub-team, ask that sub-team's admin to disconnect it.";
+
+    let caught: unknown;
+    try {
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          environmentSyncEnabled: true,
+          orgMode: true
+        }),
+        {
+          core: createCoreStub().core,
+          postman,
+          internalIntegration: {
+            associateSystemEnvironments,
+            connectWorkspaceToRepository,
+            findWorkspaceForRepo: vi.fn().mockResolvedValue({
+              state: 'linked-invisible',
+              workspaceId: 'ws-hidden'
+            })
+          },
+          repoMutation: { commitAndPush } as unknown as Parameters<
+            typeof runRepoSync
+          >[1]['repoMutation']
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(expectedMessage);
+
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+    expect(connectWorkspaceToRepository).not.toHaveBeenCalled();
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(commitAndPush).not.toHaveBeenCalled();
+    expect(existsSync('.postman/resources.yaml')).toBe(false);
+  });
+
+  it('skips the duplicate link POST when the repo is already linked to the target workspace', async () => {
+    const { core, infos } = createCoreStub();
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+    const findWorkspaceForRepo = vi.fn().mockResolvedValue({
+      state: 'linked-visible',
+      workspace: { id: 'ws-123', name: 'Target Workspace' }
+    });
+
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository,
+          findWorkspaceForRepo
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(result['workspace-link-status']).toBe('success');
+    expect(connectWorkspaceToRepository).not.toHaveBeenCalled();
+    expect(infos).toContain(
+      'REPOSITORY_LINK_ALREADY_TARGET: Repository https://github.com/postman-cs/repo-sync-demo at path / is already linked to target workspace ws-123; continuing.'
+    );
+  });
+
+  it('passes preflightWasFree to connect so a free->conflict race surfaces UNRESOLVED', async () => {
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository,
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(connectWorkspaceToRepository).toHaveBeenCalledWith(
+      'ws-123',
+      'https://github.com/postman-cs/repo-sync-demo',
+      { preflightWasFree: true }
+    );
+  });
+
+  it('surfaces the exact REPOSITORY_LINK_CONFLICT_UNRESOLVED message through the canonical boundary', async () => {
+    const unresolvedMessage =
+      'REPOSITORY_LINK_CONFLICT_UNRESOLVED: Preflight found no active owner, but link creation reported workspace ws-race. Stop and contact Postman support; do not alter the repository URL.';
+    process.env.POSTMAN_BRANCH_DECISION = JSON.stringify({
+      tier: 'canonical',
+      strategy: 'publish-gate',
+      canonicalBranch: 'main',
+      reason: 'test',
+      identity: {
+        provider: 'github',
+        headBranch: 'main',
+        headSha: 'abc123456789',
+        refKind: 'default-branch',
+        isPrContext: false,
+        isForkPr: false
+      }
+    });
+    try {
+      let caught: unknown;
+      try {
+        await runRepoSync(
+          createInputs({
+            branchStrategy: 'publish-gate',
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            environmentSyncEnabled: false
+          }),
+          {
+            core: createCoreStub().core,
+            postman: makePostman(),
+            internalIntegration: {
+              associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+              connectWorkspaceToRepository: vi
+                .fn()
+                .mockRejectedValue(new Error(unresolvedMessage)),
+              findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+            },
+            repoMutation: makeRepoMutation()
+          }
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(unresolvedMessage);
+    } finally {
+      delete process.env.POSTMAN_BRANCH_DECISION;
+    }
+  });
+
+  it('warns but proceeds when the repository-link preflight is unknown', async () => {
+    const { core, warnings } = createCoreStub();
+    const connectWorkspaceToRepository = vi.fn().mockResolvedValue(undefined);
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false
+      }),
+      {
+        core,
+        postman: makePostman(),
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository,
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({
+            state: 'unknown',
+            reason: 'filesystem lookup returned HTTP 500'
+          })
+        },
+        repoMutation: makeRepoMutation()
+      }
+    );
+
+    expect(warnings).toContain(
+      'REPOSITORY_LINK_PREFLIGHT_UNKNOWN: Unable to determine the existing repository link (filesystem lookup returned HTTP 500); continuing and relying on link creation conflict handling.'
+    );
+    expect(connectWorkspaceToRepository).toHaveBeenCalledWith(
+      'ws-123',
+      'https://github.com/postman-cs/repo-sync-demo',
+      undefined
+    );
+  });
+});
+
 describe('runAction credential preflight', () => {
   let originalCwd = '';
   let testDir = '';
@@ -2112,7 +2503,8 @@ describe('runAction credential preflight', () => {
     return {
       createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
       associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined)
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
     };
   }
 

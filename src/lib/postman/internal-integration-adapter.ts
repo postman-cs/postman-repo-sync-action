@@ -9,6 +9,21 @@ export interface GovernanceAssociation {
   systemEnvId: string;
 }
 
+export type WorkspaceForRepoResult =
+  | { state: 'free' }
+  | { state: 'linked-visible'; workspace: { id: string; name?: string } }
+  | { state: 'linked-invisible'; workspaceId: string }
+  | { state: 'unknown'; reason: string };
+
+export interface ConnectWorkspaceToRepositoryOptions {
+  /**
+   * When true, a POST duplicate-link conflict against a different workspace
+   * is treated as a preflight race (`REPOSITORY_LINK_CONFLICT_UNRESOLVED`)
+   * instead of the reactive visibility-probe messaging.
+   */
+  preflightWasFree?: boolean;
+}
+
 export interface InternalIntegrationAdapterOptions {
   accessToken: string;
   /**
@@ -35,11 +50,16 @@ export interface InternalIntegrationAdapter {
   ): Promise<void>;
   connectWorkspaceToRepository(
     workspaceId: string,
-    repoUrl: string
+    repoUrl: string,
+    options?: ConnectWorkspaceToRepositoryOptions
   ): Promise<void>;
   createApiKey(
     name: string
   ): Promise<string>;
+  findWorkspaceForRepo(
+    repoUrl: string,
+    path?: string
+  ): Promise<WorkspaceForRepoResult>;
 }
 
 /**
@@ -167,9 +187,112 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     }
   }
 
+  /**
+   * Probe who (if anyone) already owns the global `(repo, path)` filesystem
+   * link. Non-fatal: unexpected statuses / network errors yield `unknown` so
+   * callers can proceed and rely on reactive POST conflict handling.
+   *
+   * Bifrost states (FileSystemController.fetchWorkspaceForFileSystem):
+   *   - 200 + data null  -> free
+   *   - 200 + data       -> linked-visible (workspace payload)
+   *   - 403 + error.meta.workspaceId -> linked-invisible
+   *   - 200 + error.meta.workspaceId -> linked-invisible (proxy envelope)
+   */
+  async findWorkspaceForRepo(
+    repoUrl: string,
+    path = '/'
+  ): Promise<WorkspaceForRepoResult> {
+    const fsPath = path && path.trim() ? path.trim() : '/';
+    const url = `${this.bifrostBaseUrl}/ws/proxy`;
+    const payload = {
+      service: 'workspaces',
+      method: 'GET',
+      path: `/workspaces/filesystem?repo=${encodeURIComponent(repoUrl)}&path=${encodeURIComponent(fsPath)}`
+    };
+
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: this.bifrostHeaders(),
+        body: JSON.stringify(payload)
+      });
+
+      let parsed: {
+        data?: { id?: unknown; name?: unknown } | null;
+        error?: { meta?: { workspaceId?: unknown }; name?: unknown };
+      } = {};
+      try {
+        parsed = (await response.json()) as typeof parsed;
+      } catch {
+        return {
+          state: 'unknown',
+          reason: `filesystem lookup returned non-JSON body (HTTP ${response.status})`
+        };
+      }
+
+      // Bifrost may surface an invisible owner as a direct 403 or as an outer
+      // HTTP 200 proxy envelope. Detect error.meta.workspaceId before free/ok
+      // classification so a 200 + null data body is never misread as free.
+      const errorMetaWorkspaceId =
+        typeof parsed?.error?.meta?.workspaceId === 'string' &&
+        parsed.error.meta.workspaceId.trim()
+          ? parsed.error.meta.workspaceId.trim()
+          : undefined;
+      if (errorMetaWorkspaceId) {
+        return { state: 'linked-invisible', workspaceId: errorMetaWorkspaceId };
+      }
+
+      if (response.ok) {
+        if (parsed?.data == null) {
+          return { state: 'free' };
+        }
+        const id =
+          typeof parsed.data.id === 'string' ? parsed.data.id.trim() : '';
+        if (!id) {
+          return {
+            state: 'unknown',
+            reason: 'filesystem lookup returned 200 without a workspace id'
+          };
+        }
+        const name =
+          typeof parsed.data.name === 'string' && parsed.data.name.trim()
+            ? parsed.data.name.trim()
+            : undefined;
+        return {
+          state: 'linked-visible',
+          workspace: name ? { id, name } : { id }
+        };
+      }
+
+      if (response.status === 403) {
+        const workspaceId = extractDuplicateWorkspaceId(
+          JSON.stringify(parsed)
+        );
+        if (workspaceId) {
+          return { state: 'linked-invisible', workspaceId };
+        }
+        return {
+          state: 'unknown',
+          reason: 'filesystem lookup returned 403 without error.meta.workspaceId'
+        };
+      }
+
+      return {
+        state: 'unknown',
+        reason: `filesystem lookup returned HTTP ${response.status}`
+      };
+    } catch (error) {
+      return {
+        state: 'unknown',
+        reason: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
   async connectWorkspaceToRepository(
     workspaceId: string,
-    repoUrl: string
+    repoUrl: string,
+    options?: ConnectWorkspaceToRepositoryOptions
   ): Promise<void> {
     const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const payload = {
@@ -214,6 +337,11 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
           // loudly with whatever identity can be resolved.
           const existingWorkspaceId = extractDuplicateWorkspaceId(body);
           if (existingWorkspaceId && existingWorkspaceId !== workspaceId) {
+            if (options?.preflightWasFree) {
+              throw new Error(
+                `REPOSITORY_LINK_CONFLICT_UNRESOLVED: Preflight found no active owner, but link creation reported workspace ${existingWorkspaceId}. Stop and contact Postman support; do not alter the repository URL.`
+              );
+            }
             throw new Error(
               await this.describeWorkspaceLinkConflict(existingWorkspaceId, workspaceId, repoUrl)
             );

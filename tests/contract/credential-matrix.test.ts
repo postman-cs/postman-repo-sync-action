@@ -186,7 +186,7 @@ function createPlatform(options: PlatformOptions = {}) {
       }
 
       if (svc === 'workspaces') {
-        if (pmethod === 'get' && /\/filesystem$/.test(ppath)) return json({ data: null });
+        if (pmethod === 'get' && /\/filesystem(?:\?|$)/.test(ppath)) return json({ data: null });
         return json({ data: {} });
       }
 

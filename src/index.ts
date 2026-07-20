@@ -196,7 +196,9 @@ export interface RepoSyncDependencies {
   };
   internalIntegration?: Pick<
     InternalIntegrationAdapter,
-    'associateSystemEnvironments' | 'connectWorkspaceToRepository'
+    | 'associateSystemEnvironments'
+    | 'connectWorkspaceToRepository'
+    | 'findWorkspaceForRepo'
   >;
   repoMutation?: RepoMutationService;
 }
@@ -1591,6 +1593,50 @@ async function runRepoSyncInner(
     }
   }
 
+  // Repo-link admission guard: Bifrost enforces global uniqueness of
+  // (repository URL, path) -> workspace. Probe before any asset writes so a
+  // conflict fails cleanly instead of after env/mock/monitor creation.
+  let skipRepositoryLinkPost = false;
+  let repositoryLinkPreflightWasFree = false;
+  if (
+    inputs.workspaceLinkEnabled &&
+    inputs.workspaceId &&
+    inputs.repoUrl &&
+    dependencies.internalIntegration?.findWorkspaceForRepo
+  ) {
+    const probe = await dependencies.internalIntegration.findWorkspaceForRepo(
+      inputs.repoUrl,
+      '/'
+    );
+    if (probe.state === 'linked-visible') {
+      if (probe.workspace.id === inputs.workspaceId) {
+        skipRepositoryLinkPost = true;
+        dependencies.core.info(
+          `REPOSITORY_LINK_ALREADY_TARGET: Repository ${inputs.repoUrl} at path / is already linked to target workspace ${inputs.workspaceId}; continuing.`
+        );
+      } else {
+        const ownerName = probe.workspace.name?.trim() || 'unknown';
+        throw new Error(
+          `REPOSITORY_LINK_CONFLICT_VISIBLE: Repository ${inputs.repoUrl} at path / is already linked to workspace ${probe.workspace.id} ("${ownerName}"). No Postman assets were changed. Reuse that workspace or disconnect it in Workspace Settings, then rerun.`
+        );
+      }
+    } else if (probe.state === 'linked-invisible') {
+      let message =
+        `REPOSITORY_LINK_CONFLICT_INVISIBLE: Repository ${inputs.repoUrl} at path / is linked to workspace ${probe.workspaceId}, but these credentials cannot view it. No Postman assets were changed. Ask its owner or a team admin to disconnect it.`;
+      if (inputs.orgMode) {
+        message +=
+          ' Verify workspace-team-id; if the owner is in another sub-team, ask that sub-team\'s admin to disconnect it.';
+      }
+      throw new Error(message);
+    } else if (probe.state === 'free') {
+      repositoryLinkPreflightWasFree = true;
+    } else {
+      dependencies.core.warning(
+        `REPOSITORY_LINK_PREFLIGHT_UNKNOWN: Unable to determine the existing repository link (${probe.reason}); continuing and relying on link creation conflict handling.`
+      );
+    }
+  }
+
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
   const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
@@ -1761,20 +1807,41 @@ async function runRepoSyncInner(
     dependencies.internalIntegration
   ) {
     try {
-      await dependencies.internalIntegration.connectWorkspaceToRepository(
-        inputs.workspaceId,
-        inputs.repoUrl
-      );
-      outputs['workspace-link-status'] = 'success';
-      dependencies.core.info(
-        `workspace-link-status=success workspace-id=${inputs.workspaceId} repo=${inputs.repoUrl}`
-      );
+      if (skipRepositoryLinkPost) {
+        outputs['workspace-link-status'] = 'success';
+        dependencies.core.info(
+          `workspace-link-status=success workspace-id=${inputs.workspaceId} repo=${inputs.repoUrl} (preflight already-target; link POST skipped)`
+        );
+      } else {
+        await dependencies.internalIntegration.connectWorkspaceToRepository(
+          inputs.workspaceId,
+          inputs.repoUrl,
+          repositoryLinkPreflightWasFree ? { preflightWasFree: true } : undefined
+        );
+        outputs['workspace-link-status'] = 'success';
+        dependencies.core.info(
+          `workspace-link-status=success workspace-id=${inputs.workspaceId} repo=${inputs.repoUrl}`
+        );
+      }
     } catch (error) {
       outputs['workspace-link-status'] = 'failed';
-      const message = `Workspace link failed: ${error instanceof Error ? error.message : String(error)}`;
+      const rawMessage =
+        error instanceof Error ? error.message : String(error);
+      // Preserve the exact unresolved race contract; do not wrap/prefix it at
+      // the canonical finalize boundary. Non-contract link failures keep the
+      // legacy "Workspace link failed:" warning/throw shape.
+      const isUnresolvedContract = rawMessage.startsWith(
+        'REPOSITORY_LINK_CONFLICT_UNRESOLVED:'
+      );
+      const message = isUnresolvedContract
+        ? rawMessage
+        : `Workspace link failed: ${rawMessage}`;
       // A canonical non-legacy run is the finalize boundary: reporting success
       // here would allow a later version tag to claim fully linked onboarding.
       if (branchDecision.tier === 'canonical') {
+        if (isUnresolvedContract && error instanceof Error) {
+          throw error;
+        }
         throw new Error(message, { cause: error });
       }
       dependencies.core.warning(message);
