@@ -37,7 +37,11 @@ jobs:
           BIN="$PWD/build/sea/postman-repo-sync-${VERSION}-linux-x64"
           out="$(env -i PATH=/nonexistent "$BIN" 2>&1 || true)"
           echo "$out"
-          if ! echo "$out" | grep -q "is required"; then
+          # repo-sync validates the Postman credential before other inputs, so an
+          # empty environment surfaces the credential error ("... is missing or
+          # invalid ...") rather than a "<field> is required" message. Either proves
+          # the binary ran its own code and reached input validation.
+          if ! echo "$out" | grep -qE "is missing or invalid|is required"; then
             echo "::error::SEA binary did not reach input validation with an empty environment"
             exit 1
           fi
