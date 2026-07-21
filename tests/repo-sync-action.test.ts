@@ -192,6 +192,8 @@ describe('repo sync action', () => {
     process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
     process.env.GITHUB_REF_NAME = 'feature/repo-sync';
     delete process.env.GITHUB_HEAD_REF;
+    vi.stubEnv('POSTMAN_API_KEY', '');
+    vi.stubEnv('POSTMAN_ACCESS_TOKEN', '');
   });
 
   afterEach(() => {
@@ -200,6 +202,7 @@ describe('repo sync action', () => {
     delete process.env.GITHUB_REPOSITORY;
     delete process.env.GITHUB_REF_NAME;
     delete process.env.GITHUB_HEAD_REF;
+    vi.unstubAllEnvs();
   });
 
   it('marks secrets during input resolution', () => {

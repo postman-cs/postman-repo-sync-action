@@ -207,7 +207,16 @@ export function createCliExec(secretMasker: (value: string) => string): ExecLike
   };
 }
 
+// Embedded at SEA build time via esbuild --define (scripts/build-sea.sh); the
+// standalone binary ships no package.json. The main bundle defines this as a
+// constant undefined, so the guard below is inert there — the committed dist
+// resolves the version from package.json at runtime as before (no per-bump churn).
+declare const __SEA_VERSION__: string | undefined;
+
 function resolvePackageVersion(): string {
+  if (typeof __SEA_VERSION__ === 'string' && __SEA_VERSION__) {
+    return __SEA_VERSION__;
+  }
   const candidates: string[] = [];
   // Present in the esbuild CJS bundle (dist/cli.cjs -> ../package.json).
   if (typeof __filename === 'string' && __filename) {

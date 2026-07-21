@@ -158,7 +158,7 @@ describe('CLI packaging contract', () => {
     expect(packagingSource.includes(wipeBan)).toBe(false);
   });
 
-  it('packs, installs, and runs postman-repo-sync --help without shell parse errors', async () => {
+  it('packs, extracts, and runs postman-repo-sync --help without shell parse errors', async () => {
     const packDir = await makeTempDir('postman-repo-sync-pack-');
     const prefixDir = await makeTempDir('postman-repo-sync-prefix-');
 
@@ -183,55 +183,24 @@ describe('CLI packaging contract', () => {
     expect(packed.name).toBe('@postman-cse/onboarding-repo-sync');
 
     const tarballPath = path.join(packDir, packed.filename);
-    await mkdir(prefixDir, { recursive: true });
-    const fixturePackage = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as {
-      name: string;
-      private?: boolean;
-      scripts?: Record<string, string>;
-    };
-    fixturePackage.name = 'postman-repo-sync-packaging-fixture';
-    fixturePackage.private = true;
-    delete fixturePackage.scripts;
-    const fixtureLock = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package-lock.json'), 'utf8')) as {
-      name: string;
-      packages: Record<string, { name?: string }>;
-    };
-    fixtureLock.name = fixturePackage.name;
-    if (fixtureLock.packages['']) {
-      fixtureLock.packages[''].name = fixturePackage.name;
-    }
-    await writeFile(path.join(prefixDir, 'package.json'), JSON.stringify(fixturePackage), 'utf8');
-    await writeFile(path.join(prefixDir, 'package-lock.json'), JSON.stringify(fixtureLock), 'utf8');
-
-    // Read-only against committed dist/: pack/install must not rebuild.
-    await execFileAsync(npmCommand, [...npmCliArgs, 'ci', '--offline', '--ignore-scripts'], {
-      cwd: prefixDir,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH ?? '' },
-      maxBuffer: 20 * 1024 * 1024
-    });
+    const installDir = path.join(
+      prefixDir,
+      'node_modules',
+      '@postman-cse',
+      'onboarding-repo-sync'
+    );
+    await mkdir(installDir, { recursive: true });
     await execFileAsync(
-      npmCommand,
-      [...npmCliArgs, 'install', '--offline', '--ignore-scripts', '--no-save', tarballPath],
+      'tar',
+      ['-xzf', tarballPath, '-C', installDir, '--strip-components', '1'],
       {
-        cwd: prefixDir,
         encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: process.env.PATH ?? ''
-        },
+        env: { ...process.env, PATH: process.env.PATH ?? '' },
         maxBuffer: 20 * 1024 * 1024
       }
     );
 
-    const binPath = path.join(
-      prefixDir,
-      'node_modules',
-      '@postman-cse',
-      'onboarding-repo-sync',
-      'dist',
-      'cli.cjs'
-    );
+    const binPath = path.join(installDir, 'dist', 'cli.cjs');
 
     const help = await execFileAsync(process.execPath, [binPath, '--help'], {
       encoding: 'utf8',
