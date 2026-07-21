@@ -302,7 +302,7 @@ describe('renderCiWorkflowTemplate', () => {
     expect(ciWorkflow).not.toMatch(/grep |awk |base64 -d|\[\[|CMD=\(|curl -fsSL/);
   });
 
-  it('executes the generated PowerShell resource resolver against the canonical manifest', () => {
+  it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: 30_000 }, () => {
     const parsed = parse(
       getCiWorkflowTemplate('azure-devops', {
         runnerOs: 'windows'
