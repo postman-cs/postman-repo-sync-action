@@ -75,6 +75,12 @@ export const postmanRepoSyncActionContract: {
       required: false,
       default: '.github/workflows/ci.yml'
     },
+    'ci-runner-os': {
+      description: 'Runner operating system for the generated CI workflow.',
+      required: false,
+      default: 'linux',
+      allowedValues: ['linux', 'windows']
+    },
     'project-name': {
       description: 'Service project name used for environment, mock, and monitor naming.',
       required: true

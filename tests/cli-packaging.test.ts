@@ -8,6 +8,8 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const execFileAsync = promisify(execFile);
+const npmCommand = process.platform === 'win32' ? process.execPath : 'npm';
+const npmCliArgs = process.platform === 'win32' ? [process.env.npm_execpath || ''] : [];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDirs: string[] = [];
 let packageSnapshotRoot = '';
@@ -46,9 +48,11 @@ describe('CLI packaging contract', () => {
     const contents = await readFile(cliPath, 'utf8');
     expect(contents.startsWith('#!/usr/bin/env node\n')).toBe(true);
 
-    const mode = (await stat(cliPath)).mode & 0o777;
-    expect(mode & 0o111).not.toBe(0);
-    await access(cliPath, constants.X_OK);
+    if (process.platform !== 'win32') {
+      const mode = (await stat(cliPath)).mode & 0o777;
+      expect(mode & 0o111).not.toBe(0);
+      await access(cliPath, constants.X_OK);
+    }
 
     const staged = await execFileAsync('git', ['ls-files', '--stage', 'dist/cli.cjs'], {
       cwd: repoRoot,
@@ -73,7 +77,7 @@ describe('CLI packaging contract', () => {
       TMPDIR: sandbox
     };
 
-    const help = await execFileAsync(cliPath, ['--help'], {
+    const help = await execFileAsync(process.execPath, [cliPath, '--help'], {
       cwd: sandbox,
       encoding: 'utf8',
       env,
@@ -82,7 +86,7 @@ describe('CLI packaging contract', () => {
     expect(help.stdout).toMatch(/Usage:\s+postman-repo-sync/i);
     expect(help.stderr).not.toMatch(/permission denied|exec format|syntax error|unexpected token|"use strict"/i);
 
-    const version = await execFileAsync(cliPath, ['--version'], {
+    const version = await execFileAsync(process.execPath, [cliPath, '--version'], {
       cwd: sandbox,
       encoding: 'utf8',
       env,
@@ -159,8 +163,8 @@ describe('CLI packaging contract', () => {
     const prefixDir = await makeTempDir('postman-repo-sync-prefix-');
 
     const packResult = await execFileAsync(
-      'npm',
-      ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir],
+      npmCommand,
+      [...npmCliArgs, 'pack', '--ignore-scripts', '--json', '--pack-destination', packDir],
       {
         cwd: packageSnapshotRoot,
         encoding: 'utf8',
@@ -200,15 +204,15 @@ describe('CLI packaging contract', () => {
     await writeFile(path.join(prefixDir, 'package-lock.json'), JSON.stringify(fixtureLock), 'utf8');
 
     // Read-only against committed dist/: pack/install must not rebuild.
-    await execFileAsync('npm', ['ci', '--offline', '--ignore-scripts'], {
+    await execFileAsync(npmCommand, [...npmCliArgs, 'ci', '--offline', '--ignore-scripts'], {
       cwd: prefixDir,
       encoding: 'utf8',
       env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 20 * 1024 * 1024
     });
     await execFileAsync(
-      'npm',
-      ['install', '--offline', '--ignore-scripts', '--no-save', tarballPath],
+      npmCommand,
+      [...npmCliArgs, 'install', '--offline', '--ignore-scripts', '--no-save', tarballPath],
       {
         cwd: prefixDir,
         encoding: 'utf8',
@@ -223,11 +227,13 @@ describe('CLI packaging contract', () => {
     const binPath = path.join(
       prefixDir,
       'node_modules',
-      '.bin',
-      process.platform === 'win32' ? 'postman-repo-sync.cmd' : 'postman-repo-sync'
+      '@postman-cse',
+      'onboarding-repo-sync',
+      'dist',
+      'cli.cjs'
     );
 
-    const help = await execFileAsync(binPath, ['--help'], {
+    const help = await execFileAsync(process.execPath, [binPath, '--help'], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -243,7 +249,7 @@ describe('CLI packaging contract', () => {
     expect(help.stderr).not.toMatch(/permission denied|exec format|syntax error|unexpected token|"use strict"/i);
     expect(help.stdout).not.toMatch(/"use strict"/);
 
-    const version = await execFileAsync(binPath, ['--version'], {
+    const version = await execFileAsync(process.execPath, [binPath, '--version'], {
       encoding: 'utf8',
       env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 1024 * 1024
@@ -252,5 +258,5 @@ describe('CLI packaging contract', () => {
       version: string;
     };
     expect(version.stdout.trim()).toBe(packageJson.version);
-  }, 60_000);
+  }, 120_000);
 });

@@ -70,6 +70,7 @@ type EnvironmentValues = {
 }[];
 
 type Status = 'success' | 'skipped' | 'failed';
+export type CiRunnerOs = 'linux' | 'windows';
 
 export interface ResolvedInputs {
   projectName: string;
@@ -109,6 +110,7 @@ export interface ResolvedInputs {
   provider: GitProvider;
   ciWorkflowBase64: string;
   generateCiWorkflow: boolean;
+  ciRunnerOs?: CiRunnerOs;
   monitorType: string;
   ciWorkflowPath: string;
   orgMode: boolean;
@@ -130,6 +132,7 @@ export interface ResolvedInputs {
   postmanBifrostBase: string;
   postmanFallbackBase: string;
   postmanCliInstallUrl: string;
+  postmanCliWindowsInstallUrl?: string;
   postmanIapubBase: string;
 }
 
@@ -376,6 +379,18 @@ function parseBranchStrategy(value: string | undefined): BranchStrategy {
   );
 }
 
+function parseCiRunnerOs(value: string | undefined): CiRunnerOs {
+  const definition = postmanRepoSyncActionContract.inputs['ci-runner-os'];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || '').trim() || (definition.default ?? 'linux');
+  if (allowed.includes(normalized)) {
+    return normalized as CiRunnerOs;
+  }
+  throw new Error(
+    `Unsupported ci-runner-os "${normalized}". Supported values: ${allowed.join(', ')}`
+  );
+}
+
 function normalizeReleaseLabel(value: string): string {
   const cleaned = normalizeInputValue(value)
     .replace(/^refs\/heads\//, '')
@@ -484,6 +499,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     provider: repoContext.provider,
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
     generateCiWorkflow: parseBooleanInput(getInput('generate-ci-workflow', env), true),
+    ciRunnerOs: parseCiRunnerOs(getInput('ci-runner-os', env)),
     monitorType: getInput('monitor-type', env) || 'cloud',
     ciWorkflowPath:
       getInput('ci-workflow-path', env) ||
@@ -507,6 +523,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
     postmanFallbackBase: endpointProfile.fallbackBaseUrl,
     postmanCliInstallUrl: endpointProfile.cliInstallUrl,
+    postmanCliWindowsInstallUrl: endpointProfile.cliWindowsInstallUrl,
     postmanIapubBase: endpointProfile.iapubBaseUrl
   };
 }
@@ -871,6 +888,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_GH_FALLBACK_TOKEN: ghFallbackToken,
     INPUT_CI_WORKFLOW_BASE64: readInput(actionCore, 'ci-workflow-base64'),
     INPUT_GENERATE_CI_WORKFLOW: readInput(actionCore, 'generate-ci-workflow'),
+    INPUT_CI_RUNNER_OS: readInput(actionCore, 'ci-runner-os'),
     INPUT_MONITOR_TYPE: readInput(actionCore, 'monitor-type') || 'cloud',
     INPUT_CI_WORKFLOW_PATH: readInput(actionCore, 'ci-workflow-path'),
     INPUT_ORG_MODE: readInput(actionCore, 'org-mode'),
@@ -1470,11 +1488,15 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
   if (inputs.provider === 'azure-devops') {
     return getCiWorkflowTemplate(inputs.provider, {
       postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+      postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
+      runnerOs: inputs.ciRunnerOs,
       postmanRegion: inputs.postmanRegion
     });
   }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
+    postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
+    runnerOs: inputs.ciRunnerOs,
     postmanRegion: inputs.postmanRegion
   });
 }
