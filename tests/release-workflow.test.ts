@@ -52,6 +52,9 @@ describe('release workflow publishing contract', () => {
     expect(smoke).toContain('env -i PATH=/nonexistent');
     expect(smoke).toContain('postman-repo-sync-${VERSION}-linux-x64');
     expect(smoke).toContain('version not embedded');
+    // Hermetic-runtime guard: the smoke must prove ambient NODE_OPTIONS is ignored.
+    expect(smoke).toContain("NODE_OPTIONS='--this-flag-does-not-exist'");
+    expect(smoke).toContain('honored ambient NODE_OPTIONS');
     expect(namedStep('Upload tarball and SEA binary')).toContain(
       'build/sea/postman-repo-sync-*-linux-x64'
     );
