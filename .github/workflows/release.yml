@@ -148,6 +148,16 @@ jobs:
             echo "::error::SEA honored ambient NODE_OPTIONS; expected execArgvExtension=none to ignore it"
             exit 1
           fi
+      - name: Smoke test SEA proxy routing
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          BIN="$PWD/build/sea/postman-repo-sync-${VERSION}-linux-x64"
+          node scripts/assert-sea-proxy.mjs "$BIN" iapub.postman.co:443 \
+            --postman-access-token proxy-smoke-token \
+            --project-name proxy-smoke \
+            --workspace-id proxy-workspace \
+            --repo-write-mode none \
+            --generate-ci-workflow false
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -179,6 +189,7 @@ jobs:
           files: |
             release.tgz
             build/sea/postman-repo-sync-*-linux-x64
+            build/sea/postman-repo-sync-*-linux-x64.sha256
 
   advance-major-alias:
     # Keep the rolling major alias (e.g. v2) pointing at the newest published

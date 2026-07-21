@@ -204,16 +204,20 @@ with:
 For CI that cannot install npm or Node — locked-down Jenkins, bare Bitbucket agents, boxes with no package-registry access — a single self-contained executable is published as a GitHub Release asset. It bakes the Node runtime and the full bundle into one file, so the target needs no npm, no Node install, and no package-registry access. It is not network-isolated: the run still needs outbound access to the Postman API/gateway.
 
 ```bash
-VERSION=2.1.8   # set to the release that carries the binary
-curl -fsSL -o postman-repo-sync \
-  "https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${VERSION}/postman-repo-sync-${VERSION}-linux-x64"
-chmod +x postman-repo-sync
+VERSION=2.1.10   # example: use a release that carries the binary
+ASSET="postman-repo-sync-${VERSION}-linux-x64"
+BASE_URL="https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${VERSION}"
+curl -fsSLO "${BASE_URL}/${ASSET}"
+curl -fsSLO "${BASE_URL}/${ASSET}.sha256"
+shasum -a 256 -c "${ASSET}.sha256"
+chmod +x "$ASSET"
+mv "$ASSET" postman-repo-sync
 
 export POSTMAN_ACCESS_TOKEN="<minted-token>"
 ./postman-repo-sync --project-name core-payments --workspace-id ws-123 --repo-write-mode commit-only --result-json postman-repo-sync-result.json
 ```
 
-Credentials resolve from a CLI flag, then the `INPUT_*` env var, then a plain `POSTMAN_ACCESS_TOKEN` / `POSTMAN_API_KEY` — so Jenkins `withCredentials` works with no flag. The binary pulls **no extra tooling onto the agent on any path** (even with a `postman-api-key`, which is only used to mint the access token). Two things to know for locked-down runs: the commit modes shell out to `git` (the binary bundles Node, not git), and with `generate-ci-workflow: true` (default) the workflow file it writes will — *when your CI later runs it* — install the Postman CLI from `dl-cli.pstmn.io`. Current target is `linux-x64`. Full runbook, credential minting, the Postman host allowlist, and a Jenkins pipeline: [Self-contained binary](docs/self-contained-binary.md).
+Credentials resolve from a CLI flag, then the `INPUT_*` env var, then a plain `POSTMAN_ACCESS_TOKEN` / `POSTMAN_API_KEY` — so Jenkins `withCredentials` works with no flag. Proxy-only agents must set `NODE_USE_ENV_PROXY=1` alongside `HTTP_PROXY` / `HTTPS_PROXY`. The binary pulls **no extra tooling onto the agent on any path** (even with a `postman-api-key`, which is only used to mint the access token). Two things to know for locked-down runs: the commit modes shell out to `git` (the binary bundles Node, not git), and with `generate-ci-workflow: true` (default) the workflow file it writes will — *when your CI later runs it* — install the Postman CLI from `dl-cli.pstmn.io`. Current target is `linux-x64`. Full runbook, credential minting, the complete host allowlist, and a Jenkins pipeline: [Self-contained binary](docs/self-contained-binary.md).
 
 ## How it works
 

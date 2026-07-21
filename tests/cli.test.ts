@@ -59,6 +59,41 @@ describe('cli', () => {
     expect(config.dotenvPath).toBe('.env.repo-sync');
   });
 
+  it('resolves credentials from flags, action inputs, then plain environment variables', () => {
+    const plain = resolveInputs({
+      POSTMAN_API_KEY: 'plain-api-key',
+      POSTMAN_ACCESS_TOKEN: 'plain-access-token'
+    });
+    expect(plain.postmanApiKey).toBe('plain-api-key');
+    expect(plain.postmanAccessToken).toBe('plain-access-token');
+
+    const actionInput = resolveInputs({
+      INPUT_POSTMAN_API_KEY: 'input-api-key',
+      INPUT_POSTMAN_ACCESS_TOKEN: 'input-access-token',
+      POSTMAN_API_KEY: 'plain-api-key',
+      POSTMAN_ACCESS_TOKEN: 'plain-access-token'
+    });
+    expect(actionInput.postmanApiKey).toBe('input-api-key');
+    expect(actionInput.postmanAccessToken).toBe('input-access-token');
+
+    const cli = parseCliArgs(
+      [
+        '--postman-api-key',
+        'flag-api-key',
+        '--postman-access-token',
+        'flag-access-token'
+      ],
+      {
+        INPUT_POSTMAN_API_KEY: 'input-api-key',
+        INPUT_POSTMAN_ACCESS_TOKEN: 'input-access-token',
+        POSTMAN_API_KEY: 'plain-api-key',
+        POSTMAN_ACCESS_TOKEN: 'plain-access-token'
+      }
+    );
+    expect(resolveInputs(cli.inputEnv).postmanApiKey).toBe('flag-api-key');
+    expect(resolveInputs(cli.inputEnv).postmanAccessToken).toBe('flag-access-token');
+  });
+
   it('formats dotenv output with POSTMAN_REPO_SYNC_ prefix', () => {
     const rendered = toDotenv({
       'workspace-link-status': 'success',

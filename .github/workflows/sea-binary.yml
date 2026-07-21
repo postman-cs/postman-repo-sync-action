@@ -60,9 +60,21 @@ jobs:
             echo "::error::SEA honored ambient NODE_OPTIONS; expected execArgvExtension=none to ignore it"
             exit 1
           fi
+      - name: Smoke test SEA proxy routing
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          BIN="$PWD/build/sea/postman-repo-sync-${VERSION}-linux-x64"
+          node scripts/assert-sea-proxy.mjs "$BIN" iapub.postman.co:443 \
+            --postman-access-token proxy-smoke-token \
+            --project-name proxy-smoke \
+            --workspace-id proxy-workspace \
+            --repo-write-mode none \
+            --generate-ci-workflow false
       - name: Upload SEA binary artifact
         uses: actions/upload-artifact@v7
         with:
           name: postman-repo-sync-linux-x64
-          path: build/sea/postman-repo-sync-*-linux-x64
+          path: |
+            build/sea/postman-repo-sync-*-linux-x64
+            build/sea/postman-repo-sync-*-linux-x64.sha256
           if-no-files-found: error

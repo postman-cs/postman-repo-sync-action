@@ -14,10 +14,14 @@ The binary is built and smoke-tested natively in CI on every release (`.github/w
 Download the release asset and mark it executable. Pin an explicit version:
 
 ```bash
-VERSION=2.1.8   # set to the release that carries the binary
-curl -fsSL -o postman-repo-sync \
-  "https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${VERSION}/postman-repo-sync-${VERSION}-linux-x64"
-chmod +x postman-repo-sync
+VERSION=2.1.10   # example: use a release that carries the binary
+ASSET="postman-repo-sync-${VERSION}-linux-x64"
+BASE_URL="https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${VERSION}"
+curl -fsSLO "${BASE_URL}/${ASSET}"
+curl -fsSLO "${BASE_URL}/${ASSET}.sha256"
+shasum -a 256 -c "${ASSET}.sha256"
+chmod +x "$ASSET"
+mv "$ASSET" postman-repo-sync
 
 ./postman-repo-sync --version   # -> matches ${VERSION}
 ```
@@ -90,6 +94,15 @@ A token minted from the US endpoint is not valid against the EU API (and vice ve
 
 The binary bundles its runtime, but repo-sync is an online operation. The agent needs outbound network access (direct or via an HTTP/HTTPS proxy) to Postman for the entire run — token minting is only the first call; every subsequent environment, collection, mock, monitor, linking, and system-env mutation goes over the network too, and most of them hit the Bifrost gateway/proxy host rather than the public API host.
 
+Node 24 does not activate `HTTP_PROXY` / `HTTPS_PROXY` handling for `fetch` by default. On a proxy-only agent, enable it explicitly; `NO_PROXY` remains available for bypasses:
+
+```bash
+export NODE_USE_ENV_PROXY=1
+export HTTPS_PROXY="http://proxy.example:8080"
+```
+
+Do not put `--use-env-proxy` in `NODE_OPTIONS`: the SEA deliberately ignores `NODE_OPTIONS` so ambient Node flags cannot change its runtime. `NODE_USE_ENV_PROXY=1` is the supported switch for the binary.
+
 On agents that enforce an outbound allowlist, allow **all** of the following (prod defaults). The region only changes the API host; the Bifrost, iapub, and fallback hosts are the same for US and EU:
 
 | Host | Purpose |
@@ -99,6 +112,8 @@ On agents that enforce an outbound allowlist, allow **all** of the following (pr
 | `iapub.postman.co` | Session identity / team scope (`/api/sessions/current`) |
 | `go.postman.co` | Cold serial fallback for the Bifrost proxy (`/_api`) |
 | `catalog-admin.postman-account2009.workers.dev` | Workspace-to-repo linking worker — reached only when `workspace-link-enabled` is `true` (the default) |
+| `events.pm-cse.dev` | Best-effort anonymous completion telemetry; disable with `POSTMAN_ACTIONS_TELEMETRY=off` or `DO_NOT_TRACK=1` |
+| Repository remote host | Required only for `repo-write-mode=commit-and-push`; determined by the checked-out repository's git remote |
 
 Allowlisting only the API host is **not** enough: credential preflight and the asset-gateway calls will fail even though minting succeeds. Note two hosts that are *not* contacted by the binary: `web.postman.co` appears only inside the `spec-version-url` output string (never fetched), and `dl-cli.pstmn.io` is contacted only by the *generated* CI workflow when your CI later runs it (see [No runtime tool downloads](#no-runtime-tool-downloads)) — add it to the *downstream* runner's allowlist, not this one, and only if you keep workflow generation on.
 
@@ -140,8 +155,9 @@ pipeline {
   agent { label 'linux' }
 
   environment {
-    REPO_SYNC_VERSION = '2.1.8'   // set to the release that carries the binary
+    REPO_SYNC_VERSION = '2.1.10'  // example: use a release that carries the binary
     POSTMAN_REGION = 'us'         // EU data residency: 'eu'
+    NODE_USE_ENV_PROXY = '1'      // enables HTTP_PROXY / HTTPS_PROXY when configured
   }
 
   stages {
@@ -150,9 +166,13 @@ pipeline {
         sh '''
           set -eu
           # Prefer your internal mirror in locked-down environments:
-          URL="https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${REPO_SYNC_VERSION}/postman-repo-sync-${REPO_SYNC_VERSION}-linux-x64"
-          curl -fsSL "$URL" -o postman-repo-sync
-          chmod +x postman-repo-sync
+          ASSET="postman-repo-sync-${REPO_SYNC_VERSION}-linux-x64"
+          BASE_URL="https://github.com/postman-cs/postman-repo-sync-action/releases/download/v${REPO_SYNC_VERSION}"
+          curl -fsSLO "$BASE_URL/$ASSET"
+          curl -fsSLO "$BASE_URL/$ASSET.sha256"
+          shasum -a 256 -c "$ASSET.sha256"
+          chmod +x "$ASSET"
+          mv "$ASSET" postman-repo-sync
           ./postman-repo-sync --version
         '''
       }
@@ -210,5 +230,3 @@ pipeline {
 - **git:** the binary bundles Node, not git. `--repo-write-mode commit-only` and `commit-and-push` shell out to `git`, which must be on the agent; `commit-and-push` also needs push credentials on the checked-out ref. `--repo-write-mode none` writes files only and needs no git.
 - **Generated CI workflow:** with `generate-ci-workflow: true` (default), the workflow file repo-sync writes installs the Postman CLI from `dl-cli.pstmn.io` and runs `postman login` *when your CI later executes it*. That is a downstream requirement, not one of this binary. Disable with `generate-ci-workflow: false` or pre-provision the CLI on those runners.
 - **Version:** the embedded `--version` and telemetry version are baked in at build time from the release tag; the versioned filename (`postman-repo-sync-<version>-linux-x64`) also carries it.
-```
-

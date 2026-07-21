@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const releaseWorkflow = readFileSync(join(process.cwd(), '.github/workflows/release.yml'), 'utf8');
+const seaWorkflow = readFileSync(join(process.cwd(), '.github/workflows/sea-binary.yml'), 'utf8');
+const seaBuildScript = readFileSync(join(process.cwd(), 'scripts/build-sea.sh'), 'utf8');
+const seaDocs = readFileSync(join(process.cwd(), 'docs/self-contained-binary.md'), 'utf8');
 
 function namedStep(name: string): string {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -55,9 +58,26 @@ describe('release workflow publishing contract', () => {
     // Hermetic-runtime guard: the smoke must prove ambient NODE_OPTIONS is ignored.
     expect(smoke).toContain("NODE_OPTIONS='--this-flag-does-not-exist'");
     expect(smoke).toContain('honored ambient NODE_OPTIONS');
+    const proxySmoke = namedStep('Smoke test SEA proxy routing');
+    expect(proxySmoke).toContain('scripts/assert-sea-proxy.mjs');
+    expect(proxySmoke).toContain('iapub.postman.co:443');
+    expect(seaWorkflow).toContain('scripts/assert-sea-proxy.mjs');
     expect(namedStep('Upload tarball and SEA binary')).toContain(
       'build/sea/postman-repo-sync-*-linux-x64'
     );
+    expect(seaBuildScript).toContain('shasum -a 256');
+    expect(seaBuildScript).toContain('.sha256');
+    expect(seaWorkflow).toContain('build/sea/postman-repo-sync-*-linux-x64.sha256');
+    expect(namedStep('Upload tarball and SEA binary')).toContain(
+      'build/sea/postman-repo-sync-*-linux-x64.sha256'
+    );
+  });
+
+  it('documents proxy activation, telemetry egress, and checksum verification', () => {
+    expect(seaDocs).toContain('NODE_USE_ENV_PROXY=1');
+    expect(seaDocs).toContain('events.pm-cse.dev');
+    expect(seaDocs).toContain('POSTMAN_ACTIONS_TELEMETRY=off');
+    expect(seaDocs).toContain('shasum -a 256 -c');
   });
 
   it('gates covered release tags on the central live e2e before any publish step', () => {

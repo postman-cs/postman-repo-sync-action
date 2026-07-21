@@ -67,6 +67,12 @@ node_modules/.bin/postject "$BIN" NODE_SEA_BLOB "$BLOB" \
   --sentinel-fuse "$FUSE"
 
 chmod +x "$BIN"
+CHECKSUM="${BIN}.sha256"
+(
+  cd "$OUT_DIR"
+  shasum -a 256 "$(basename "$BIN")" > "$(basename "$CHECKSUM")"
+)
 echo "==> built: $BIN"
+echo "==> checksum: $CHECKSUM"
 file "$BIN" || true
-ls -lh "$BIN"
+ls -lh "$BIN" "$CHECKSUM"
