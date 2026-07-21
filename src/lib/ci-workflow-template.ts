@@ -2,10 +2,16 @@ import { POSTMAN_ENDPOINT_PROFILES } from './postman/base-urls.js';
 import type { GitProvider } from './repo/context.js';
 
 export const DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
+export const DEFAULT_POSTMAN_CLI_WINDOWS_INSTALL_URL =
+  POSTMAN_ENDPOINT_PROFILES.prod.cliWindowsInstallUrl;
+
+export type CiRunnerOs = 'linux' | 'windows';
 
 type CiWorkflowTemplateOptions = {
   postmanCliInstallUrl?: string;
+  postmanCliWindowsInstallUrl?: string;
   postmanRegion?: string;
+  runnerOs?: CiRunnerOs;
 };
 
 function validateHttpsInstallUrl(url: string): string {
@@ -26,7 +32,19 @@ function resolvePostmanRegion(postmanRegionOption: string | undefined): string {
   return postmanRegion;
 }
 
+function resolveCiRunnerOs(runnerOsOption: string | undefined): CiRunnerOs {
+  const runnerOs = String(runnerOsOption || '').trim() || 'linux';
+  if (runnerOs === 'linux' || runnerOs === 'windows') {
+    return runnerOs;
+  }
+  throw new Error('ci-runner-os must be one of: linux, windows; got: ' + runnerOs);
+}
+
 export function renderCiWorkflowTemplate(options: CiWorkflowTemplateOptions = {}): string {
+  const runnerOs = resolveCiRunnerOs(options.runnerOs);
+  if (runnerOs === 'windows') {
+    throw new Error('ci-runner-os=windows is currently supported for azure-devops workflows only');
+  }
   const rawUrl =
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
@@ -137,6 +155,137 @@ function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string
 }
 
 export const CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
+
+function buildAdoWindowsCollectionRunLines(
+  displayName: string,
+  collectionEnvironmentName: 'POSTMAN_SMOKE_COLLECTION_UID' | 'POSTMAN_CONTRACT_COLLECTION_UID'
+): string[] {
+  return [
+    '  - pwsh: |',
+    "      $ErrorActionPreference = 'Stop'",
+    '      function Resolve-AdoOptional([string]$Value) {',
+    "        if ($Value -match '^\\$\\([^)]+\\)$') { return '' }",
+    '        return $Value',
+    '      }',
+    `      $collectionUid = $env:${collectionEnvironmentName}`,
+    '      $ciEnvironment = Resolve-AdoOptional $env:CI_ENVIRONMENT',
+    "      if ([string]::IsNullOrWhiteSpace($ciEnvironment)) { $ciEnvironment = 'Production' }",
+    `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment")`,
+    "      $sslRoot = Join-Path $env:AGENT_TEMPDIRECTORY 'postman-ssl'",
+    "      $clientCert = Join-Path $sslRoot 'client.crt'",
+    "      $clientKey = Join-Path $sslRoot 'client.key'",
+    "      $caCert = Join-Path $sslRoot 'ca.crt'",
+    '      if (Test-Path -LiteralPath $clientCert) {',
+    "        $arguments += @('--ssl-client-cert', $clientCert, '--ssl-client-key', $clientKey)",
+    '        $passphrase = Resolve-AdoOptional $env:POSTMAN_SSL_CLIENT_PASSPHRASE',
+    '        if (-not [string]::IsNullOrWhiteSpace($passphrase)) {',
+    "          $arguments += @('--ssl-client-passphrase', $passphrase)",
+    '        }',
+    '        if (Test-Path -LiteralPath $caCert) {',
+    "          $arguments += @('--ssl-extra-ca-certs', $caCert)",
+    '        }',
+    '      }',
+    '      & postman @arguments',
+    `      if ($LASTEXITCODE -ne 0) { throw '${displayName} failed with exit code ' + $LASTEXITCODE }`,
+    `    displayName: ${displayName}`,
+    '    env:',
+    `      ${collectionEnvironmentName}: $(${collectionEnvironmentName})`,
+    '      POSTMAN_ENVIRONMENT_UID: $(POSTMAN_ENVIRONMENT_UID)',
+    '      CI_ENVIRONMENT: $(CI_ENVIRONMENT)',
+    '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)'
+  ];
+}
+
+function buildAdoWindowsCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
+  return [
+    'trigger:',
+    '  branches:',
+    '    include:',
+    '      - main',
+    'schedules:',
+    '  - cron: "0 */6 * * *"',
+    '    displayName: Scheduled run',
+    '    branches:',
+    '      include:',
+    '        - main',
+    '    always: true',
+    'pool:',
+    '  vmImage: windows-latest',
+    'steps:',
+    '  - checkout: self',
+    '    persistCredentials: true',
+    '  - pwsh: |',
+    "      $ErrorActionPreference = 'Stop'",
+    '      if (-not (Get-Command postman -ErrorAction SilentlyContinue)) {',
+    '        [System.Net.ServicePointManager]::SecurityProtocol = 3072',
+    '        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString($env:POSTMAN_CLI_INSTALL_URL))',
+    '      }',
+    '      & postman --version',
+    "      if ($LASTEXITCODE -ne 0) { throw 'Postman CLI installation failed' }",
+    '    displayName: Install Postman CLI',
+    '    env:',
+    `      POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
+    '  - pwsh: |',
+    "      $ErrorActionPreference = 'Stop'",
+    "      $arguments = @('login', '--with-api-key', $env:POSTMAN_API_KEY)",
+    ...(postmanRegion === 'eu' ? ["      $arguments += @('--region', 'eu')"] : []),
+    '      & postman @arguments',
+    "      if ($LASTEXITCODE -ne 0) { throw 'Postman CLI login failed' }",
+    '    displayName: Login to Postman CLI',
+    '    env:',
+    '      POSTMAN_API_KEY: $(POSTMAN_API_KEY)',
+    '  - pwsh: |',
+    "      $ErrorActionPreference = 'Stop'",
+    "      $section = ''",
+    "      $smoke = ''",
+    "      $contract = ''",
+    "      $environment = ''",
+    "      $fallbackEnvironment = ''",
+    "      foreach ($line in Get-Content -LiteralPath '.postman/resources.yaml') {",
+    "        if ($line -match '^  (collections|environments):\\s*$') { $section = $Matches[1]; continue }",
+    "        if ($line -notmatch '^    (.+?):\\s+(.+?)\\s*$') { continue }",
+    "        $key = $Matches[1].Trim().Trim(\"'\").Trim('\"')",
+    "        $value = $Matches[2].Trim().Trim(\"'\").Trim('\"')",
+    "        if ($section -eq 'collections' -and $key -match '\\[Smoke\\]') { $smoke = $value }",
+    "        if ($section -eq 'collections' -and $key -match '\\[Contract\\]') { $contract = $value }",
+    "        if ($section -eq 'environments') {",
+    "          if ([string]::IsNullOrWhiteSpace($fallbackEnvironment)) { $fallbackEnvironment = $value }",
+    "          if ($key -match 'prod\\.postman_environment\\.json$') { $environment = $value }",
+    '        }',
+    '      }',
+    '      if ([string]::IsNullOrWhiteSpace($environment)) { $environment = $fallbackEnvironment }',
+    "      if ([string]::IsNullOrWhiteSpace($smoke)) { throw 'Missing smoke collection UID in .postman/resources.yaml' }",
+    "      if ([string]::IsNullOrWhiteSpace($contract)) { throw 'Missing contract collection UID in .postman/resources.yaml' }",
+    "      if ([string]::IsNullOrWhiteSpace($environment)) { throw 'Missing environment UID in .postman/resources.yaml' }",
+    '      Write-Host "##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]$smoke"',
+    '      Write-Host "##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]$contract"',
+    '      Write-Host "##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]$environment"',
+    '    displayName: Resolve Postman Resource IDs',
+    '  - pwsh: |',
+    "      $ErrorActionPreference = 'Stop'",
+    '      function Resolve-AdoOptional([string]$Value) {',
+    "        if ($Value -match '^\\$\\([^)]+\\)$') { return '' }",
+    '        return $Value',
+    '      }',
+    "      $sslRoot = Join-Path $env:AGENT_TEMPDIRECTORY 'postman-ssl'",
+    '      New-Item -ItemType Directory -Path $sslRoot -Force | Out-Null',
+    "      [IO.File]::WriteAllBytes((Join-Path $sslRoot 'client.crt'), [Convert]::FromBase64String($env:POSTMAN_SSL_CLIENT_CERT_B64))",
+    "      [IO.File]::WriteAllBytes((Join-Path $sslRoot 'client.key'), [Convert]::FromBase64String($env:POSTMAN_SSL_CLIENT_KEY_B64))",
+    '      $extraCa = Resolve-AdoOptional $env:POSTMAN_SSL_EXTRA_CA_CERTS_B64',
+    '      if (-not [string]::IsNullOrWhiteSpace($extraCa)) {',
+    "        [IO.File]::WriteAllBytes((Join-Path $sslRoot 'ca.crt'), [Convert]::FromBase64String($extraCa))",
+    '      }',
+    "    condition: ne(variables['POSTMAN_SSL_CLIENT_CERT_B64'], '')",
+    '    displayName: Decode SSL certificates',
+    '    env:',
+    '      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)',
+    '      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)',
+    '      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)',
+    ...buildAdoWindowsCollectionRunLines('Run Smoke Tests', 'POSTMAN_SMOKE_COLLECTION_UID'),
+    ...buildAdoWindowsCollectionRunLines('Run Contract Tests', 'POSTMAN_CONTRACT_COLLECTION_UID'),
+    ''
+  ];
+}
 
 function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
   return [
@@ -324,11 +473,17 @@ export function getCiWorkflowTemplate(
   provider: GitProvider,
   options: CiWorkflowTemplateOptions = {}
 ): string {
+  const runnerOs = resolveCiRunnerOs(options.runnerOs);
   if (provider === 'azure-devops') {
-    const rawUrl =
-      String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
+    const rawUrl = runnerOs === 'windows'
+      ? String(options.postmanCliWindowsInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_WINDOWS_INSTALL_URL
+      : String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
     const postmanRegion = resolvePostmanRegion(options.postmanRegion);
-    return buildAdoCiWorkflowLines(validateHttpsInstallUrl(rawUrl), postmanRegion).join('\n');
+    const installUrl = validateHttpsInstallUrl(rawUrl);
+    return (runnerOs === 'windows'
+      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion)
+      : buildAdoCiWorkflowLines(installUrl, postmanRegion)
+    ).join('\n');
   }
   return renderCiWorkflowTemplate(options);
 }

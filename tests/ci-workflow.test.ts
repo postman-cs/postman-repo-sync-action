@@ -13,12 +13,12 @@ function namedStep(workflow: string, name: string): string {
 }
 
 describe('CI workflow dist/pack race contract', () => {
-  it('bundles once, typechecks once, caps fan-out at two, and keeps dist read-only', () => {
+  it('gates immutable dist on Linux and Windows', () => {
     // Regression for the parallel race where `npm run verify:dist` deleted
     // dist/ while packaging tests ran `npm pack`.
     expect(ciWorkflow).toMatch(/run: npm run bundle[\s\S]*?- name: Run gates/);
     expect(ciWorkflow).not.toMatch(/run: npm run build/);
-    expect(ciWorkflow.match(/npm run typecheck/g) ?? []).toHaveLength(1);
+    expect(ciWorkflow.match(/npm run typecheck/g) ?? []).toHaveLength(2);
 
     const runGates = namedStep(ciWorkflow, 'Run gates');
     expect(runGates).toContain('run test');
@@ -39,6 +39,8 @@ describe('CI workflow dist/pack race contract', () => {
     expect(upload).toContain('if: failure()');
     expect(upload).toContain('name: expected-dist');
     expect(upload).toContain('path: dist/');
+    expect(ciWorkflow).toContain('name: Windows gate');
+    expect(ciWorkflow).toContain('runs-on: windows-latest');
   });
 });
 

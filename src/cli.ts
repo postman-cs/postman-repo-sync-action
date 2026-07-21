@@ -71,6 +71,7 @@ const CLI_INPUT_NAMES = [
   'gh-fallback-token',
   'ci-workflow-base64',
   'generate-ci-workflow',
+  'ci-runner-os',
   'monitor-type',
   'ci-workflow-path',
   'org-mode',

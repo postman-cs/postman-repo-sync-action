@@ -131,6 +131,7 @@ with:
 | --- | --- | --- | --- |
 | `generate-ci-workflow` | Whether to generate the CI workflow file | no | `true` |
 | `ci-workflow-path` | Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise. | no |  |
+| `ci-runner-os` | Runner operating system for the generated CI workflow. Use windows for native PowerShell Azure DevOps CI. | no | `linux` |
 | `project-name` | Service project name used for environment, mock, and monitor naming. | yes |  |
 | `workspace-id` | Postman workspace ID used for workspace-link and export metadata. | no |  |
 | `baseline-collection-id` | Baseline collection ID used for exported artifacts and mock server creation. | no |  |
