@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const releaseWorkflow = readFileSync(join(process.cwd(), '.github/workflows/release.yml'), 'utf8');
 const seaWorkflow = readFileSync(join(process.cwd(), '.github/workflows/sea-binary.yml'), 'utf8');
 const seaBuildScript = readFileSync(join(process.cwd(), 'scripts/build-sea.sh'), 'utf8');
+const seaProxyScript = readFileSync(join(process.cwd(), 'scripts/assert-sea-proxy.mjs'), 'utf8');
 const seaDocs = readFileSync(join(process.cwd(), 'docs/self-contained-binary.md'), 'utf8');
 
 function namedStep(name: string): string {
@@ -62,6 +63,7 @@ describe('release workflow publishing contract', () => {
     expect(proxySmoke).toContain('scripts/assert-sea-proxy.mjs');
     expect(proxySmoke).toContain('iapub.postman.co:443');
     expect(seaWorkflow).toContain('scripts/assert-sea-proxy.mjs');
+    expect(seaProxyScript).toContain("socket.on('error'");
     expect(namedStep('Upload tarball and SEA binary')).toContain(
       'build/sea/postman-repo-sync-*-linux-x64'
     );

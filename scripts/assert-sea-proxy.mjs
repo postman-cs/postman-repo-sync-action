@@ -43,6 +43,7 @@ await new Promise((resolve, reject) => {
   server.on('connect', (request, socket) => {
     const authority = request.url ?? '';
     observed.push(authority);
+    socket.on('error', () => undefined);
     socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
     if (authority === expectedAuthority) pass();
   });
