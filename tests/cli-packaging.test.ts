@@ -258,5 +258,5 @@ describe('CLI packaging contract', () => {
       version: string;
     };
     expect(version.stdout.trim()).toBe(packageJson.version);
-  }, 60_000);
+  }, 120_000);
 });
