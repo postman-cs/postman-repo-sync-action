@@ -30,6 +30,7 @@ describe('postman-repo-sync-action contract', () => {
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
       'generate-ci-workflow',
       'ci-workflow-path',
+      'ci-runner-os',
       'project-name',
       'workspace-id',
       'baseline-collection-id',
@@ -153,6 +154,23 @@ describe('postman-repo-sync-action contract', () => {
     expect(inputs.githubRefName).toBe('ado-sync');
     expect(inputs.adoToken).toBe('system-access-token');
     expect(inputs.ciWorkflowPath).toBe('azure-pipelines.yml');
+    expect(inputs.ciRunnerOs).toBe('linux');
+  });
+
+  it('accepts an explicit Windows CI runner without changing the Linux default', () => {
+    expect(resolveInputs({ INPUT_PROJECT_NAME: 'core-payments' }).ciRunnerOs).toBe('linux');
+    expect(
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_CI_RUNNER_OS: 'windows'
+      }).ciRunnerOs
+    ).toBe('windows');
+    expect(() =>
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_CI_RUNNER_OS: 'solaris'
+      })
+    ).toThrow(/ci-runner-os/);
   });
 
   it('documents current behavior and current-ref push semantics', () => {
@@ -181,8 +199,9 @@ describe('postman-repo-sync-action contract', () => {
     expect(packageManifest.scripts.bundle).toContain('--outfile=dist/index.cjs');
     expect(packageManifest.scripts.bundle).toContain('src/main.ts --bundle');
     expect(packageManifest.scripts.bundle).toContain('--outfile=dist/action.cjs');
-    expect(packageManifest.scripts.bundle).toContain("--banner:js='#!/usr/bin/env node'");
-    expect(packageManifest.scripts.bundle).toContain('chmod 755 dist/cli.cjs');
+    expect(packageManifest.scripts.bundle).toContain('--banner:js="#!/usr/bin/env node"');
+    expect(packageManifest.scripts.bundle).toContain("process.platform!=='win32'");
+    expect(packageManifest.scripts.bundle).toContain("chmodSync('dist/cli.cjs',0o755)");
     expect(packageManifest.scripts.build).toBe('npm run typecheck && npm run bundle');
     expect(packageManifest.scripts['verify:dist:assert']).toBe(
       'git diff --ignore-space-at-eol --text --exit-code -- dist && node scripts/verify-dist-artifact.mjs'

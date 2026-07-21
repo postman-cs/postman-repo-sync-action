@@ -13,6 +13,10 @@ inputs:
   ci-workflow-path:
     description: Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise.
     required: false
+  ci-runner-os:
+    description: Runner operating system for the generated CI workflow. Use windows for native PowerShell Azure DevOps CI.
+    required: false
+    default: linux
   project-name:
     description: Service project name used for environment, mock, and monitor naming.
     required: true

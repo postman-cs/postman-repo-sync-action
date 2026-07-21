@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -261,7 +264,91 @@ describe('renderCiWorkflowTemplate', () => {
     expect(azureScriptBodies).not.toContain('$(POSTMAN_ENVIRONMENT_UID)');
   });
 
-  it('normalizes unresolved Azure optional macro values without clearing real values', () => {
+  it('renders a native PowerShell Azure DevOps workflow for Windows runners', () => {
+    const ciWorkflow = getCiWorkflowTemplate('azure-devops', {
+      postmanCliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
+      runnerOs: 'windows'
+    });
+    const parsed = parse(ciWorkflow);
+
+    expect(parsed.pool.vmImage).toBe('windows-latest');
+    expect(parsed.steps[0]).toMatchObject({
+      checkout: 'self',
+      persistCredentials: true
+    });
+    expect(parsed.steps.every((step: { script?: string }) => step.script === undefined)).toBe(true);
+
+    const installStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Install Postman CLI'
+    );
+    const resolveStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Resolve Postman Resource IDs'
+    );
+    const decodeStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Decode SSL certificates'
+    );
+    const smokeStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Run Smoke Tests'
+    );
+
+    expect(installStep.env.POSTMAN_CLI_INSTALL_URL).toBe(
+      'https://dl-cli.pstmn.io/install/win64.ps1'
+    );
+    expect(installStep.pwsh).toContain('DownloadString($env:POSTMAN_CLI_INSTALL_URL)');
+    expect(resolveStep.pwsh).toContain('##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]');
+    expect(decodeStep.pwsh).toContain('[Convert]::FromBase64String');
+    expect(smokeStep.pwsh).toContain("$arguments = @('collection', 'run'");
+    expect(smokeStep.pwsh).toContain('& postman @arguments');
+    expect(ciWorkflow).not.toMatch(/grep |awk |base64 -d|\[\[|CMD=\(|curl -fsSL/);
+  });
+
+  it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: 30_000 }, () => {
+    const parsed = parse(
+      getCiWorkflowTemplate('azure-devops', {
+        runnerOs: 'windows'
+      })
+    );
+    const resolveStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Resolve Postman Resource IDs'
+    );
+    const sandbox = mkdtempSync(path.join(tmpdir(), 'repo-sync-windows-resources-'));
+    try {
+      mkdirSync(path.join(sandbox, '.postman'), { recursive: true });
+      writeFileSync(
+        path.join(sandbox, '.postman', 'resources.yaml'),
+        [
+          'version: 2',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/[Smoke] Core: smoke-uid',
+          '    ../postman/collections/[Contract] Core: contract-uid',
+          '  environments:',
+          '    ../postman/environments/prod.postman_environment.json: env-uid',
+          ''
+        ].join('\n'),
+        'utf8'
+      );
+
+      const output = execFileSync(
+        'pwsh',
+        ['-NoProfile', '-NonInteractive', '-Command', resolveStep.pwsh],
+        { cwd: sandbox, encoding: 'utf8' }
+      );
+      expect(output).toContain(
+        '##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]smoke-uid'
+      );
+      expect(output).toContain(
+        '##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]contract-uid'
+      );
+      expect(output).toContain(
+        '##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]env-uid'
+      );
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('normalizes unresolved Azure optional macro values without clearing real values', () => {
     execFileSync('bash', [
       '-lc',
       `
@@ -305,6 +392,14 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     expect(() => getCiWorkflowTemplate('azure-devops', { postmanRegion: 'ap' })).toThrow(
       /postman-region/
     );
+  });
+
+  it('rejects unsupported runner operating systems', () => {
+    expect(() =>
+      getCiWorkflowTemplate('azure-devops', {
+        runnerOs: 'solaris' as 'linux'
+      })
+    ).toThrow(/ci-runner-os/);
   });
 });
 

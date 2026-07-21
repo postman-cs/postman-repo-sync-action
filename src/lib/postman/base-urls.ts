@@ -8,6 +8,7 @@ export interface PostmanEndpointProfile {
    * primary budget is exhausted on a transient failure. */
   fallbackBaseUrl: string;
   cliInstallUrl: string;
+  cliWindowsInstallUrl: string;
   iapubBaseUrl: string;
 }
 
@@ -17,6 +18,7 @@ export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProf
     bifrostBaseUrl: 'https://bifrost-premium-https-v4.gw.postman.com',
     fallbackBaseUrl: 'https://go.postman.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
+    cliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
     iapubBaseUrl: 'https://iapub.postman.co'
   },
   beta: {
@@ -24,6 +26,7 @@ export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProf
     bifrostBaseUrl: 'https://bifrost-https-v4.gw.postman-beta.com',
     fallbackBaseUrl: 'https://go.postman-beta.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn-beta.io/install/unix.sh',
+    cliWindowsInstallUrl: 'https://dl-cli.pstmn-beta.io/install/win64.ps1',
     iapubBaseUrl: 'https://iapub.postman.co'
   }
 };
