@@ -470,8 +470,9 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
       normalizeInputValue(repoContext.ref),
     committerName: getInput('committer-name', env) || 'Postman',
     committerEmail: getInput('committer-email', env) || 'support@postman.com',
-    postmanApiKey: getInput('postman-api-key', env),
-    postmanAccessToken: getInput('postman-access-token', env),
+    postmanApiKey: getInput('postman-api-key', env) || normalizeInputValue(env.POSTMAN_API_KEY),
+    postmanAccessToken:
+      getInput('postman-access-token', env) || normalizeInputValue(env.POSTMAN_ACCESS_TOKEN),
     credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
     branchStrategy: parseBranchStrategy(getInput('branch-strategy', env)),
     canonicalBranch: getInput('canonical-branch', env) || undefined,
