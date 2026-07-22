@@ -82,17 +82,19 @@ describe('release workflow publishing contract', () => {
     expect(seaDocs).toContain('shasum -a 256 -c');
   });
 
-  it('gates covered release tags on the central live e2e before any publish step', () => {
-    expect(releaseWorkflow).toContain('echo "gate_required=true" >> "$GITHUB_OUTPUT"');
-    expect(releaseWorkflow).toContain('echo "gate_required=false" >> "$GITHUB_OUTPUT"');
+  it('publishes after validate only and monitors live e2e post-publish', () => {
+    expect(releaseWorkflow).not.toContain('gate_required');
+    expect(releaseWorkflow).not.toContain('live-e2e-gate:');
+    expect(releaseWorkflow).not.toContain('wait-for-e2e-gate.mjs');
+    expect(releaseWorkflow).toMatch(/^ {2}publish:\n(?:.*\n)*? {4}needs: validate$/m);
+    expect(releaseWorkflow).toContain('dispatch-live-monitor:');
+    expect(releaseWorkflow).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+    expect(releaseWorkflow).toContain('continue-on-error: true');
     expect(releaseWorkflow).toContain(
-      "if: ${{ needs.validate.outputs.gate_required == 'true' }}"
+      "if: ${{ needs.validate.outputs.npm_publish == 'true' && needs.publish.result == 'success' }}"
     );
-    expect(releaseWorkflow).toContain(
-      "if: ${{ always() && needs.validate.result == 'success' && (needs.validate.outputs.gate_required != 'true' || needs.live-e2e-gate.result == 'success') }}"
-    );
-    expect(releaseWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
   });
+
 
   it('keeps a single automatic rolling major alias job after publish', () => {
     // Next immutable release must force-move stale v2 (or current major) alias.

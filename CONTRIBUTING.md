@@ -34,22 +34,25 @@ This action ships bundled JavaScript in `dist/`. After any source change, run `n
 
 ## Live E2E Tier
 
-Ordinary PRs use the deterministic offline gate. Live sandbox coverage runs on
-immutable releases and nightly in `postman-cs/postman-actions-e2e`.
+Ordinary PRs use the deterministic offline gate. Live sandbox coverage runs as a
+post-publish monitor on immutable npm publish tags and nightly in
+`postman-cs/postman-actions-e2e`.
 
-## Release Gate
+## Release Monitor
 
-Immutable release tags for this repo are blocked by the central live e2e suite in
-`postman-cs/postman-actions-e2e` before any GitHub release, npm package, or
-release tarball is published. The release workflow validates locally, dispatches
-the e2e workflow with this exact tag pinned for `postman-repo-sync-action`,
-waits for the correlated run to succeed, and only then publishes.
+Publication is independent of live e2e. The release workflow validates locally
+(including deterministic checks and SEA/artifact smoke), then publishes the
+GitHub release, npm package, and tarball. After a successful publish of an
+immutable npm publish tag, it dispatches the central e2e workflow in
+`postman-cs/postman-actions-e2e` with this exact tag pinned for
+`postman-repo-sync-action` (`action`, `ref`, `gate_correlation_id`, `suite=smoke`)
+and does not wait, poll, or time out on the result.
 
-The rolling `v1` alias validates locally but skips npm publish
-and the live e2e gate. `E2E_DISPATCH_TOKEN` is release-critical for immutable
-publishing tags; if it is missing, invalid, or the e2e fails/times out, the
-release must stop before public artifacts are created. Record the e2e run URL
-and conclusion from the release logs as release evidence.
+The rolling major alias validates locally but skips npm publish and the live e2e
+monitor. `E2E_DISPATCH_TOKEN` is required only for the post-publish monitor job;
+if it is missing, denied, or dispatch fails, only that monitor job fails
+(`continue-on-error`), and publication/alias updates remain independent. Record
+the dispatched e2e run URL from the release logs as monitor evidence.
 
 ## Commit Messages
 
