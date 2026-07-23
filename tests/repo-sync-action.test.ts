@@ -647,10 +647,10 @@ describe('repo sync action', () => {
   });
 
   describe('prebuiltDirectoryTraversalIdentity', () => {
-    it('keeps distinct zero-inode directories from colliding via canonical paths', () => {
+    it('keeps distinct Win32 paths with the same nonzero dev+ino from colliding', () => {
       const left = prebuiltDirectoryTraversalIdentity(
         'C:\\artifact\\a',
-        { dev: 1, ino: 0 },
+        { dev: 1, ino: 99 },
         {
           platform: 'win32',
           resolveCanonicalPath: (absolutePath) => absolutePath
@@ -658,7 +658,7 @@ describe('repo sync action', () => {
       );
       const right = prebuiltDirectoryTraversalIdentity(
         'C:\\artifact\\b',
-        { dev: 1, ino: 0 },
+        { dev: 1, ino: 99 },
         {
           platform: 'win32',
           resolveCanonicalPath: (absolutePath) => absolutePath
@@ -669,11 +669,11 @@ describe('repo sync action', () => {
       expect(right).toBe('c:\\artifact\\b');
     });
 
-    it('collides aliases that resolve to the same canonical path under zero inode', () => {
+    it('collides Win32 aliases that resolve to the same canonical path', () => {
       const canonical = 'C:\\artifact\\real';
       const viaAlias = prebuiltDirectoryTraversalIdentity(
         'C:\\artifact\\alias',
-        { dev: 3, ino: 0n },
+        { dev: 3, ino: 42n },
         {
           platform: 'win32',
           resolveCanonicalPath: () => canonical
@@ -681,7 +681,7 @@ describe('repo sync action', () => {
       );
       const viaReal = prebuiltDirectoryTraversalIdentity(
         'C:\\artifact\\real',
-        { dev: 3, ino: 0 },
+        { dev: 3, ino: 42 },
         {
           platform: 'win32',
           resolveCanonicalPath: () => canonical
@@ -691,7 +691,7 @@ describe('repo sync action', () => {
       expect(viaAlias).toBe('c:\\artifact\\real');
     });
 
-    it('uses path-independent dev+ino identity when inode is nonzero', () => {
+    it('uses path-independent POSIX dev+ino identity when inode is nonzero and skips the canonicalizer', () => {
       const left = prebuiltDirectoryTraversalIdentity(
         '/tmp/tree/a',
         { dev: 10, ino: 42 },
@@ -717,7 +717,7 @@ describe('repo sync action', () => {
       expect(left).toBe(right);
     });
 
-    it('preserves canonical case on non-win32 zero-inode paths', () => {
+    it('preserves POSIX zero-inode canonical fallback without case folding', () => {
       const identity = prebuiltDirectoryTraversalIdentity(
         '/tmp/Tree/A',
         { dev: 2, ino: 0 },

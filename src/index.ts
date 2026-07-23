@@ -1578,23 +1578,24 @@ export type PrebuiltDirectoryTraversalIdentityOptions = {
 
 /**
  * Directory identity for prebuilt tree cycle detection.
- * Nonzero inode: stable `${dev}:${ino}`.
- * Numeric/bigint zero inode (common for Windows directories): canonical path via
- * realpathSync.native, lowercased on win32 only.
+ * Win32: always lowercased canonical realpath (directory inode pairs may be
+ * nonzero yet non-unique).
+ * Non-Windows nonzero inode: stable `${dev}:${ino}`.
+ * Non-Windows zero inode: canonical path via realpathSync.native.
  */
 export function prebuiltDirectoryTraversalIdentity(
   absolutePath: string,
   stats: { dev: number; ino: number | bigint },
   options: PrebuiltDirectoryTraversalIdentityOptions = {}
 ): string {
+  const platform = options.platform ?? process.platform;
   const inodeIsZero = stats.ino === 0 || stats.ino === 0n;
-  if (!inodeIsZero) {
+  if (platform !== 'win32' && !inodeIsZero) {
     return `${stats.dev}:${stats.ino}`;
   }
 
   const resolveCanonicalPath =
     options.resolveCanonicalPath ?? ((candidate) => realpathSync.native(candidate));
-  const platform = options.platform ?? process.platform;
   const canonical = resolveCanonicalPath(absolutePath);
   return platform === 'win32' ? canonical.toLowerCase() : canonical;
 }
