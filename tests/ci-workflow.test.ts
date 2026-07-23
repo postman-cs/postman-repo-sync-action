@@ -1,15 +1,5 @@
-import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -39,77 +29,6 @@ function linuxQueuedGates(runGates: string): string[] {
   return [...runGates.matchAll(/^\s+run ([a-zA-Z0-9_-]+)\s+/gm)].map((m) => m[1]!);
 }
 
-/** Ordered Windows gate names from `@{ Name = '...'; Command = { ... } }` entries. */
-function windowsQueuedGates(runGates: string): string[] {
-  return [...runGates.matchAll(/@\{ Name = '([^']+)'; Command = \{/g)].map((m) => m[1]!);
-}
-
-/** Exact Windows `Run gates` PowerShell body under `run: |`, with YAML indent stripped. */
-function extractWindowsRunGatesBody(source: string): string {
-  const windowsJob = jobText(source, 'windows');
-  const match = windowsJob.match(/ {6}- name: Run gates\n {8}shell: pwsh\n {8}run: \|\n([\s\S]*)$/);
-  if (!match?.[1]) {
-    throw new Error('Windows Run gates pwsh body not found');
-  }
-  return match[1]
-    .replace(/\n$/, '')
-    .split('\n')
-    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
-    .join('\n');
-}
-
-/** Cross-platform fake `npm` (POSIX executable / Windows `npm.cmd`) that never shells out to real npm. */
-function installFakeNpm(binDir: string, exits: Record<string, number>): void {
-  const exitsJson = JSON.stringify(exits);
-  const nodeBody = `#!/usr/bin/env node
-const exits = ${exitsJson};
-const args = process.argv.slice(2);
-let key;
-if (args[0] === 'test') key = 'test';
-else if (args[0] === 'run' && args[1]) key = args[1];
-else {
-  console.error('fake-npm: unexpected args', args.join(' '));
-  process.exit(99);
-}
-const code = exits[key];
-if (typeof code !== 'number') {
-  console.error('fake-npm: unmapped command', key);
-  process.exit(99);
-}
-process.exit(code);
-`;
-
-  if (process.platform === 'win32') {
-    const jsPath = join(binDir, 'npm.js');
-    writeFileSync(jsPath, nodeBody.replace(/^#!.*\n/, ''), 'utf8');
-    writeFileSync(join(binDir, 'npm.cmd'), `@echo off\r\nnode "%~dp0npm.js" %*\r\n`, 'utf8');
-  } else {
-    const npmPath = join(binDir, 'npm');
-    writeFileSync(npmPath, nodeBody, 'utf8');
-    chmodSync(npmPath, 0o755);
-  }
-}
-
-function runWindowsGatesScript(script: string, exits: Record<string, number>) {
-  const root = mkdtempSync(join(tmpdir(), 'repo-sync-ci-windows-gates-'));
-  const binDir = join(root, 'bin');
-  mkdirSync(binDir, { recursive: true });
-  installFakeNpm(binDir, exits);
-  writeFileSync(join(root, 'run-gates.ps1'), `${script}\n`, 'utf8');
-
-  const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', 'run-gates.ps1'], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 60_000,
-    env: {
-      ...process.env,
-      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
-    },
-  });
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  return { result, output, root };
-}
-
 const linux = jobText(ciWorkflow, 'gate');
 const windows = jobText(ciWorkflow, 'windows');
 
@@ -137,17 +56,20 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(windows).not.toContain('commitlint');
   });
 
-  it('bundles exactly once on Linux and Windows before each read-only queue', () => {
+  it('bundles exactly once on Linux before the read-only queue and keeps jobs independent', () => {
     expect(linux.match(/^\s*- run: npm run bundle\s*$/gm) ?? []).toHaveLength(1);
-    expect(windows.match(/^\s*- run: npm run bundle\s*$/gm) ?? []).toHaveLength(1);
-
     expect(linux.indexOf('- run: npm run bundle')).toBeLessThan(linux.indexOf('- name: Run gates'));
-    expect(windows.indexOf('- run: npm run bundle')).toBeLessThan(windows.indexOf('- name: Run gates'));
 
     expect(windows).toContain('name: Windows gate');
     expect(windows).toContain('runs-on: windows-latest');
+    expect(windows).not.toMatch(/^\s*- run: npm run bundle\s*$/m);
+    expect(windows).not.toContain('npm run bundle');
     expect(ciWorkflow).not.toMatch(/^\s*- run: npm run build\s*$/m);
-    expect(ciWorkflow.match(/npm run typecheck/g) ?? []).toHaveLength(2);
+    expect(ciWorkflow.match(/npm run typecheck/g) ?? []).toHaveLength(1);
+
+    expect(linux).not.toMatch(/^\s*needs:/m);
+    expect(windows).not.toMatch(/^\s*needs:/m);
+    expect(ciWorkflow).not.toMatch(/^\s*needs:/m);
   });
 
   it('queues the exact Linux read-only gates with actionlint and PR-only commitlint', () => {
@@ -210,47 +132,58 @@ describe('CI and SEA PR workflow contracts', () => {
     }
   });
 
-  it('queues exactly four Windows gates at max-two with terminating throw failure propagation', () => {
-    const runGates = namedStep(windows, 'Run gates');
-    expect(runGates.length).toBeGreaterThan(0);
-    expect(runGates).toContain('shell: pwsh');
-    expect(runGates).toContain("$ErrorActionPreference = 'Stop'");
-    expect(runGates).toContain('$MAX_PARALLEL_GATES = 2');
-    expect(runGates).toContain('while ($running.Count -ge $MAX_PARALLEL_GATES)');
-    expect(runGates).toContain('Start-Job');
-
-    expect(windowsQueuedGates(runGates)).toEqual(['lint', 'test', 'typecheck', 'dist']);
-    expect(runGates).toContain(
-      "@{ Name = 'lint'; Command = { npm run lint; if ($LASTEXITCODE -ne 0) { throw \"gate:lint failed with exit code $LASTEXITCODE\" } } }",
+  it('pins the actionlint downloader to an immutable commit SHA (no /main/scripts)', () => {
+    const install = namedStep(linux, 'Install actionlint');
+    expect(install.length).toBeGreaterThan(0);
+    expect(install).toContain(
+      'https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash',
     );
-    expect(runGates).toContain(
-      "@{ Name = 'test'; Command = { npm test; if ($LASTEXITCODE -ne 0) { throw \"gate:test failed with exit code $LASTEXITCODE\" } } }",
+    expect(install).not.toContain('/main/scripts');
+    expect(linux).not.toContain('/main/scripts');
+  });
+
+  it('caches Windows node_modules with pinned actions/cache and runs npm test directly', () => {
+    expect(windows).toContain("node-version: '24'");
+    expect(windows).not.toMatch(/^\s*cache:\s*npm\s*$/m);
+
+    expect(windows).toContain(
+      'uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0',
     );
-    expect(runGates).toContain(
-      "@{ Name = 'typecheck'; Command = { npm run typecheck; if ($LASTEXITCODE -ne 0) { throw \"gate:typecheck failed with exit code $LASTEXITCODE\" } } }",
+    expect(windows).toContain('id: windows-node-modules');
+    expect(windows).toContain('path: node_modules');
+    expect(windows).toContain("key: Windows-node-24-${{ hashFiles('package-lock.json') }}");
+    expect(windows).not.toContain('restore-keys');
+    expect(windows).not.toContain('restore-keys:');
+
+    const install = namedStep(windows, 'Install dependencies');
+    expect(install.length).toBeGreaterThan(0);
+    expect(install).toContain("if: steps.windows-node-modules.outputs.cache-hit != 'true'");
+    expect(install).toContain('run: npm ci --prefer-offline --no-audit --no-fund');
+    expect(install).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}');
+
+    // Cache hit skips only install; npm test is unconditional and unfiltered.
+    expect(windows).toMatch(/^\s*- run: npm test\s*$/m);
+    expect(windows).not.toMatch(/npm test --/);
+    expect(windows.indexOf('id: windows-node-modules')).toBeLessThan(
+      windows.indexOf('name: Install dependencies'),
     );
-    expect(runGates).toContain(
-      "@{ Name = 'dist'; Command = { npm run verify:dist:assert; if ($LASTEXITCODE -ne 0) { throw \"gate:dist failed with exit code $LASTEXITCODE\" } } }",
+    expect(windows.indexOf('name: Install dependencies')).toBeLessThan(windows.indexOf('- run: npm test'));
+    expect(windows.indexOf('- run: npm test')).toBeGreaterThan(
+      windows.indexOf("if: steps.windows-node-modules.outputs.cache-hit != 'true'"),
     );
 
-    // Nonzero child must throw so Start-Job State becomes Failed; bare exit keeps Completed.
-    expect(runGates).not.toContain('exit $LASTEXITCODE');
-    expect(runGates).not.toMatch(/if \(\$LASTEXITCODE -ne 0\) \{ exit /);
-    // Receive-Job under Stop would abort aggregation; Continue + 2>&1 keeps error text in the log.
-    expect(runGates).toContain('Receive-Job $done -ErrorAction Continue 2>&1 | Out-File');
-    expect(runGates).toContain('Receive-Job $job -ErrorAction Continue 2>&1 | Out-File');
-    expect(runGates).toContain("$results[$done.Name] = $done.State -eq 'Completed'");
-    expect(runGates).toContain("$results[$job.Name] = $job.State -eq 'Completed'");
-
-    expect(runGates).not.toContain('npm run build');
-    expect(runGates).not.toContain('npm run bundle');
-    expect(runGates).not.toMatch(/npm run verify:dist(?:\s|$|"|')/);
-    expect(runGates).not.toContain('actionlint');
-    expect(runGates).not.toContain('commitlint');
-
-    expect(runGates).toContain('gate:$name=pass');
-    expect(runGates).toContain('gate:$name=fail');
-    expect(runGates).toContain('if ($failed) { exit 1 }');
+    // No queue / platform-neutral gates on Windows.
+    expect(windows).not.toContain('name: Run gates');
+    expect(windows).not.toContain('shell: pwsh');
+    expect(windows).not.toContain('Start-Job');
+    expect(windows).not.toContain('MAX_PARALLEL_GATES');
+    expect(windows).not.toContain('npm run lint');
+    expect(windows).not.toContain('npm run typecheck');
+    expect(windows).not.toContain('npm run verify:dist:assert');
+    expect(windows).not.toContain('npm run build');
+    expect(windows).not.toContain('npm run bundle');
+    expect(windows).not.toContain('actionlint');
+    expect(windows).not.toContain('commitlint');
   });
 
   it('keeps upload-on-dist-failure on the Linux gate job', () => {
@@ -261,73 +194,6 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(upload).toContain('name: expected-dist');
     expect(upload).toContain('path: dist/');
   });
-
-  it(
-    'executes the Windows Run gates body with fake npm and propagates nonzero as process failure',
-    () => {
-      const script = extractWindowsRunGatesBody(ciWorkflow);
-      expect(script).toContain("$ErrorActionPreference = 'Stop'");
-      expect(script).toContain('throw "gate:lint failed with exit code $LASTEXITCODE"');
-      expect(script).toContain('Receive-Job $done -ErrorAction Continue 2>&1 | Out-File');
-      expect(script).toContain('Receive-Job $job -ErrorAction Continue 2>&1 | Out-File');
-      expect(script).not.toContain('exit $LASTEXITCODE');
-
-      const probe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], {
-        encoding: 'utf8',
-      });
-      const probeError = probe.error as NodeJS.ErrnoException | undefined;
-      expect(probeError, `${probe.stderr ?? ''}`).toBeUndefined();
-
-      const zeroExits = {
-        lint: 0,
-        test: 0,
-        typecheck: 0,
-        'verify:dist:assert': 0,
-      };
-      const failLintExits = {
-        lint: 9,
-        test: 0,
-        typecheck: 0,
-        'verify:dist:assert': 0,
-      };
-
-      let passRoot: string | undefined;
-      let failRoot: string | undefined;
-      try {
-        // Exact extracted body already sets Stop; run as-is (runner-style fail-fast).
-        const pass = runWindowsGatesScript(script, zeroExits);
-        passRoot = pass.root;
-        expect(pass.result.error, pass.output).toBeUndefined();
-        expect(pass.result.signal, pass.output).toBeNull();
-        expect(pass.result.status, pass.output).toBe(0);
-        expect(pass.output).toContain('gate:lint=pass');
-        expect(pass.output).toContain('gate:test=pass');
-        expect(pass.output).toContain('gate:typecheck=pass');
-        expect(pass.output).toContain('gate:dist=pass');
-
-        const fail = runWindowsGatesScript(script, failLintExits);
-        failRoot = fail.root;
-        expect(fail.result.error, fail.output).toBeUndefined();
-        expect(fail.result.signal, fail.output).toBeNull();
-        expect(fail.result.status, fail.output).not.toBe(0);
-        expect(fail.output).toContain('gate:lint=fail');
-        expect(fail.output).toMatch(/gate:test=(?:pass|fail)/);
-        expect(fail.output).toMatch(/gate:typecheck=(?:pass|fail)/);
-        expect(fail.output).toMatch(/gate:dist=(?:pass|fail)/);
-        expect(fail.output).toContain('gate:test=pass');
-        expect(fail.output).toContain('gate:typecheck=pass');
-        expect(fail.output).toContain('gate:dist=pass');
-        // Aggregation completed under Stop: gate-specific throw text is in the lint group log.
-        expect(fail.output).toContain('gate:lint failed with exit code 9');
-        expect(fail.output).toContain('::group::lint');
-        expect(fail.output).toContain('::endgroup::');
-      } finally {
-        if (passRoot) rmSync(passRoot, { recursive: true, force: true });
-        if (failRoot) rmSync(failRoot, { recursive: true, force: true });
-      }
-    },
-    90_000,
-  );
 });
 
 describe('live e2e tiering contract', () => {
