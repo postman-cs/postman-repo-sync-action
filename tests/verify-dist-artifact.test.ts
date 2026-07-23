@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 interface RepoConfig {
   pkgName: string;
@@ -20,15 +20,14 @@ const CONFIG: RepoConfig = {"pkgName":"@postman-cse/onboarding-repo-sync","binNa
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const verifyScript = path.join(repoRoot, 'scripts', 'verify-dist-artifact.mjs');
-const tempDirs: string[] = [];
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
+type OnTestFinished = (fn: () => void | Promise<void>) => void;
 
-async function makeTempDir(prefix: string): Promise<string> {
+async function makeTempDir(prefix: string, onTestFinished: OnTestFinished): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  onTestFinished(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
   return dir;
 }
 
@@ -143,32 +142,32 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stdout).toContain('verify-dist-artifact: ok');
   }, 30_000);
 
-  it('passes a well-formed temporary dist tree', async () => {
-    const root = await makeTempDir('verify-dist-ok-');
+  it.concurrent('passes a well-formed temporary dist tree', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-ok-', onTestFinished);
     await writeFixture(root);
     const result = await runVerify(root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
   });
 
-  it('fails when the CLI shebang is missing', async () => {
-    const root = await makeTempDir('verify-dist-shebang-');
+  it.concurrent('fails when the CLI shebang is missing', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-shebang-', onTestFinished);
     await writeFixture(root, { shebang: false });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/missing Node shebang/);
   });
 
-  it.skipIf(process.platform === 'win32')('fails when cli.cjs is not executable on disk', async () => {
-    const root = await makeTempDir('verify-dist-mode-');
+  it.skipIf(process.platform === 'win32')('fails when cli.cjs is not executable on disk', async ({ onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-mode-', onTestFinished);
     await writeFixture(root, { mode: 0o644 });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/not executable on disk/);
   });
 
-  it('fails when the git index does not mark cli.cjs executable', async () => {
-    const gitRoot = await makeTempDir('verify-dist-gitmode-');
+  it.concurrent('fails when the git index does not mark cli.cjs executable', async ({ expect, onTestFinished }) => {
+    const gitRoot = await makeTempDir('verify-dist-gitmode-', onTestFinished);
     const pkgRoot = path.join(gitRoot, 'packages', 'pkg');
     await mkdir(pkgRoot, { recursive: true });
     await writeFixture(pkgRoot);
@@ -182,24 +181,24 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stderr).toMatch(/git-index mode is 100644/);
   }, 15_000);
 
-  it('fails when dist census has an extra file', async () => {
-    const root = await makeTempDir('verify-dist-extra-');
+  it.concurrent('fails when dist census has an extra file', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-extra-', onTestFinished);
     await writeFixture(root, { extraDistFile: 'extra.cjs' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/dist census mismatch/);
   });
 
-  it('fails when dist census has a hidden extra file', async () => {
-    const root = await makeTempDir('verify-dist-hidden-');
+  it.concurrent('fails when dist census has a hidden extra file', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-hidden-', onTestFinished);
     await writeFixture(root, { extraDistFile: '.hidden' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/dist census mismatch/);
   });
 
-  it('fails when dist census is missing an entrypoint', async () => {
-    const root = await makeTempDir('verify-dist-missing-');
+  it.concurrent('fails when dist census is missing an entrypoint', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-missing-', onTestFinished);
     const missing = CONFIG.census.find((name) => name !== 'cli.cjs') as string;
     await writeFixture(root, { omitEntry: missing });
     const result = await runVerify(root);
@@ -207,8 +206,8 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stderr).toMatch(/dist census mismatch/);
   });
 
-  it.skipIf(process.platform === 'win32')('fails when an expected entrypoint is a symlink', async () => {
-    const root = await makeTempDir('verify-dist-symlink-');
+  it.skipIf(process.platform === 'win32')('fails when an expected entrypoint is a symlink', async ({ onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-symlink-', onTestFinished);
     const linked = CONFIG.census.find((name) => name !== 'cli.cjs') as string;
     await writeFixture(root, { symlinkEntry: linked });
     const result = await runVerify(root);
@@ -216,24 +215,24 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stderr).toMatch(/regular file, not a directory or symlink/);
   });
 
-  it('fails when direct --help does not produce the usage banner', async () => {
-    const root = await makeTempDir('verify-dist-help-');
+  it.concurrent('fails when direct --help does not produce the usage banner', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-help-', onTestFinished);
     await writeFixture(root, { helpBody: 'no banner here\n' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/missing usage banner/);
   });
 
-  it('fails when direct --version drifts from package.json', async () => {
-    const root = await makeTempDir('verify-dist-version-');
+  it.concurrent('fails when direct --version drifts from package.json', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-version-', onTestFinished);
     await writeFixture(root, { cliVersion: '0.0.0-drift' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/--version was/);
   });
 
-  it('fails when node --check rejects a bundled entrypoint', async () => {
-    const root = await makeTempDir('verify-dist-syntax-');
+  it.concurrent('fails when node --check rejects a bundled entrypoint', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-syntax-', onTestFinished);
     const broken = CONFIG.census.find((name) => name !== 'cli.cjs') as string;
     await writeFixture(root, { brokenEntry: broken });
     const result = await runVerify(root);
@@ -241,46 +240,46 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stderr).toMatch(/node --check/);
   });
 
-  it('fails when a literal require() targets a third-party module', async () => {
-    const root = await makeTempDir('verify-dist-thirdparty-');
+  it.concurrent('fails when a literal require() targets a third-party module', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-thirdparty-', onTestFinished);
     await writeFixture(root, { requireSpecifier: 'left-pad' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/non-builtin\/third-party require\("left-pad"\)/);
   });
 
-  it('fails when a literal require() targets a relative path', async () => {
-    const root = await makeTempDir('verify-dist-relative-');
+  it.concurrent('fails when a literal require() targets a relative path', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-relative-', onTestFinished);
     await writeFixture(root, { requireSpecifier: './side-effect.cjs' });
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/non-builtin\/third-party require/);
   });
 
-  it('ignores require() examples in comments and string data', async () => {
-    const root = await makeTempDir('verify-dist-example-');
+  it.concurrent('ignores require() examples in comments and string data', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-example-', onTestFinished);
     await writeFixture(root, { requireExampleOnly: 'left-pad' });
     const result = await runVerify(root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
   });
 
-  it('accepts bare and node: builtin require() specifiers', async () => {
-    const rootBare = await makeTempDir('verify-dist-bare-');
+  it.concurrent('accepts bare and node: builtin require() specifiers', async ({ expect, onTestFinished }) => {
+    const rootBare = await makeTempDir('verify-dist-bare-', onTestFinished);
     await writeFixture(rootBare, { requireSpecifier: 'fs' });
     const bare = await runVerify(rootBare);
     expect(bare.stderr).toBe('');
     expect(bare.code).toBe(0);
 
-    const rootPrefixed = await makeTempDir('verify-dist-prefixed-');
+    const rootPrefixed = await makeTempDir('verify-dist-prefixed-', onTestFinished);
     await writeFixture(rootPrefixed, { requireSpecifier: 'node:fs' });
     const prefixed = await runVerify(rootPrefixed);
     expect(prefixed.stderr).toBe('');
     expect(prefixed.code).toBe(0);
   });
 
-  it('accepts the documented optional peer allowlist', async () => {
-    const root = await makeTempDir('verify-dist-peer-');
+  it.concurrent('accepts the documented optional peer allowlist', async ({ expect, onTestFinished }) => {
+    const root = await makeTempDir('verify-dist-peer-', onTestFinished);
     await writeFixture(root, { requireSpecifier: 'encoding' });
     const result = await runVerify(root);
     expect(result.stderr).toBe('');
