@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { HttpError } from '../src/lib/http-error.js';
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
 import { PostmanGatewayAssetsClient } from '../src/lib/postman/postman-gateway-assets-client.js';
 import { createMutableSecretMasker } from '../src/lib/secrets.js';
+
+function bifrostDeleteHttpError(status: number, responseBody: string): HttpError {
+  return new HttpError({
+    method: 'DELETE',
+    url: 'https://bifrost.example.com/ws/proxy',
+    status,
+    statusText: status === 500 ? 'Internal Server Error' : String(status),
+    responseBody
+  });
+}
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -263,5 +274,78 @@ describe('PostmanGatewayAssetsClient', () => {
     const { assets } = buildClient(fetchImpl, { accessToken: 'tok-stale' });
     await expect(assets.listMocks()).rejects.toThrow();
     expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/service-account-tokens'))).toBe(false);
+  });
+
+  const COLLECTION_BARE_ID = '12345678-abcd-ef01-2345-678901234567';
+  const ESOCKET_500_BODY =
+    '{"error":{"name":"serverError","details":"ESOCKETTIMEDOUT","source":"downstream"}}';
+
+  it('deleteCollection succeeds after a transient Bifrost 500 ESOCKETTIMEDOUT', async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValueOnce(bifrostDeleteHttpError(500, ESOCKET_500_BODY))
+      .mockResolvedValueOnce({});
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws',
+      sleep: async () => undefined
+    });
+
+    await expect(assets.deleteCollection(PUBLIC_UID)).resolves.toBeUndefined();
+    expect(requestJson).toHaveBeenCalledTimes(2);
+    expect(requestJson.mock.calls[0][0]).toEqual({
+      service: 'collection',
+      method: 'delete',
+      path: `/v3/collections/${COLLECTION_BARE_ID}`
+    });
+    expect(requestJson.mock.calls[1][0]).toEqual(requestJson.mock.calls[0][0]);
+  });
+
+  it('deleteCollection exhausts the bounded transient retry budget then fails', async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValue(bifrostDeleteHttpError(500, ESOCKET_500_BODY));
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws',
+      sleep: async () => undefined
+    });
+
+    await expect(assets.deleteCollection(PUBLIC_UID)).rejects.toMatchObject({
+      name: 'HttpError',
+      status: 500
+    });
+    expect(requestJson).toHaveBeenCalledTimes(5);
+  });
+
+  it('deleteCollection treats 404 as idempotent success', async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValueOnce(bifrostDeleteHttpError(404, '{"error":{"code":"RESOURCE_NOT_FOUND"}}'));
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws',
+      sleep: async () => undefined
+    });
+
+    await expect(assets.deleteCollection(PUBLIC_UID)).resolves.toBeUndefined();
+    expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('deleteCollection does not retry ordinary non-transient 4xx', async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValueOnce(bifrostDeleteHttpError(403, '{"error":{"message":"forbidden"}}'));
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws',
+      sleep: async () => undefined
+    });
+
+    await expect(assets.deleteCollection(PUBLIC_UID)).rejects.toMatchObject({
+      name: 'HttpError',
+      status: 403
+    });
+    expect(requestJson).toHaveBeenCalledTimes(1);
   });
 });

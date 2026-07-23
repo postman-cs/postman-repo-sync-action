@@ -107,11 +107,35 @@ export class PostmanGatewayAssetsClient {
       .filter((entry) => entry.id || entry.name);
   }
 
+  /**
+   * Delete a collection (GC path). DELETE is idempotent: transient 408/429/5xx
+   * (including Bifrost ESOCKETTIMEDOUT envelopes) are retried with the same
+   * bounded budget as other idempotent writes; 404 is success (already gone).
+   * Ordinary 4xx are not retried.
+   */
   async deleteCollection(collectionUid: string): Promise<void> {
     const bareId = String(collectionUid).split('-').slice(-5).join('-') || collectionUid;
-    await this.gateway.requestJson<JsonRecord>({
-      service: 'collection', method: 'delete', path: `/v3/collections/${bareId}`
-    });
+    try {
+      await retry(
+        () =>
+          this.gateway.requestJson<JsonRecord>({
+            service: 'collection', method: 'delete', path: `/v3/collections/${bareId}`
+          }),
+        {
+          maxAttempts: 5,
+          delayMs: 2000,
+          backoffMultiplier: 2,
+          maxDelayMs: 15000,
+          sleep: this.sleep,
+          shouldRetry: (e) => this.isRetryableIdempotentWriteOutcome(e)
+        }
+      );
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
