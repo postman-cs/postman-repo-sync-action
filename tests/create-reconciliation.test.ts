@@ -716,6 +716,19 @@ describe('fresh-process orchestration live discovery reuse', () => {
 });
 
 describe('gateway operation-aware retries', () => {
+  it.each([
+    ['timeout', new Error('timeout')],
+    ['inner 5xx', new Response(JSON.stringify({ error: { name: 'serverError' }, status: 503 }), { status: 200 })],
+    ['429', new Response('slow', { status: 429 })]
+  ])('does not blindly retry unsafe create on %s', async (_name, failure) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (failure instanceof Error) throw failure;
+      return failure;
+    });
+    const gateway = new AccessTokenGatewayClient({ tokenProvider: new AccessTokenProvider({ accessToken: 'tok' }), fetchImpl, maxRetries: 3, sleepImpl: async () => undefined });
+    await expect(gateway.requestJson({ service: 'mock', method: 'post', path: '/mocks', body: {} }, { retryTransient: false })).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
   it('submits an unsafe create once when transient retries are disabled', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({ error: { name: 'serverError' } }, { status: 503 })

@@ -2520,7 +2520,8 @@ export function createRepoSyncDependencies(
     bifrostBaseUrl: inputs.postmanBifrostBase,
     orgMode: inputs.orgMode,
     teamId: resolved.teamId,
-    secretMasker: masker
+    secretMasker: masker,
+    gateway
   });
 
   return {

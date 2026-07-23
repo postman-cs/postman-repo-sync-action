@@ -45,6 +45,35 @@ describe('PostmanGatewayAssetsClient', () => {
   const PUBLIC_UID = '10490519-12345678-abcd-ef01-2345-678901234567';
   const ENV_PUBLIC_UID = '10490519-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
+  it('reads the one-page Spec Hub tree ROOT without legacy files calls', async () => {
+    const requestJson = vi.fn(async (request: { path: string }) => request.path.endsWith('/tree')
+      ? { data: [{ id: 'root', type: 'FILE', fileType: 'ROOT', path: 'openapi.yaml', content: 'openapi: 3.0.0' }] }
+      : null);
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+    await expect(assets.getSpecContent('spec')).resolves.toBe('openapi: 3.0.0');
+    expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows tree cursors, rejects repeats/caps, and never falls back after semantic invalidity', async () => {
+    const paged = vi.fn()
+      .mockResolvedValueOnce({ data: [{ id: 'a', type: 'FILE', fileType: 'OTHER', path: 'a.yaml', content: 'a' }], meta: { cursor: { next: 'next' } } })
+      .mockResolvedValueOnce({ data: [{ id: 'root', type: 'FILE', fileType: 'ROOT', path: 'root.yaml', content: 'root' }] });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson: paged } as never, workspaceId: 'ws' });
+    await expect(assets.getSpecContent('spec')).resolves.toBe('root');
+    expect(paged).toHaveBeenCalledTimes(2);
+    const repeated = vi.fn(async () => ({ data: [], meta: { cursor: { next: 'same' } } }));
+    await expect(new PostmanGatewayAssetsClient({ gateway: { requestJson: repeated } as never, workspaceId: 'ws' }).getSpecContent('spec')).rejects.toThrow('SPEC_TREE_CURSOR_REPEATED');
+    const invalid = vi.fn(async (request: { path: string }) => request.path.endsWith('/tree') ? { data: [{ id: 'root', type: 'FILE', fileType: 'ROOT', path: '../bad', content: 'x' }] } : { data: [] });
+    await expect(new PostmanGatewayAssetsClient({ gateway: { requestJson: invalid } as never, workspaceId: 'ws' }).getSpecContent('spec')).rejects.toThrow('CONTRACT_DEFINITION_PATH_INVALID');
+    expect(invalid).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the legacy file route once only for an incomplete or capability-missing tree', async () => {
+    const incomplete = vi.fn(async (request: { path: string }) => request.path.endsWith('/tree') ? { data: [{}] } : request.path.endsWith('/files') ? { data: [{ id: 'root', type: 'ROOT' }] } : { data: { content: 'legacy' } });
+    await expect(new PostmanGatewayAssetsClient({ gateway: { requestJson: incomplete } as never, workspaceId: 'ws' }).getSpecContent('spec')).resolves.toBe('legacy');
+    expect(incomplete.mock.calls.filter(([r]) => String((r as { path: string }).path).includes('/files')).length).toBe(2);
+  });
+
   it('createMock references the collection + environment by their full public uids (no model-id strip)', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

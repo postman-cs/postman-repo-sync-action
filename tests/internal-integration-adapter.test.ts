@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
+import { PostmanAppVersionProvider } from '../src/lib/postman/app-version.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -13,6 +14,32 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('internal integration adapter', () => {
+  it('adds one cached app-version to every direct ws/proxy path', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string };
+      return body.path === '/api/keys' ? jsonResponse({ apikey: { key: 'created' } }) : jsonResponse({ data: null });
+    });
+    const lookup = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ version: '12.34.56' }));
+    const adapter = createInternalIntegrationAdapter({ backend: 'bifrost', accessToken: 'token-123', teamId: '11430732', fetchImpl, appVersionProvider: new PostmanAppVersionProvider({ fetchImpl: lookup }) });
+    await adapter.findWorkspaceForRepo('https://github.com/postman-cs/repo-sync-demo');
+    await adapter.connectWorkspaceToRepository('ws-1', 'https://github.com/postman-cs/repo-sync-demo');
+    await adapter.createApiKey('key');
+    expect(lookup).toHaveBeenCalledTimes(1);
+    for (const call of fetchImpl.mock.calls) {
+      if (String(call[0]).endsWith('/ws/proxy')) expect((call[1] as RequestInit).headers).toMatchObject({ 'x-app-version': '12.34.56' });
+    }
+  });
+  it('groups direct associations by system environment, preserves public UIDs, and rejects partial readback', async () => {
+    const requestJson = vi.fn(async () => ({ success: true, data: [
+      { systemEnvironmentId: 'sys-a', workspaceId: 'ws-1', postmanEnvironmentId: '10490519-a' },
+      { systemEnvironmentId: 'sys-a', workspaceId: 'ws-1', postmanEnvironmentId: '10490519-b' }
+    ] }));
+    const adapter = createInternalIntegrationAdapter({ backend: 'bifrost', accessToken: 'token', teamId: '1', gateway: { requestJson } as never });
+    await adapter.associateSystemEnvironments('ws-1', [{ envUid: '10490519-b', systemEnvId: 'sys-a' }, { envUid: '10490519-a', systemEnvId: 'sys-a' }]);
+    expect(requestJson).toHaveBeenCalledWith(expect.objectContaining({ fallback: 'none', body: { systemEnvironmentId: 'sys-a', workspaceEntries: [{ workspaceId: 'ws-1', postmanEnvironmentIds: ['10490519-a', '10490519-b'] }] } }), { retryTransient: true });
+    requestJson.mockResolvedValueOnce({ success: true, data: [] });
+    await expect(adapter.associateSystemEnvironments('ws-1', [{ envUid: '10490519-a', systemEnvId: 'sys-a' }])).rejects.toThrow('SYSTEM_ENV_ASSOCIATION_INCOMPLETE');
+  });
   describe('findWorkspaceForRepo', () => {
     it('returns free when the filesystem lookup yields 200 with null data', async () => {
       const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ data: null }));
@@ -303,6 +330,7 @@ describe('internal integration adapter', () => {
   });
 
   it('associates system environments through the worker endpoint', async () => {
+    vi.stubEnv('POSTMAN_SYSTEM_ENV_ASSOCIATION_MODE', 'worker');
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({
         ok: true
@@ -326,6 +354,7 @@ describe('internal integration adapter', () => {
         method: 'POST'
       })
     );
+    vi.unstubAllEnvs();
   });
 
   it('honors custom bifrostBaseUrl override for beta stacks', async () => {
@@ -542,6 +571,7 @@ describe('internal integration adapter', () => {
   });
 
   it('UNAUTHENTICATED on associateSystemEnvironments yields re-mint guidance', async () => {
+    vi.stubEnv('POSTMAN_SYSTEM_ENV_ASSOCIATION_MODE', 'worker');
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse(
         { error: { code: 'UNAUTHENTICATED' } },
@@ -563,6 +593,7 @@ describe('internal integration adapter', () => {
     ).rejects.toThrow(
       /Bifrost rejected the access token \(UNAUTHENTICATED\).*Re-mint a fresh token.*service-account-tokens/s
     );
+    vi.unstubAllEnvs();
   });
 
   it('createApiKey 403 yields role guidance', async () => {

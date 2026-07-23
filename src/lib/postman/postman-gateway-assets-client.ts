@@ -126,6 +126,18 @@ export class PostmanGatewayAssetsClient {
   }
 
   async getSpecContent(specId: string): Promise<string | undefined> {
+    if (process.env.POSTMAN_SPEC_TREE_FAST_PATH !== 'off') {
+      try {
+        const treeContent = await this.getSpecContentFromTree(specId);
+        if (treeContent !== undefined) return treeContent;
+      } catch (error) {
+        if (!(error instanceof HttpError) || ![403, 404, 405, 501].includes(error.status)) throw error;
+      }
+    }
+    return this.getSpecContentLegacy(specId);
+  }
+
+  private async getSpecContentLegacy(specId: string): Promise<string | undefined> {
     const files = await this.gateway.requestJson<JsonRecord>({
       service: 'specification', method: 'get', path: `/specifications/${specId}/files`
     });
@@ -139,6 +151,45 @@ export class PostmanGatewayAssetsClient {
     });
     const record = this.dataOf(file);
     return typeof record?.content === 'string' ? record.content : undefined;
+  }
+
+  /** Minimal `/tree` reader: validate the entire returned inventory before selecting ROOT. */
+  private async getSpecContentFromTree(specId: string): Promise<string | undefined> {
+    const rows: JsonRecord[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const response = await this.gateway.requestJson<JsonRecord>({
+        service: 'specification', method: 'get', path: `/specifications/${specId}/tree`,
+        query: { fields: 'id,name,type,path,parentId,fileType,content', limit: 100, ...(cursor ? { cursor } : {}) }
+      });
+      if (!Array.isArray(response?.data)) return undefined;
+      for (const value of response.data) {
+        const row = this.asRecord(value);
+        if (!row || row.type === 'FOLDER') continue;
+        if (row.type !== 'FILE' || typeof row.id !== 'string' || !row.id.trim() || typeof row.path !== 'string' || !row.path.trim() || typeof row.content !== 'string' || typeof row.fileType !== 'string' || !row.fileType.trim()) return undefined;
+        const path = row.path.replace(/\\/g, '/').normalize('NFC');
+        if (path.startsWith('/') || path.split('/').some((part) => part === '..' || !part)) throw new Error('CONTRACT_DEFINITION_PATH_INVALID');
+        rows.push({ ...row, path });
+      }
+      const meta = this.asRecord(response?.meta);
+      const cursorValue = this.asRecord(meta?.cursor)?.next;
+      const next = typeof cursorValue === 'string' && cursorValue.trim() ? cursorValue.trim() : undefined;
+      if (!next) break;
+      if (cursors.has(next)) throw new Error('SPEC_TREE_CURSOR_REPEATED');
+      cursors.add(next);
+      if (page === 99) throw new Error('SPEC_TREE_PAGE_LIMIT_EXCEEDED');
+      cursor = next;
+    }
+    const paths = new Set<string>();
+    for (const row of rows) {
+      const path = String(row.path).toLocaleLowerCase();
+      if (paths.has(path)) throw new Error('CONTRACT_DEFINITION_DUPLICATE_PATH');
+      paths.add(path);
+    }
+    const roots = rows.filter((row) => row.fileType === 'ROOT');
+    if (roots.length !== 1) throw new Error('CONTRACT_DEFINITION_INVENTORY_INVALID');
+    return String(roots[0]?.content);
   }
 
   async listSpecCollections(specId: string): Promise<Array<{ uid: string; name: string }>> {

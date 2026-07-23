@@ -1,5 +1,6 @@
 import { retry } from '../retry.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
+import { formatRejectedMint, inspectPmakIdentity, maskPmakDiagnostic } from './pmak-diagnostics.js';
 
 export interface AccessTokenProviderOptions {
   /** Current access token (from action input or a prior mint). May be empty. */
@@ -23,10 +24,12 @@ export interface AccessTokenProviderOptions {
 class MintError extends Error {
   readonly permanent: boolean;
 
-  constructor(message: string, permanent: boolean) {
+  readonly status?: number;
+  constructor(message: string, permanent: boolean, status?: number) {
     super(message);
     this.name = 'MintError';
     this.permanent = permanent;
+    this.status = status;
   }
 }
 
@@ -128,7 +131,7 @@ export class AccessTokenProvider {
         throw new MintError(
           `postman: re-mint failed because the postman-api-key was rejected (PMAK rejected, HTTP ${status}); ` +
             'confirm it is a valid, enabled service-account PMAK for the intended team.',
-          true
+          true, status
         );
       }
       if (status === 400 && body.toLowerCase().includes('service accounts not enabled')) {
@@ -182,43 +185,9 @@ async function describeMintFailure(
   apiBaseUrl: string,
   fetchImpl: typeof fetch
 ): Promise<string> {
-  const raw = mintError instanceof Error ? mintError.message : String(mintError);
-  const rejected = /HTTP 40[13]|PMAK rejected/.test(raw);
-  if (!rejected) {
-    return raw;
-  }
-  try {
-    const me = await fetchImpl(`${apiBaseUrl}/me`, { headers: { 'x-api-key': apiKey } });
-    if (me.ok) {
-      const body = (await me.json().catch(() => undefined)) as
-        | { user?: { username?: string | null; email?: string | null; teamId?: number } }
-        | undefined;
-      const user = body?.user;
-      // Service-account identities carry null username/email (live-verified);
-      // a real username/email means a human user's personal key.
-      const looksPersonal = Boolean(user && (user.username || user.email));
-      if (looksPersonal) {
-        return (
-          'Personal API key detected, cannot mint a service-account access token. ' +
-          'POST /service-account-tokens only accepts a SERVICE-ACCOUNT API key; this postman-api-key belongs to a user account' +
-          (user?.teamId ? ` (team ${user.teamId})` : '') +
-          '. Create a service account in Team Settings and use its PMAK, or mint the token elsewhere and pass postman-access-token.'
-        );
-      }
-      return (
-        'The postman-api-key authenticates (GET /me OK) but was rejected by POST /service-account-tokens' +
-        (user?.teamId ? ` (team ${user.teamId})` : '') +
-        '. The service account likely lacks permission to mint access tokens, or service accounts are restricted for this team. ' +
-        'Check the service account role in Team Settings, or pass a pre-minted postman-access-token.'
-      );
-    }
-    return (
-      'The postman-api-key is invalid, disabled, or expired (rejected by both POST /service-account-tokens and GET /me). ' +
-      'Generate a fresh service-account PMAK in Team Settings and update the secret.'
-    );
-  } catch {
-    return raw;
-  }
+  const raw = maskPmakDiagnostic(mintError instanceof Error ? mintError.message : String(mintError), [apiKey]);
+  if (!(mintError instanceof MintError) || (mintError.status !== 401 && mintError.status !== 403)) return raw;
+  return formatRejectedMint(raw, await inspectPmakIdentity({ apiBaseUrl, apiKey, fetchImpl }));
 }
 
 /**
