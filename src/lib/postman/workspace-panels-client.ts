@@ -58,13 +58,13 @@ function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
-function panelsHeaders(teamId?: string): Record<string, string> {
+function panelsHeaders(teamId: string | undefined, orgMode: boolean): Record<string, string> {
   const headers: Record<string, string> = {
     'x-app-version': PANELS_MIN_APP_VERSION,
     'User-Agent': `Postman/${PANELS_MIN_APP_VERSION}`
   };
   const team = String(teamId || '').trim();
-  if (team) headers['x-entity-team-id'] = team;
+  if (team && orgMode) headers['x-entity-team-id'] = team;
   return headers;
 }
 
@@ -115,8 +115,9 @@ export function panelTypeForElement(elementType: PanelElementType): '1' | '2' {
 export function createWorkspacePanelsClient(options: {
   gateway: AccessTokenGatewayClient;
   teamId?: string;
+  orgMode: boolean;
 }): WorkspacePanelsClient {
-  const { gateway, teamId } = options;
+  const { gateway, teamId, orgMode } = options;
 
   return {
     async listPanels(workspaceId, listOptions = {}) {
@@ -127,7 +128,7 @@ export function createWorkspacePanelsClient(options: {
         service: 'workspaces',
         method: 'get',
         path: `/workspaces/${workspaceId}/panels${query}`,
-        headers: panelsHeaders(teamId)
+        headers: panelsHeaders(teamId, orgMode)
       });
       const data = asRecord(response?.data) ?? response;
       const panels = Array.isArray(asRecord(data)?.panels)
@@ -143,7 +144,7 @@ export function createWorkspacePanelsClient(options: {
         service: 'workspaces',
         method: 'post',
         path: `/workspaces/${workspaceId}/panels`,
-        headers: panelsHeaders(teamId),
+        headers: panelsHeaders(teamId, orgMode),
         body: {
           name: body.name,
           panelType: body.panelType,
@@ -165,7 +166,7 @@ export function createWorkspacePanelsClient(options: {
           service: 'workspaces',
           method: 'patch',
           path: `/workspaces/${workspaceId}/panels/items/move`,
-          headers: panelsHeaders(teamId),
+          headers: panelsHeaders(teamId, orgMode),
           body: {
             items: chunk,
             targetPanelId: body.targetPanelId,

@@ -2,12 +2,33 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyWorkspaceSections,
+  createWorkspacePanelsClient,
   panelTypeForElement,
   sectionNameForDecision,
   shouldApplySections,
   type WorkspacePanelsClient
 } from '../src/lib/postman/workspace-panels-client.js';
+import type { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
 import type { BranchDecision } from '../src/lib/repo/branch-decision.js';
+
+describe('createWorkspacePanelsClient', () => {
+  it.each([
+    { orgMode: false, expectedTeamId: undefined },
+    { orgMode: true, expectedTeamId: 'team-1' }
+  ])('gates the team header on orgMode=$orgMode', async ({ orgMode, expectedTeamId }) => {
+    const requestJson = vi.fn().mockResolvedValue({ data: { panels: [] } });
+    const client = createWorkspacePanelsClient({
+      gateway: { requestJson } as unknown as AccessTokenGatewayClient,
+      teamId: 'team-1',
+      orgMode
+    });
+
+    await client.listPanels('workspace-1');
+
+    const request = requestJson.mock.calls[0]?.[0] as { headers: Record<string, string> };
+    expect(request.headers['x-entity-team-id']).toBe(expectedTeamId);
+  });
+});
 
 function decision(overrides: Partial<BranchDecision> = {}): BranchDecision {
   return {

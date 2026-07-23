@@ -2190,7 +2190,11 @@ export function createRepoSyncDependencies(
 
   const panels =
     inputs.sections === 'auto'
-      ? createWorkspacePanelsClient({ gateway, teamId: resolved.teamId })
+      ? createWorkspacePanelsClient({
+          gateway,
+          teamId: resolved.teamId,
+          orgMode: inputs.orgMode
+        })
       : undefined;
 
   return {
