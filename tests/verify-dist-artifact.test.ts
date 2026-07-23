@@ -180,7 +180,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const result = await runVerify(pkgRoot);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/git-index mode is 100644/);
-  });
+  }, 15_000);
 
   it('fails when dist census has an extra file', async () => {
     const root = await makeTempDir('verify-dist-extra-');

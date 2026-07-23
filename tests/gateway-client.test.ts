@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
 import { createMutableSecretMasker } from '../src/lib/secrets.js';
+import { PostmanAppVersionProvider } from '../src/lib/postman/app-version.js';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -108,7 +109,8 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
       tokenProvider: provider,
       fetchImpl,
       retryBaseDelayMs: 10,
-      sleepImpl: sleep
+      sleepImpl: sleep,
+      randomImpl: () => 1
     });
 
     const result = await client.requestJson({
@@ -135,7 +137,8 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
       secretMasker: masker.mask,
       maxRetries: 2,
       retryBaseDelayMs: 5,
-      sleepImpl: sleep
+      sleepImpl: sleep,
+      randomImpl: () => 1
     });
 
     let captured: unknown;
@@ -173,5 +176,23 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
     ).rejects.toThrow('404');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('preserves cached app/team headers across auth refresh and honors Retry-After for a safe read', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('slow', { status: 429, headers: { 'retry-after': '2' } }))
+      .mockResolvedValueOnce(new Response('{"error":"UNAUTHENTICATED"}', { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'fresh' }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    const appLookup = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ version: '12.34.56' }));
+    const sleep = vi.fn(async () => undefined);
+    const provider = new AccessTokenProvider({ accessToken: 'stale', apiKey: 'pmak', fetchImpl, sleep: async () => undefined });
+    const client = new AccessTokenGatewayClient({ tokenProvider: provider, fetchImpl, teamId: '6029', orgMode: true, sleepImpl: sleep, appVersionProvider: new PostmanAppVersionProvider({ fetchImpl: appLookup }), randomImpl: () => 0 });
+    await expect(client.requestJson({ service: 'collection', method: 'get', path: '/v3/a/export' })).resolves.toEqual({ ok: true });
+    expect(appLookup).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(2000);
+    for (const index of [0, 1, 3]) {
+      expect((fetchImpl.mock.calls[index]?.[1] as RequestInit).headers).toMatchObject({ 'x-app-version': '12.34.56', 'x-entity-team-id': '6029' });
+    }
   });
 });

@@ -21,7 +21,7 @@ type PatternId = 'newman' | 'pmak-header' | 'pmak-cli-login';
  */
 const ALLOWLIST: Record<string, PatternId[]> = {
   'src/lib/ci-workflow-template.ts': ['pmak-cli-login'],
-  'src/lib/postman/credential-identity.ts': ['pmak-header'],
+  'src/lib/postman/pmak-diagnostics.ts': ['pmak-header'],
   'src/lib/postman/token-provider.ts': ['pmak-header'],
   'src/lib/postman/postman-assets-client.ts': ['pmak-header']
 };

@@ -34,22 +34,24 @@ This action ships bundled JavaScript in `dist/`. After any source change, run `n
 
 ## Live E2E Tier
 
-Ordinary PRs use the deterministic offline gate. Live sandbox coverage runs on
-immutable releases and nightly in `postman-cs/postman-actions-e2e`.
+Ordinary PRs use the deterministic offline gate. Nightly full and post-release
+exact-ref smoke coverage are asynchronous monitors in
+`postman-cs/postman-actions-e2e`.
 
-## Release Gate
+## Release Monitor
 
-Immutable release tags for this repo are blocked by the central live e2e suite in
-`postman-cs/postman-actions-e2e` before any GitHub release, npm package, or
-release tarball is published. The release workflow validates locally, dispatches
-the e2e workflow with this exact tag pinned for `postman-repo-sync-action`,
-waits for the correlated run to succeed, and only then publishes.
+Immutable release tags publish after local validate succeeds. Publication does
+not wait on live E2E. After immutable publication, the release workflow
+dispatches an asynchronous exact-ref smoke monitor in
+`postman-cs/postman-actions-e2e` for `postman-repo-sync-action`. That dispatch is
+`continue-on-error` and non-release-critical; missing/denied dispatch or a later
+monitor failure does not roll back or block published artifacts.
 
-The rolling `v1` alias validates locally but skips npm publish
-and the live e2e gate. `E2E_DISPATCH_TOKEN` is release-critical for immutable
-publishing tags; if it is missing, invalid, or the e2e fails/times out, the
-release must stop before public artifacts are created. Record the e2e run URL
-and conclusion from the release logs as release evidence.
+A rolling-major (`vN`) / current-major alias invocation is a classifier-only
+no-op: it skips dependency install, validation, build, package, publication,
+alias advancement, and monitor work. `E2E_DISPATCH_TOKEN` powers the
+post-publish smoke monitor for immutable publishing tags; record the dispatch
+notice from the release logs as monitor evidence.
 
 ## Commit Messages
 

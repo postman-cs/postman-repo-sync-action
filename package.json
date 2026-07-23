@@ -9,7 +9,8 @@
   },
   "files": [
     "action.yml",
-    "dist"
+    "dist",
+    "scripts/verify-release-artifacts.mjs"
   ],
   "engines": {
     "node": ">=24"
@@ -24,7 +25,7 @@
     "docs:tables": "node scripts/render-action-tables.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run && node --test .github/scripts/wait-for-e2e-gate.test.mjs",
+    "test": "vitest run && node --test .github/scripts/dispatch-e2e-monitor.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": [

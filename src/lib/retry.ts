@@ -77,3 +77,15 @@ export async function retry<T>(
 
   throw new Error('Retry exhausted without returning or throwing');
 }
+
+export function fullJitterDelayMs(attempt: number, baseMs: number, capMs: number, random: () => number = Math.random): number {
+  return Math.floor(random() * Math.max(0, Math.min(capMs, baseMs * 2 ** Math.max(0, attempt))));
+}
+
+export function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const time = Date.parse(trimmed);
+  return Number.isNaN(time) ? undefined : Math.max(0, time - Date.now());
+}

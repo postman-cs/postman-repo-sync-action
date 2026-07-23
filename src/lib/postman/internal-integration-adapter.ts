@@ -3,6 +3,8 @@ import { createSecretMasker, type SecretMasker } from '../secrets.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 import { getMemoizedSessionIdentity } from './credential-identity.js';
 import { adviseFromHttpError, type ErrorAdviceContext } from './error-advice.js';
+import type { AccessTokenGatewayClient } from './gateway-client.js';
+import { defaultPostmanAppVersionProvider, type PostmanAppVersionProvider } from './app-version.js';
 
 export interface GovernanceAssociation {
   envUid: string;
@@ -41,6 +43,9 @@ export interface InternalIntegrationAdapterOptions {
   secretMasker?: SecretMasker;
   teamId: string;
   workerBaseUrl?: string;
+  /** First-party gateway used by the default api-catalog association route. */
+  gateway?: AccessTokenGatewayClient;
+  appVersionProvider?: PostmanAppVersionProvider;
 }
 
 export interface InternalIntegrationAdapter {
@@ -93,6 +98,8 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   private readonly secretMasker: SecretMasker;
   private readonly teamId: string;
   private readonly workerBaseUrl: string;
+  private readonly gateway?: AccessTokenGatewayClient;
+  private readonly appVersionProvider: PostmanAppVersionProvider;
 
   constructor(options: InternalIntegrationAdapterOptions) {
     this.accessToken = String(options.accessToken || '').trim();
@@ -107,6 +114,8 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       options.workerBaseUrl ||
         'https://catalog-admin.postman-account2009.workers.dev'
     ).replace(/\/+$/, '');
+    this.gateway = options.gateway;
+    this.appVersionProvider = options.appVersionProvider ?? defaultPostmanAppVersionProvider;
     this.secretMasker =
       options.secretMasker ?? createSecretMasker([this.accessToken]);
   }
@@ -117,7 +126,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
   }
 
   /** Build Bifrost proxy headers. Only includes x-entity-team-id for org-mode teams. */
-  private bifrostHeaders(): Record<string, string> {
+  private async bifrostHeaders(): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-access-token': this.currentToken()
@@ -125,6 +134,8 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     if (this.teamId && this.orgMode) {
       headers['x-entity-team-id'] = this.teamId;
     }
+    const appVersion = await this.appVersionProvider.get();
+    if (appVersion) headers['x-app-version'] = appVersion;
     return headers;
   }
 
@@ -163,6 +174,62 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     associations: GovernanceAssociation[]
   ): Promise<void> {
     if (associations.length === 0) {
+      return;
+    }
+
+    const mode = process.env.POSTMAN_SYSTEM_ENV_ASSOCIATION_MODE ?? 'direct';
+    if (mode !== 'direct' && mode !== 'worker') {
+      throw new Error('POSTMAN_SYSTEM_ENV_ASSOCIATION_MODE must be direct or worker');
+    }
+    if (mode === 'direct') {
+      if (!this.gateway) {
+        throw new Error('Direct system-environment association requires the access-token gateway');
+      }
+      const groups = new Map<string, Set<string>>();
+      for (const association of associations) {
+        const systemEnvId = String(association.systemEnvId || '').trim();
+        const uid = String(association.envUid || '').trim();
+        if (!systemEnvId || !uid) continue;
+        const key = `${systemEnvId}\u0000${workspaceId}`;
+        const uids = groups.get(key) ?? new Set<string>();
+        uids.add(uid);
+        groups.set(key, uids);
+      }
+      for (const [key, uids] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        const [systemEnvironmentId, groupedWorkspaceId] = key.split('\u0000');
+        const postmanEnvironmentIds = [...uids].sort();
+        let response: { success?: unknown; data?: unknown } | null;
+        try {
+          response = await this.gateway.requestJson<{
+            success?: unknown;
+            data?: unknown;
+          }>({
+            service: 'api-catalog',
+            method: 'post',
+            path: '/api/system-envs/associations',
+            body: {
+              systemEnvironmentId,
+              workspaceEntries: [{ workspaceId: groupedWorkspaceId, postmanEnvironmentIds }]
+            },
+            fallback: 'none'
+          }, { retryTransient: true });
+        } catch (error) {
+          if (error instanceof HttpError) {
+            throw adviseFromHttpError(error, this.adviceContext('system environment association')) ?? error;
+          }
+          throw error;
+        }
+        if (!response || response.success !== true) {
+          throw new Error('SYSTEM_ENV_ASSOCIATION_INCOMPLETE');
+        }
+        if (response.data !== undefined) {
+          if (!Array.isArray(response.data)) throw new Error('SYSTEM_ENV_ASSOCIATION_INCOMPLETE');
+          const seen = new Set(response.data.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object').map((row) => `${row.systemEnvironmentId}\u0000${row.workspaceId}\u0000${row.postmanEnvironmentId}`));
+          if (!postmanEnvironmentIds.every((uid) => seen.has(`${systemEnvironmentId}\u0000${groupedWorkspaceId}\u0000${uid}`))) {
+            throw new Error('SYSTEM_ENV_ASSOCIATION_INCOMPLETE');
+          }
+        }
+      }
       return;
     }
 
@@ -229,7 +296,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     try {
       const response = await this.fetchImpl(url, {
         method: 'POST',
-        headers: this.bifrostHeaders(),
+        headers: await this.bifrostHeaders(),
         body: JSON.stringify(payload)
       });
 
@@ -343,7 +410,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
       }
     };
 
-    const headers = this.bifrostHeaders();
+    const headers = await this.bifrostHeaders();
 
     const response = await this.fetchImpl(url, {
       method: 'POST',
@@ -421,7 +488,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
     try {
       const response = await this.fetchImpl(`${this.bifrostBaseUrl}/ws/proxy`, {
         method: 'POST',
-        headers: this.bifrostHeaders(),
+        headers: await this.bifrostHeaders(),
         body: JSON.stringify({
           service: 'workspaces',
           method: 'GET',
@@ -485,7 +552,7 @@ class BifrostInternalIntegrationAdapter implements InternalIntegrationAdapter {
 
   async createApiKey(name: string): Promise<string> {
     const url = `${this.bifrostBaseUrl}/ws/proxy`;
-    const headers = this.bifrostHeaders();
+    const headers = await this.bifrostHeaders();
 
     const payload = {
       service: 'identity',

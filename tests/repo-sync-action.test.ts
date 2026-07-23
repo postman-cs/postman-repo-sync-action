@@ -3404,6 +3404,9 @@ describe('runAction credential preflight', () => {
           }
         );
       }
+      if (url === 'https://api.getpostman.com/service-account-tokens' && method === 'POST') {
+        return json({ access_token: 'refreshed-access-token' });
+      }
       if (
         url.startsWith('https://api.getpostman.com/environments?workspace=') &&
         method === 'POST'
@@ -3434,6 +3437,10 @@ describe('runAction credential preflight', () => {
         }
         const service = String(proxied.service ?? '');
         const proxyPath = String(proxied.path ?? '');
+        if (service === 'api-catalog' && proxyPath === '/api/system-envs/associations') {
+          const custom = options.associateResponse?.();
+          return custom ?? json({ success: true });
+        }
         // All gateway ops share the /ws/proxy URL; record service+path so
         // ordering/negative assertions can target a specific asset op.
         options.events.push(`proxy:${method} ${service} ${proxyPath}`);

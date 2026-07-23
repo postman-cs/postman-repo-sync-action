@@ -3,6 +3,11 @@ import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 import type { SecretMasker } from '../secrets.js';
 import { createSecretMasker } from '../secrets.js';
 import type { AccessTokenProvider } from './token-provider.js';
+import { fullJitterDelayMs, parseRetryAfterMs } from '../retry.js';
+import {
+  defaultPostmanAppVersionProvider,
+  type PostmanAppVersionProvider
+} from './app-version.js';
 
 export type GatewayMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
 
@@ -18,7 +23,7 @@ export interface GatewayRequest {
    * (only valid after the caller has reconciled and knows the create is
    * absent); safe requests always fall back, unsafe requests never do unless
    * `'auto'` is set. */
-  fallback?: 'auto';
+  fallback?: 'auto' | 'none';
 }
 
 export interface AccessTokenGatewayClientOptions {
@@ -39,6 +44,10 @@ export interface AccessTokenGatewayClientOptions {
   /** Base backoff in ms; attempt n waits baseDelayMs * 2^(n-1) (default 400). */
   retryBaseDelayMs?: number;
   sleepImpl?: (ms: number) => Promise<void>;
+  appVersionProvider?: PostmanAppVersionProvider;
+  requestTimeoutMs?: number;
+  retryMaxDelayMs?: number;
+  randomImpl?: () => number;
 }
 
 function isExpiredAuthError(status: number, body: string): boolean {
@@ -88,6 +97,10 @@ export class AccessTokenGatewayClient {
   private readonly fallbackBaseUrl?: string;
   private readonly retryBaseDelayMs: number;
   private readonly sleepImpl: (ms: number) => Promise<void>;
+  private readonly appVersionProvider: PostmanAppVersionProvider;
+  private readonly requestTimeoutMs: number;
+  private readonly retryMaxDelayMs: number;
+  private readonly randomImpl: () => number;
 
   constructor(options: AccessTokenGatewayClientOptions) {
     this.tokenProvider = options.tokenProvider;
@@ -105,6 +118,10 @@ export class AccessTokenGatewayClient {
       fallbackEnv === 'off' ? undefined : options.fallbackBaseUrl?.replace(/\/+$/, '');
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? 400;
     this.sleepImpl = options.sleepImpl ?? defaultSleep;
+    this.appVersionProvider = options.appVersionProvider ?? defaultPostmanAppVersionProvider;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.retryMaxDelayMs = options.retryMaxDelayMs ?? 5_000;
+    this.randomImpl = options.randomImpl ?? Math.random;
   }
 
   configureTeamContext(teamId: string, orgMode: boolean): void {
@@ -112,11 +129,13 @@ export class AccessTokenGatewayClient {
     this.orgMode = orgMode;
   }
 
-  private buildHeaders(extra?: Record<string, string>): Record<string, string> {
+  private async buildHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+    const appVersion = await this.appVersionProvider.get();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-access-token': this.tokenProvider.current(),
-      ...(extra || {})
+      ...(extra || {}),
+      ...(appVersion ? { 'x-app-version': appVersion } : {})
     };
     if (this.teamId && this.orgMode) {
       headers['x-entity-team-id'] = this.teamId;
@@ -126,9 +145,12 @@ export class AccessTokenGatewayClient {
 
   private async send(request: GatewayRequest, baseUrl?: string): Promise<Response> {
     const url = `${baseUrl ?? this.bifrostBaseUrl}/ws/proxy`;
-    return this.fetchImpl(url, {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    try { return await this.fetchImpl(url, {
       method: 'POST',
-      headers: this.buildHeaders(request.headers),
+      headers: await this.buildHeaders(request.headers),
+      signal: controller.signal,
       body: JSON.stringify({
         service: request.service,
         method: request.method,
@@ -136,7 +158,7 @@ export class AccessTokenGatewayClient {
         ...(request.query !== undefined ? { query: request.query } : {}),
         ...(request.body !== undefined ? { body: request.body } : {})
       })
-    });
+    }); } finally { clearTimeout(timer); }
   }
 
   /**
@@ -165,6 +187,7 @@ export class AccessTokenGatewayClient {
    * they are the freshest authoritative answer.
    */
   private fallbackEligible(request: GatewayRequest, retryTransient: boolean): boolean {
+    if (request.fallback === 'none') return false;
     if (!this.fallbackBaseUrl) return false;
     return retryTransient || request.fallback === 'auto';
   }
@@ -202,7 +225,7 @@ export class AccessTokenGatewayClient {
         response = await this.send(request);
       } catch (error) {
         if (retryTransient && attempt < this.maxRetries) {
-          const delay = this.retryBaseDelayMs * 2 ** attempt;
+          const delay = this.retryDelayMs(attempt);
           attempt += 1;
           await this.sleepImpl(delay);
           continue;
@@ -212,7 +235,15 @@ export class AccessTokenGatewayClient {
         throw error;
       }
       if (response.ok) {
-        return response;
+        const okBody = await response.text().catch(() => '');
+        const inner = this.innerStatus(okBody);
+        if (inner !== undefined) {
+          if (retryTransient && this.isTransient(inner, okBody) && attempt < this.maxRetries) {
+            await this.sleepImpl(this.retryDelayMs(attempt)); attempt += 1; continue;
+          }
+          throw this.toInnerHttpError(request, inner, okBody);
+        }
+        return this.rebuildResponse(response, okBody);
       }
 
       const body = await response.text().catch(() => '');
@@ -228,10 +259,10 @@ export class AccessTokenGatewayClient {
 
       if (
         retryTransient &&
-        isRetryableSafeReadResponse(response.status) &&
+        this.isTransient(response.status, body) &&
         attempt < this.maxRetries
       ) {
-        const delay = this.retryBaseDelayMs * 2 ** attempt;
+        const delay = this.retryDelayMs(attempt, parseRetryAfterMs(response.headers.get('retry-after')));
         attempt += 1;
         await this.sleepImpl(delay);
         continue;
@@ -241,6 +272,19 @@ export class AccessTokenGatewayClient {
       if (fallbackResponse) return fallbackResponse;
       throw this.toHttpError(request, response, body);
     }
+  }
+
+  private retryDelayMs(attempt: number, retryAfter?: number): number {
+    return retryAfter === undefined ? fullJitterDelayMs(attempt, this.retryBaseDelayMs, this.retryMaxDelayMs, this.randomImpl) : Math.min(this.retryMaxDelayMs, retryAfter);
+  }
+  private isTransient(status: number, body: string): boolean {
+    return status === 408 || status === 429 || status >= 500 || /ESOCKETTIMEDOUT|ETIMEDOUT|ECONNRESET|serverError|downstream/.test(body);
+  }
+  private innerStatus(body: string): number | undefined {
+    try { const value = JSON.parse(body) as Record<string, unknown>; const status = Number(value.status ?? value.statusCode); return value.error || value.success === false || status >= 400 ? (status >= 400 ? status : 502) : undefined; } catch { return undefined; }
+  }
+  private rebuildResponse(response: Response, body: string): Response {
+    return new Response([204,205,304].includes(response.status) ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
   }
 
   /** Send a gateway request and parse the JSON body, or null when empty. */
@@ -302,9 +346,17 @@ export class AccessTokenGatewayClient {
       url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path})`,
       status: response.status,
       statusText: response.statusText,
-      requestHeaders: this.buildHeaders(request.headers),
+      requestHeaders: {
+        'Content-Type': 'application/json',
+        'x-access-token': this.tokenProvider.current(),
+        ...(request.headers || {}),
+        ...(this.teamId && this.orgMode ? { 'x-entity-team-id': this.teamId } : {})
+      },
       responseBody: this.secretMasker(body),
       secretValues: [this.tokenProvider.current()]
     });
+  }
+  private toInnerHttpError(request: GatewayRequest, status: number, body: string): HttpError {
+    return new HttpError({ method: request.method.toUpperCase(), url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path}) [inner]`, status, statusText: 'Inner Error', requestHeaders: { 'x-access-token': this.tokenProvider.current() }, responseBody: this.secretMasker(body), secretValues: [this.tokenProvider.current()] });
   }
 }

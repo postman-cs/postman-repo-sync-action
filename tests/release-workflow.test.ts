@@ -11,68 +11,118 @@ const seaDocs = readFileSync(join(process.cwd(), 'docs/self-contained-binary.md'
 
 function namedStep(name: string): string {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = releaseWorkflow.match(new RegExp(`      - name: ${escapedName}\\n[\\s\\S]*?(?=\\n      - |\\n?$)`));
+  const match = releaseWorkflow.match(new RegExp(`      - name: ${escapedName}\\n[\\s\\S]*?(?=\\n      - |\\n  [a-zA-Z0-9_-]+:|\\n?$)`));
   return match?.[0] ?? '';
 }
 
-function npmRegistrySetupStep(): string {
-  const match = releaseWorkflow.match(/ {6}- uses: actions\/setup-node@v\d+\n[\s\S]*?registry-url: 'https:\/\/registry\.npmjs\.org'\n/);
-  return match?.[0] ?? '';
+function job(name: string): string {
+  return releaseWorkflow.match(new RegExp(`  ${name}:\\n[\\s\\S]*?(?=\\n  [a-zA-Z0-9_-]+:|$)`))?.[0] ?? '';
 }
 
 describe('release workflow publishing contract', () => {
-  it('keeps v1 as the only rolling alias and v1.x as a zero-patch publish tag', () => {
-    expect(releaseWorkflow).toContain('PUBLISH_TAGS=("$PKG_VERSION")');
-    expect(releaseWorkflow).toContain('PUBLISH_TAGS+=("$MAJOR.$MINOR")');
-    expect(releaseWorkflow).toContain('if [ "$TAG_VERSION" = "$MAJOR" ]; then');
-    expect(releaseWorkflow).not.toContain('if [ "$TAG_VERSION" = "0" ]; then');
-    expect(releaseWorkflow).toContain('or v$MAJOR');
-    expect(releaseWorkflow).toContain('echo "npm_publish=true" >> "$GITHUB_OUTPUT"');
-    expect(releaseWorkflow).toContain('echo "npm_publish=false" >> "$GITHUB_OUTPUT"');
-    expect(releaseWorkflow).toContain('skipping npm publish');
-    expect(releaseWorkflow).not.toContain('ALIAS_TAGS');
-    expect(releaseWorkflow).not.toContain('publish_tag');
+  it('classifies with the pure policy helper and emits release_kind plus npm_publish', () => {
+    const classify = job('classify');
+    expect(classify).toContain('npm_publish: ${{ steps.release_tag.outputs.npm_publish }}');
+    expect(classify).toContain('release_kind: ${{ steps.release_tag.outputs.release_kind }}');
+    expect(classify).toContain('node scripts/release-policy.mjs classify');
+    expect(classify).not.toContain('npm ci');
+    expect(classify.indexOf('actions/checkout@v7')).toBeLessThan(classify.indexOf('actions/setup-node@v7'));
+    expect(classify.indexOf('actions/setup-node@v7')).toBeLessThan(
+      classify.indexOf('node scripts/release-policy.mjs classify')
+    );
+    expect(releaseWorkflow.indexOf('Classify release tag')).toBeLessThan(releaseWorkflow.indexOf('npm ci'));
+    expect(job('verify-package')).toContain("if: ${{ needs.classify.outputs.release_kind == 'immutable' }}");
+    expect(job('publish')).toContain(
+      "needs.classify.outputs.release_kind == 'immutable' && needs.verify-package.result == 'success'"
+    );
   });
 
-  it('keeps GitHub release artifacts while making npm publication idempotent', () => {
-    expect(namedStep('Publish GitHub release')).not.toMatch(/\n\s+if:/);
-    // setup-node with the npm registry runs unconditionally in the publish job:
-    // the tarball steps below need npm even when npm publish is skipped.
-    expect(npmRegistrySetupStep()).toContain("registry-url: 'https://registry.npmjs.org'");
-    expect(namedStep('Check npm package version')).toContain('id: npm_package');
-    expect(namedStep('Check npm package version')).toContain("if: needs.validate.outputs.npm_publish == 'true'");
-    expect(namedStep('Check npm package version')).toContain('npm view "$PKG_NAME@$PKG_VERSION" version');
-    expect(namedStep('Check npm package version')).toContain('already_published=true');
-    expect(namedStep('Publish to npm')).toContain("if: needs.validate.outputs.npm_publish == 'true' && steps.npm_package.outputs.already_published != 'true'");
-    expect(namedStep('Attach npm tarball to release')).not.toMatch(/\n\s+if:/);
-    expect(namedStep('Upload tarball and SEA binary')).not.toMatch(/\n\s+if:/);
+  it('keeps rolling-major as the only rolling alias and zero-patch-minor as a publish tag via the pure classifier', () => {
+    const policy = readFileSync(join(process.cwd(), 'scripts/release-policy.mjs'), 'utf8');
+    expect(policy).toContain("patch === '0' && tagVersion === `${major}.${minor}`");
+    expect(policy).toContain("tagVersion === major");
+    expect(policy).toContain("release_kind: 'immutable'");
+    expect(policy).toContain("release_kind: 'alias'");
+    expect(policy).toContain("npm_publish: 'true'");
+    expect(policy).toContain("npm_publish: 'false'");
+    expect(releaseWorkflow).toContain('node scripts/release-policy.mjs classify');
+  });
+
+  it('uses default shallow checkout for classify and verify-package; publish stays checkout-free', () => {
+    // Alias job bounded fetch (checkout fetch-depth:1, no fetch-tags:true, depth-one ref fetch)
+    // is asserted by the advance-major-alias contract below; do not restate it here.
+    const classify = job('classify');
+    const verify = job('verify-package');
+    const publish = job('publish');
+    expect(classify).toContain('actions/checkout@v7');
+    expect(classify).not.toContain('fetch-depth:');
+    expect(verify).toContain('actions/checkout@v7');
+    expect(verify).not.toContain('fetch-depth:');
+    expect(publish).not.toContain('actions/checkout');
+  });
+
+  it('classifies tags before npm ci and isolates publication to staged artifacts', () => {
+    expect(releaseWorkflow.indexOf('Classify release tag')).toBeLessThan(releaseWorkflow.indexOf('npm ci'));
+    expect(releaseWorkflow).toContain("if: ${{ needs.classify.outputs.release_kind == 'immutable' }}");
+    expect(releaseWorkflow).toMatch(/verify-package:[\s\S]*?permissions:\n\s+contents: read/);
+    const publish = job('publish');
+    expect(publish).toMatch(/permissions:\n\s+contents: write\n\s+id-token: write/);
+    expect(publish).toContain('actions/download-artifact@v7');
+    expect(publish).not.toContain('actions/checkout');
+    expect(publish).not.toContain('npm ci');
+    expect(publish).not.toMatch(/\bnpm pack\b/);
+    expect(publish).not.toContain('cache:');
+    expect(publish).not.toContain('npm run bundle');
+    expect(publish).not.toContain('npm test');
+    expect(releaseWorkflow).toContain('release-${{ github.repository }}');
+    expect(releaseWorkflow).toContain('cancel-in-progress: false');
+  });
+
+  it('uses uncached verify-package gates with one bundle, max-two parallelism, and no Go', () => {
+    const verify = job('verify-package');
+    expect(verify).toContain('contents: read');
+    expect(verify).not.toContain('cache: npm');
+    expect(verify).not.toContain('cache:');
+    expect(verify).toContain('npm ci');
+    expect(verify.match(/^\s*- run: npm ci$/gm) ?? []).toHaveLength(1);
+    expect(verify).toContain('npm run bundle');
+    expect(verify.indexOf('npm run bundle')).toBeLessThan(verify.indexOf('Run gates'));
+    expect(verify).toContain('MAX_PARALLEL_GATES=2');
+    expect(verify).toContain('run lint npm run lint');
+    expect(verify).toContain('run test npm test');
+    expect(verify).toContain('run typecheck npm run typecheck');
+    expect(verify).toContain('run dist npm run verify:dist:assert');
+    expect(verify).toContain('run actionlint "$ACTIONLINT_BIN"');
+    expect(verify).toContain('download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"');
+    expect(verify).toContain('ACTIONLINT_BIN=$RUNNER_TEMP/actionlint');
+    expect(verify).not.toContain('actions/setup-go');
+    expect(verify).not.toContain('go install github.com/rhysd/actionlint');
+    expect(verify).toContain("const paths = ['release.tgz', sea, `${sea}.sha256`]");
+    expect(verify).toContain('node scripts/verify-release-artifacts.mjs release-artifacts');
+    expect(verify.indexOf('Verify release artifact contract')).toBeLessThan(verify.indexOf('upload-artifact@v7'));
   });
 
   it('builds, smoke-tests, and attaches the self-contained SEA binary on release', () => {
-    // Tag pushes do not trigger sea-binary.yml, so the release job must build and
-    // execute the binary before any publish/upload, and ship it as a release asset.
     expect(namedStep('Build self-contained SEA binary')).toContain('bash scripts/build-sea.sh');
     const smoke = namedStep('Smoke test SEA binary with an empty environment');
     expect(smoke).toContain('env -i PATH=/nonexistent');
     expect(smoke).toContain('postman-repo-sync-${VERSION}-linux-x64');
-    expect(smoke).toContain('version not embedded');
-    // Hermetic-runtime guard: the smoke must prove ambient NODE_OPTIONS is ignored.
+    expect(smoke).toMatch(
+      /out="\$\(env -i PATH=\/nonexistent "\$BIN" 2>&1 \|\| true\)"/
+    );
+    expect(smoke.indexOf('2>&1 || true')).toBeLessThan(smoke.indexOf('grep -qE'));
+    expect(smoke).toContain('test "$(env -i PATH=/nonexistent');
     expect(smoke).toContain("NODE_OPTIONS='--this-flag-does-not-exist'");
-    expect(smoke).toContain('honored ambient NODE_OPTIONS');
+    expect(smoke).toContain('test "$(NODE_OPTIONS=');
     const proxySmoke = namedStep('Smoke test SEA proxy routing');
     expect(proxySmoke).toContain('scripts/assert-sea-proxy.mjs');
     expect(proxySmoke).toContain('iapub.postman.co:443');
     expect(seaWorkflow).toContain('scripts/assert-sea-proxy.mjs');
     expect(seaProxyScript).toContain("socket.on('error'");
-    expect(namedStep('Upload tarball and SEA binary')).toContain(
-      'build/sea/postman-repo-sync-*-linux-x64'
-    );
+    expect(releaseWorkflow).toContain('cp "build/sea/${SEA}" "build/sea/${SEA}.sha256" release-artifacts/');
     expect(seaBuildScript).toContain('shasum -a 256');
     expect(seaBuildScript).toContain('.sha256');
     expect(seaWorkflow).toContain('build/sea/postman-repo-sync-*-linux-x64.sha256');
-    expect(namedStep('Upload tarball and SEA binary')).toContain(
-      'build/sea/postman-repo-sync-*-linux-x64.sha256'
-    );
   });
 
   it('documents proxy activation, telemetry egress, and checksum verification', () => {
@@ -82,25 +132,88 @@ describe('release workflow publishing contract', () => {
     expect(seaDocs).toContain('shasum -a 256 -c');
   });
 
-  it('gates covered release tags on the central live e2e before any publish step', () => {
-    expect(releaseWorkflow).toContain('echo "gate_required=true" >> "$GITHUB_OUTPUT"');
-    expect(releaseWorkflow).toContain('echo "gate_required=false" >> "$GITHUB_OUTPUT"');
-    expect(releaseWorkflow).toContain(
-      "if: ${{ needs.validate.outputs.gate_required == 'true' }}"
+  it('verifies the full artifact/SRI contract before any GitHub mutation and publishes exact assets', () => {
+    const publish = job('publish');
+    expect(publish).not.toContain("node --input-type=module - <<'NODE'");
+    expect(publish).not.toContain("<<'NODE'");
+    expect(publish).toContain(
+      'tar -xOf release-artifacts/release.tgz package/scripts/verify-release-artifacts.mjs'
     );
-    expect(releaseWorkflow).toContain(
-      "if: ${{ always() && needs.validate.result == 'success' && (needs.validate.outputs.gate_required != 'true' || needs.live-e2e-gate.result == 'success') }}"
+    expect(publish).toContain("VERIFIER=\"$RUNNER_TEMP/verify-release-artifacts.mjs\"");
+    expect(publish).toMatch(/EXPECTED_SHA256='[a-f0-9]{64}'/);
+    expect(publish).toContain('test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"');
+    expect(publish).toContain('node "$VERIFIER" release-artifacts');
+    expect(publish.indexOf('EXPECTED_SHA256=')).toBeLessThan(publish.indexOf('node "$VERIFIER" release-artifacts'));
+    expect(publish.indexOf('tar -xOf release-artifacts/release.tgz')).toBeLessThan(
+      publish.indexOf('node "$VERIFIER" release-artifacts')
     );
-    expect(releaseWorkflow).toContain('node .github/scripts/wait-for-e2e-gate.mjs');
+    expect(publish.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
+      publish.indexOf('Publish npm package or verify registry identity')
+    );
+    expect(publish.indexOf('Verify staged release artifacts')).toBeLessThan(
+      publish.indexOf('Publish npm package or verify registry identity')
+    );
+    expect(publish).not.toContain('actions/checkout');
+    expect(publish).not.toContain('npm ci');
+    expect(publish).not.toMatch(/\bnpm pack\b/);
+    expect(publish).not.toContain('cache:');
+    expect(publish).not.toContain('npm run bundle');
+    expect(publish).not.toContain('npm test');
+    expect(publish).toContain('npm view "$PKG@$VERSION" dist.integrity');
+    expect(publish).toContain("sha512-'+crypto.createHash('sha512')");
+    expect(publish).toContain('Published npm integrity differs from staged tarball');
+    expect(publish).toContain('npm (error|ERR!) code E404');
+    expect(publish).toContain('npm view failed with a non-E404 error; refusing to publish or mutate GitHub');
+    expect(publish.indexOf('npm publish ./release-artifacts/release.tgz --provenance --access public')).toBeLessThan(
+      publish.indexOf('softprops/action-gh-release')
+    );
+    expect(publish).toContain('release-artifacts/release.tgz');
+    expect(publish).toContain('release-artifacts/release-manifest.json');
+    expect(publish).toContain('release-artifacts/postman-repo-sync-*-linux-x64');
+    expect(publish).toContain('release-artifacts/postman-repo-sync-*-linux-x64.sha256');
+    expect(publish).not.toContain('release-artifacts/*');
+    expect(releaseWorkflow.indexOf('  publish:')).toBeLessThan(releaseWorkflow.indexOf('  advance-major-alias:'));
   });
 
-  it('keeps a single automatic rolling major alias job after publish', () => {
-    // Next immutable release must force-move stale v2 (or current major) alias.
-    expect(releaseWorkflow).toMatch(/^ {2}advance-major-alias:/m);
-    expect(releaseWorkflow).toContain('Force-move rolling major alias tag');
-    expect(releaseWorkflow).toContain('git tag -fa "$MAJOR"');
-    expect(releaseWorkflow).toContain('git push origin "$MAJOR" --force');
-    expect(releaseWorkflow).toContain("needs.validate.outputs.npm_publish == 'true'");
+  it('dispatches the post-release monitor without blocking publication', () => {
+    const monitor = job('dispatch-live-monitor');
+    expect(monitor).toContain('continue-on-error: true');
+    expect(monitor).toMatch(/permissions:\n\s+contents: read\n/);
+    expect(monitor).not.toContain('id-token:');
+    expect(monitor).not.toMatch(/permissions:[\s\S]*?\n\s+actions:/);
+    expect(monitor).not.toContain('contents: write');
+    expect(monitor).not.toContain('pull-requests: write');
+    expect(monitor).toContain('actions/checkout@v7');
+    expect(monitor).toContain("needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success'");
+    expect(monitor).toContain('E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}');
+    expect(monitor).toContain('E2E_GATE_SUITE: smoke');
+    expect(monitor).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
+    expect(monitor).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+    expect(monitor.indexOf('actions/checkout@v7')).toBeLessThan(
+      monitor.indexOf('node .github/scripts/dispatch-e2e-monitor.mjs')
+    );
+    expect(releaseWorkflow).not.toContain('live-e2e-gate:');
+  });
+
+  it('keeps a single non-regressing rolling major alias job after publish with bounded fetch', () => {
+    const alias = job('advance-major-alias');
+    expect(alias).toMatch(/^ {2}advance-major-alias:/m);
+    expect(alias).toContain('Advance rolling major alias without regression');
+    expect(alias).toContain('require(\'./package.json\').version');
+    expect(alias).toContain('isSemverOlder');
+    expect(alias).toContain('scripts/release-policy.mjs');
+    expect(alias).toContain('Candidate $CANDIDATE is older than current alias');
+    expect(alias).toContain('actions/checkout@v7');
+    expect(alias).toContain('fetch-depth: 1');
+    expect(alias).toContain('git ls-remote --exit-code --tags origin "refs/tags/$MAJOR"');
+    expect(alias).toContain('git fetch --depth=1 --no-tags origin "refs/tags/$MAJOR:refs/tags/$MAJOR"');
+    expect(alias).toContain('failed to probe rolling alias');
+    expect(alias).not.toContain('fetch-tags: true');
+    expect(alias).not.toContain('fetch-tags:true');
+    expect(alias.indexOf('isSemverOlder')).toBeLessThan(alias.indexOf('git push origin "$MAJOR" --force'));
+    expect(alias).toContain('git tag -fa "$MAJOR"');
+    expect(alias).toContain('git push origin "$MAJOR" --force');
+    expect(alias).toContain("needs.classify.outputs.release_kind == 'immutable'");
     expect(releaseWorkflow.match(/^ {2}advance-major-alias:/gm) ?? []).toHaveLength(1);
   });
 });

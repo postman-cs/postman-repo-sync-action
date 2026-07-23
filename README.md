@@ -292,7 +292,7 @@ Deeper reference:
 - [Self-contained binary](docs/self-contained-binary.md): the no-npm/no-Node release binary for locked-down agents — install, credential minting, host allowlist, and a Jenkins pipeline.
 - [Security](SECURITY.md): supported releases, reporting, and secret-handling expectations.
 - [Support](SUPPORT.md): where to ask usage questions and what diagnostics to include.
-- [Release policy](RELEASE_POLICY.md): immutable version tags and the rolling `v1` alias.
+- [Release policy](RELEASE_POLICY.md): immutable version tags and the rolling-major `vN` alias.
 
 ## Resources
 

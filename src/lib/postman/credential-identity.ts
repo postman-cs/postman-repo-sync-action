@@ -1,4 +1,5 @@
 import type { SecretMasker } from '../secrets.js';
+import { __resetPmakDiagnosticMemo, inspectPmakIdentity } from './pmak-diagnostics.js';
 
 export interface CredentialIdentity {
   source: 'pmak/me' | 'iapub/sessions';
@@ -174,6 +175,7 @@ export function __resetIdentityMemo(): void {
   sessionMemo.clear();
   memoizedSessionIdentity = undefined;
   memoizedSessionFailure = undefined;
+  __resetPmakDiagnosticMemo();
 }
 
 /** Last session identity resolved in this process, for reactive error-advice context. */
@@ -235,14 +237,8 @@ async function probePmakIdentity(
   fetchImpl: typeof fetch
 ): Promise<CredentialIdentity | undefined> {
   try {
-    const response = await fetchImpl(`${baseUrl}/me`, {
-      method: 'GET',
-      headers: { 'X-Api-Key': apiKey }
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const payload = asRecord(await response.json());
+    const diagnostic = await inspectPmakIdentity({ apiBaseUrl: baseUrl, apiKey, fetchImpl });
+    const payload = asRecord(diagnostic.payload);
     const user = asRecord(payload?.user);
     if (!user) {
       return undefined;
