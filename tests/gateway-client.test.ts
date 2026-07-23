@@ -105,12 +105,14 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { collection: { name: 'ok' } } }));
     const provider = new AccessTokenProvider({ accessToken: 'tok' });
     const sleep = vi.fn(async () => undefined);
+    const events: unknown[] = [];
     const client = new AccessTokenGatewayClient({
       tokenProvider: provider,
       fetchImpl,
       retryBaseDelayMs: 10,
       sleepImpl: sleep,
-      randomImpl: () => 1
+      randomImpl: () => 1,
+      onRetryEvent: (event) => events.push(event)
     });
 
     const result = await client.requestJson({
@@ -122,6 +124,7 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
     expect(result).toEqual({ data: { collection: { name: 'ok' } } });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(10);
+    expect(events).toEqual([{ class: 'http', status: 500, attempt: 1, delay: 10 }]);
   });
 
   it('exhausts the transient retry budget and raises a redacted error', async () => {
@@ -165,10 +168,12 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
       .mockResolvedValue(new Response('{"error":{"code":"RESOURCE_NOT_FOUND"}}', { status: 404 }));
     const provider = new AccessTokenProvider({ accessToken: 'tok' });
     const sleep = vi.fn(async () => undefined);
+    const onRetryEvent = vi.fn();
     const client = new AccessTokenGatewayClient({
       tokenProvider: provider,
       fetchImpl,
-      sleepImpl: sleep
+      sleepImpl: sleep,
+      onRetryEvent
     });
 
     await expect(
@@ -176,6 +181,54 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
     ).rejects.toThrow('404');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+    expect(onRetryEvent).not.toHaveBeenCalled();
+  });
+
+  it('reports inner, transport, auth-refresh, and fallback decisions without request content', async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error('transport secret-token /route'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 503, error: 'downstream' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"error":"UNAUTHENTICATED"}', { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'fresh-token' }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    const provider = new AccessTokenProvider({ accessToken: 'stale-token', apiKey: 'pmak', fetchImpl, sleep: async () => undefined });
+    const client = new AccessTokenGatewayClient({
+      tokenProvider: provider,
+      fetchImpl,
+      fallbackBaseUrl: 'https://fallback.example',
+      maxRetries: 2,
+      retryBaseDelayMs: 1,
+      sleepImpl: async () => undefined,
+      randomImpl: () => 0,
+      onRetryEvent: (event) => events.push(event as unknown as Record<string, unknown>)
+    });
+
+    await expect(client.requestJson({ service: 'collection', method: 'get', path: '/secret-route', body: { token: 'secret-token' } })).resolves.toEqual({ ok: true });
+    expect(events).toEqual([
+      { class: 'transport', attempt: 1, delay: 0 },
+      { class: 'inner', status: 503, attempt: 2, delay: 0 },
+      { class: 'auth', status: 401, attempt: 1, delay: 0 }
+    ]);
+    expect(JSON.stringify(events)).not.toContain('secret-token');
+    expect(JSON.stringify(events)).not.toContain('/secret-route');
+  });
+
+  it('reports a fallback attempt once after the retry budget is exhausted', async () => {
+    const events: unknown[] = [];
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('downstream', { status: 500 }))
+      .mockResolvedValueOnce(new Response('fallback failure', { status: 500 }));
+    const client = new AccessTokenGatewayClient({
+      tokenProvider: new AccessTokenProvider({ accessToken: 'tok' }),
+      fetchImpl,
+      fallbackBaseUrl: 'https://fallback.example',
+      maxRetries: 0,
+      onRetryEvent: (event) => events.push(event)
+    });
+
+    await expect(client.requestJson({ service: 'collection', method: 'get', path: '/x' })).rejects.toThrow('500');
+    expect(events).toEqual([{ class: 'fallback', status: 500, attempt: 1, delay: 0 }]);
   });
 
   it('preserves cached app/team headers across auth refresh and honors Retry-After for a safe read', async () => {
@@ -186,11 +239,13 @@ describe('AccessTokenGatewayClient (repo-sync)', () => {
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
     const appLookup = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ version: '12.34.56' }));
     const sleep = vi.fn(async () => undefined);
+    const events: unknown[] = [];
     const provider = new AccessTokenProvider({ accessToken: 'stale', apiKey: 'pmak', fetchImpl, sleep: async () => undefined });
-    const client = new AccessTokenGatewayClient({ tokenProvider: provider, fetchImpl, teamId: '6029', orgMode: true, sleepImpl: sleep, appVersionProvider: new PostmanAppVersionProvider({ fetchImpl: appLookup }), randomImpl: () => 0 });
+    const client = new AccessTokenGatewayClient({ tokenProvider: provider, fetchImpl, teamId: '6029', orgMode: true, sleepImpl: sleep, appVersionProvider: new PostmanAppVersionProvider({ fetchImpl: appLookup }), randomImpl: () => 0, onRetryEvent: (event) => events.push(event) });
     await expect(client.requestJson({ service: 'collection', method: 'get', path: '/v3/a/export' })).resolves.toEqual({ ok: true });
     expect(appLookup).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(2000);
+    expect(events).toEqual([{ class: 'http', status: 429, attempt: 1, delay: 2000 }, { class: 'auth', status: 401, attempt: 1, delay: 0 }]);
     for (const index of [0, 1, 3]) {
       expect((fetchImpl.mock.calls[index]?.[1] as RequestInit).headers).toMatchObject({ 'x-app-version': '12.34.56', 'x-entity-team-id': '6029' });
     }

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -17,6 +17,7 @@ import {
 } from './index.js';
 import { runCredentialPreflight } from './lib/postman/credential-identity.js';
 import { mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
+import type { RetryEvent } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
 import { runGc } from './lib/repo/gc-runner.js';
 import { renderGcSummary } from './lib/repo/preview-gc.js';
@@ -116,6 +117,10 @@ Examples:
 `;
 
 export class ConsoleReporter implements ReporterCore {
+  public constructor(
+    private readonly onOutput?: (name: string, value: string) => void
+  ) {}
+
   public info(message: string): void {
     console.error(message);
   }
@@ -124,10 +129,33 @@ export class ConsoleReporter implements ReporterCore {
     console.error(`warning: ${message}`);
   }
 
-  public setOutput(): void {
+  public retryEvent(event: RetryEvent): void {
+    this.info(
+      `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+    );
+  }
+
+  public setOutput(name: string, value: string): void {
+    this.onOutput?.(name, value);
   }
 
   public setSecret(): void {
+  }
+}
+
+async function timedStage<T>(
+  reporter: ReporterCore,
+  stage: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const started = performance.now();
+  try {
+    const result = await operation();
+    reporter.info(`[repo-sync timing] ${JSON.stringify({ stage, ms: Math.max(0, performance.now() - started), status: 'success' })}`);
+    return result;
+  } catch (error) {
+    reporter.info(`[repo-sync timing] ${JSON.stringify({ stage, ms: Math.max(0, performance.now() - started), status: 'error' })}`);
+    throw error;
   }
 }
 
@@ -363,23 +391,65 @@ export function toDotenv(outputs: object): string {
     .join('\n');
 }
 
-async function writeOptionalFile(filePath: string | undefined, content: string): Promise<void> {
-  if (!filePath) {
-    return;
-  }
-  const workspaceRoot = path.resolve(process.cwd());
+function assertOutputFileAllowed(filePath: string): { resolved: string; directory: string } {
+  const workspaceRoot = realpathSync(path.resolve(process.cwd()));
   const resolved = path.resolve(workspaceRoot, filePath);
   const relative = path.relative(workspaceRoot, resolved);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`Output path must stay within workspace: ${filePath}`);
   }
-  await mkdir(path.dirname(resolved), { recursive: true });
+
+  let existingParent = path.dirname(resolved);
+  while (!existsSync(existingParent)) {
+    const parent = path.dirname(existingParent);
+    if (parent === existingParent) break;
+    existingParent = parent;
+  }
+  const parentReal = realpathSync(existingParent);
+  const parentRelative = path.relative(workspaceRoot, parentReal);
+  if (parentRelative.startsWith('..') || path.isAbsolute(parentRelative)) {
+    throw new Error(`Output path must stay within workspace: ${filePath}`);
+  }
+
+  if (existsSync(resolved) || (() => { try { lstatSync(resolved); return true; } catch { return false; } })()) {
+    const targetReal = realpathSync(resolved);
+    const targetRelative = path.relative(workspaceRoot, targetReal);
+    if (targetRelative.startsWith('..') || path.isAbsolute(targetRelative)) {
+      throw new Error(`Output path must stay within workspace: ${filePath}`);
+    }
+  }
+  return { resolved, directory: path.dirname(resolved) };
+}
+
+async function writeOptionalFile(filePath: string | undefined, content: string): Promise<void> {
+  if (!filePath) {
+    return;
+  }
+  const { resolved, directory } = assertOutputFileAllowed(filePath);
+  await mkdir(directory, { recursive: true });
+  const validated = assertOutputFileAllowed(filePath);
+  if (validated.resolved !== resolved) throw new Error(`Output path changed during validation: ${filePath}`);
   await writeFile(resolved, content, 'utf8');
+}
+
+export function writeOptionalFileAtomic(filePath: string | undefined, content: string): void {
+  if (!filePath) return;
+  const { resolved, directory } = assertOutputFileAllowed(filePath);
+  mkdirSync(directory, { recursive: true });
+  const validated = assertOutputFileAllowed(filePath);
+  const temporary = path.join(realpathSync(validated.directory), `.${path.basename(resolved)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(temporary, content, 'utf8');
+    renameSync(temporary, resolved);
+  } finally {
+    try { unlinkSync(temporary); } catch { /* already renamed or never created */ }
+  }
 }
 
 export function createCliDependencies(
   inputs: ResolvedInputs,
-  resolved: { apiKey: string; teamId: string }
+  resolved: { apiKey: string; teamId: string },
+  reporter: ConsoleReporter = new ConsoleReporter()
 ): RepoSyncDependencies {
   const secretMasker = createSecretMasker([
     resolved.apiKey,
@@ -398,7 +468,7 @@ export function createCliDependencies(
     inputs,
     resolved,
     {
-      core: new ConsoleReporter(),
+      core: reporter,
       exec: cliExec
     },
     {
@@ -434,14 +504,18 @@ export async function runCli(
 
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
-  const reporter = new ConsoleReporter();
+  const partialOutputs: Record<string, string> = {};
+  const reporter = new ConsoleReporter((name, value) => {
+    partialOutputs[name] = String(value ?? '');
+    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
+  });
 
   // Match the action entrypoint: a gated branch must never mint an access
   // token, run credential preflight, or construct a Postman client.
   const branchDecision = decideBranchTier(inputs, config.inputEnv);
   if (branchDecision.tier === 'gated') {
     const result = runGatedSkip(inputs, branchDecision, reporter);
-    await writeOptionalFile(config.resultJsonPath, JSON.stringify(result, null, 2));
+    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
     await writeOptionalFile(config.dotenvPath, toDotenv(result));
     writeStdout(`${JSON.stringify(result, null, 2)}\n`);
     return;
@@ -451,7 +525,7 @@ export async function runCli(
   // gateway asset ops and Bifrost paths below get the full access-token surface
   // instead of failing the missing-token guard. dist/cli.cjs (what CI and the
   // e2e harness invoke) must behave exactly like dist/index.cjs here.
-  await mintAccessTokenIfNeeded(inputs, reporter);
+  await timedStage(reporter, 'access-token mint', () => mintAccessTokenIfNeeded(inputs, reporter));
 
   const initialMasker = createSecretMasker([
     inputs.postmanApiKey,
@@ -468,30 +542,30 @@ export async function runCli(
   // once, before resolve/createApiKey or any write. The CLI entry must run this
   // exactly as runAction does, or dist/cli.cjs (what CI and the e2e harness
   // invoke) would skip the preflight that dist/index.cjs performs.
-  await runCredentialPreflight({
-    apiBaseUrl: inputs.postmanApiBase,
-    iapubBaseUrl: inputs.postmanIapubBase,
-    postmanApiKey: inputs.postmanApiKey,
-    postmanAccessToken: inputs.postmanAccessToken,
-    explicitTeamId: inputs.teamId || undefined,
-    mode: inputs.credentialPreflight,
-    mask: initialMasker,
-    log: reporter
-  });
+  await timedStage(reporter, 'credential preflight', () => runCredentialPreflight({
+      apiBaseUrl: inputs.postmanApiBase,
+      iapubBaseUrl: inputs.postmanIapubBase,
+      postmanApiKey: inputs.postmanApiKey,
+      postmanAccessToken: inputs.postmanAccessToken,
+      explicitTeamId: inputs.teamId || undefined,
+      mode: inputs.credentialPreflight,
+      mask: initialMasker,
+      log: reporter
+    }));
 
   const resolvingExec = createCliExec(initialMasker);
-  const resolved = await resolvePostmanApiKeyAndTeamId(
-    inputs,
-    reporter,
-    resolvingExec,
-    initialMasker,
-    {
-      persistGeneratedApiKeySecret: false,
-      env
-    }
-  );
+  const resolved = await timedStage(reporter, 'API-key/team resolution', () => resolvePostmanApiKeyAndTeamId(
+      inputs,
+      reporter,
+      resolvingExec,
+      initialMasker,
+      {
+        persistGeneratedApiKeySecret: false,
+        env
+      }
+    ));
 
-  const dependencies = createCliDependencies(inputs, resolved);
+  const dependencies = createCliDependencies(inputs, resolved, reporter);
 
   if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
     dependencies.core.warning(
@@ -504,9 +578,11 @@ export async function runCli(
     );
   }
 
-  const result = await (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies);
+  const result = await timedStage(reporter, 'runRepoSync finalize', () =>
+    (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies)
+  );
 
-  await writeOptionalFile(config.resultJsonPath, JSON.stringify(result, null, 2));
+  writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
   await writeOptionalFile(config.dotenvPath, toDotenv(result));
 
   writeStdout(`${JSON.stringify(result, null, 2)}\n`);

@@ -617,6 +617,7 @@ describe('event-based session retry', () => {
 
   it('honors Retry-After (seconds) on 429 and RateLimit-Reset as fallback, clamped to the max', async () => {
     const afterSecs: number[] = [];
+    const events: unknown[] = [];
     const fetchAfter = sessionSequence([
       () => new Response('slow', { status: 429, headers: { 'retry-after': '2' } }),
       () => jsonResponse(sessionPayload(13347347))
@@ -628,9 +629,11 @@ describe('event-based session retry', () => {
       sleepImpl: async (ms) => {
         afterSecs.push(ms);
       },
-      randomImpl: () => 0.99
+      randomImpl: () => 0.99,
+      onRetryEvent: (event) => events.push(event)
     });
     expect(afterSecs).toEqual([2000]);
+    expect(events).toEqual([{ class: 'http', status: 429, attempt: 1, delay: 2000 }]);
 
     __resetIdentityMemo();
     const resets: number[] = [];
