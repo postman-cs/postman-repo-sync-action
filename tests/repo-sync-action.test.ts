@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { load as loadYaml } from 'js-yaml';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   readActionInputs,
@@ -26,6 +26,13 @@ import {
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
+
+afterAll(() => {
+  // isolate:false shares the process with later suites (e.g. credential-matrix)
+  // that need the real Bifrost adapter. Clear the hoisted mock + module cache.
+  vi.doUnmock('../src/lib/postman/internal-integration-adapter.js');
+  vi.resetModules();
+});
 
 type ResourcesYamlShape = {
   workspace?: {

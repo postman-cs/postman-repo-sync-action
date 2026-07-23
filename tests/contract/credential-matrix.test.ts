@@ -13,8 +13,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { runAction, type ExecLike } from '../../src/index.js';
-import { __resetIdentityMemo } from '../../src/lib/postman/credential-identity.js';
+import type { ExecLike } from '../../src/index.js';
+
+const ADAPTER_MODULE = '../../src/lib/postman/internal-integration-adapter.js';
+
+type RunAction = typeof import('../../src/index.js').runAction;
+type ResetIdentityMemo = typeof import('../../src/lib/postman/credential-identity.js').__resetIdentityMemo;
+
+let runAction: RunAction;
+let __resetIdentityMemo: ResetIdentityMemo;
 
 interface CoreLike {
   getInput(name: string, options?: { required?: boolean }): string;
@@ -262,7 +269,14 @@ function baseInputs(overrides: Record<string, string> = {}): Record<string, stri
 describe('contract: repo-sync org x credential matrix', () => {
   let testDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Under isolate:false, repo-sync-action.test.ts's hoisted vi.mock of the
+    // Bifrost adapter can remain registered. Unmock + resetModules so this
+    // file always exercises the real createApiKey → identity /api/keys path.
+    vi.doUnmock(ADAPTER_MODULE);
+    vi.resetModules();
+    ({ runAction } = await import('../../src/index.js'));
+    ({ __resetIdentityMemo } = await import('../../src/lib/postman/credential-identity.js'));
     __resetIdentityMemo();
     testDir = mkdtempSync(join(tmpdir(), 'repo-sync-contract-'));
     process.chdir(testDir);

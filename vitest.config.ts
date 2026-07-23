@@ -26,6 +26,9 @@ export default defineConfig({
                 name: 'windows-cwd-sensitive',
                 ...testEnvironment,
                 pool: 'forks',
+                maxWorkers: 1,
+                isolate: false,
+                sequence: { groupOrder: 1 },
                 include: windowsCwdSensitiveTests
               }
             },
