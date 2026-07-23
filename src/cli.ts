@@ -422,6 +422,56 @@ function assertOutputFileAllowed(filePath: string): { resolved: string; director
   return { resolved, directory: path.dirname(resolved) };
 }
 
+function resolveSymlinkAwarePath(filePath: string): string {
+  const workspaceRoot = realpathSync(path.resolve(process.cwd()));
+  const resolved = path.resolve(workspaceRoot, filePath);
+  let existing = resolved;
+  while (!existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    existing = parent;
+  }
+  return path.resolve(realpathSync(existing), path.relative(existing, resolved));
+}
+
+function assertResultPathOutsideGeneratedPaths(
+  resultJsonPath: string,
+  inputs: ResolvedInputs
+): void {
+  const result = assertOutputFileAllowed(resultJsonPath).resolved;
+  const resultReal = resolveSymlinkAwarePath(result);
+  for (const root of [inputs.artifactDir, '.postman'].map(resolveSymlinkAwarePath)) {
+    const relative = path.relative(root, resultReal);
+    if (!relative || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      throw new Error(
+        `--result-json must not overlap a generated or staged repository path: ${resultJsonPath}`
+      );
+    }
+  }
+
+  const generatedFiles: string[] = [];
+  if (inputs.generateCiWorkflow) {
+    generatedFiles.push(inputs.ciWorkflowPath);
+    if (
+      (inputs.provider === 'github' || inputs.provider === 'unknown') &&
+      (inputs.ciWorkflowPath.endsWith('.github/workflows/ci.yml') ||
+        inputs.ciWorkflowPath === '.github/workflows/ci.yml')
+    ) {
+      generatedFiles.push('.github/workflows/postman-preview-gc.yml');
+    }
+  }
+  if (inputs.provider === 'github' && existsSync('.github/workflows/provision.yml')) {
+    generatedFiles.push('.github/workflows/provision.yml');
+  }
+  for (const generatedFile of generatedFiles) {
+    if (resultReal === resolveSymlinkAwarePath(generatedFile)) {
+      throw new Error(
+        `--result-json must not overlap a generated or staged repository path: ${resultJsonPath}`
+      );
+    }
+  }
+}
+
 async function writeOptionalFile(filePath: string | undefined, content: string): Promise<void> {
   if (!filePath) {
     return;
@@ -508,6 +558,10 @@ export async function runCli(
 
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
+  const branchDecision = decideBranchTier(inputs, config.inputEnv);
+  if (branchDecision.tier !== 'gated' && inputs.repoWriteMode !== 'none') {
+    assertResultPathOutsideGeneratedPaths(config.resultJsonPath, inputs);
+  }
   const partialOutputs: Record<string, string> = {};
   const reporter = new ConsoleReporter((name, value) => {
     partialOutputs[name] = String(value ?? '');
@@ -516,7 +570,6 @@ export async function runCli(
 
   // Match the action entrypoint: a gated branch must never mint an access
   // token, run credential preflight, or construct a Postman client.
-  const branchDecision = decideBranchTier(inputs, config.inputEnv);
   if (branchDecision.tier === 'gated') {
     const result = runGatedSkip(inputs, branchDecision, reporter);
     writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));

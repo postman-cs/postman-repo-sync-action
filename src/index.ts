@@ -1109,6 +1109,7 @@ async function upsertEnvironments(
         );
       }
       envUids[envName] = existingUid;
+      dependencies.core.setOutput('environment-uids-json', JSON.stringify(envUids));
       continue;
     }
 
@@ -1120,6 +1121,7 @@ async function upsertEnvironments(
         displayName,
         values
       );
+      dependencies.core.setOutput('environment-uids-json', JSON.stringify(envUids));
     } catch (error) {
       throw new Error(
         formatOrchestrationIssue({
@@ -1307,8 +1309,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * Merge-preserving upsert for `.postman/workflows.yaml`: keep unknown top-level
  * keys, unknown workflow kinds, unrelated syncSpecToCollection pairs, and any
- * generation/sync options. Upsert only the current ID-free pairs by collection
- * path; never introduce IDs or reverse links.
+ * generation/sync options. Reconcile the current spec by exact (spec,
+ * collection) identity; never introduce IDs or reverse links.
  */
 function buildSpecCollectionWorkflowManifest(
   specRef: string,
@@ -1343,16 +1345,24 @@ function buildSpecCollectionWorkflowManifest(
   }
 
   const workflows = isPlainObject(root.workflows) ? { ...root.workflows } : {};
+  const desiredCollections = new Set(collectionRefs);
   const currentPairs = (Array.isArray(workflows.syncSpecToCollection)
     ? workflows.syncSpecToCollection
     : []
   )
     .map((entry) => (isPlainObject(entry) ? { ...entry } : null))
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter(
+      (entry) =>
+        String(entry.spec ?? '') !== specRef ||
+        desiredCollections.has(String(entry.collection ?? ''))
+    );
 
   for (const pair of pairs) {
     const index = currentPairs.findIndex(
-      (entry) => String(entry.collection ?? '') === pair.collection
+      (entry) =>
+        String(entry.spec ?? '') === pair.spec &&
+        String(entry.collection ?? '') === pair.collection
     );
     if (index >= 0) {
       const previous = currentPairs[index]!;
@@ -1380,6 +1390,12 @@ type PrebuiltCollectionEntry = {
   cloudId: string;
   payloadDigest: string;
   artifactDigest: string;
+};
+
+type PreparedPrebuiltCollectionEntry = {
+  entry: PrebuiltCollectionEntry;
+  confinedPath: string;
+  artifactDigest?: string;
 };
 
 const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
@@ -1692,24 +1708,79 @@ function readPrebuiltCollectionTreeFiles(
   return files;
 }
 
-function isCanonicalV3CollectionTree(
+function validateCanonicalV3CollectionTree(
   files: Array<{ relative: string; bytes: Buffer }>
-): boolean {
+): void {
   const definition = files.find(
     (file) => file.relative === '.resources/definition.yaml'
   );
   if (!definition) {
-    return false;
+    failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
   }
-  try {
-    const parsed = loadYaml(definition.bytes.toString('utf8'));
-    if (!isPlainObject(parsed)) {
-      return false;
+  for (const file of files) {
+    let expectedKind: 'collection' | 'request' | 'example' | 'message';
+    if (/(^|\/)\.resources\/definition\.yaml$/.test(file.relative)) {
+      expectedKind = 'collection';
+    } else if (file.relative.endsWith('.request.yaml')) {
+      expectedKind = 'request';
+    } else if (file.relative.endsWith('.example.yaml')) {
+      expectedKind = 'example';
+    } else if (file.relative.endsWith('.message.yaml')) {
+      expectedKind = 'message';
+    } else {
+      failPrebuiltCollections(`prebuilt collection tree contains unexpected file ${file.relative}`);
     }
-    return parsed.$kind === 'collection';
-  } catch {
-    return false;
+
+    let parsed: unknown;
+    try {
+      parsed = loadYaml(file.bytes.toString('utf8'));
+    } catch (error) {
+      failPrebuiltCollections(
+        `prebuilt collection tree contains malformed YAML at ${file.relative} (${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+    if (!isPlainObject(parsed)) {
+      failPrebuiltCollections(`prebuilt collection tree file ${file.relative} must contain a YAML mapping`);
+    }
+    const kind = typeof parsed.$kind === 'string' ? parsed.$kind.trim() : '';
+    if (!kind) {
+      failPrebuiltCollections(`prebuilt collection tree file ${file.relative} must contain a nonempty $kind`);
+    }
+    const agrees = expectedKind === 'collection'
+      ? kind === 'collection'
+      : kind.endsWith(`-${expectedKind}`);
+    if (!agrees) {
+      failPrebuiltCollections(
+        `prebuilt collection tree file ${file.relative} has $kind ${kind} inconsistent with its filename`
+      );
+    }
   }
+}
+
+function preparePrebuiltCollections(
+  inputs: ResolvedInputs
+): Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry> {
+  const prepared = new Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>();
+  for (const entry of parsePrebuiltCollectionsJson(inputs.prebuiltCollectionsJson ?? '')) {
+    const confinedPath = assertPathWithinArtifactRoot(
+      entry.collectionPath,
+      inputs.artifactDir,
+      `prebuilt ${entry.role} collection path`
+    );
+    const absolute = path.resolve(process.cwd(), confinedPath);
+    if (!existsSync(absolute)) {
+      prepared.set(entry.role, { entry, confinedPath });
+      continue;
+    }
+    const files = readPrebuiltCollectionTreeFiles(confinedPath, inputs.artifactDir);
+    validateCanonicalV3CollectionTree(files);
+    prepared.set(entry.role, {
+      entry,
+      confinedPath,
+      artifactDigest: computeArtifactDigest(files)
+    });
+  }
+  return prepared;
 }
 
 /**
@@ -1719,12 +1790,12 @@ function isCanonicalV3CollectionTree(
  * Hostile/malformed trees fail closed via thrown CONTRACT_* errors.
  */
 function tryReusePrebuiltCollection(options: {
-  entry: PrebuiltCollectionEntry;
+  prepared: PreparedPrebuiltCollectionEntry;
   expectedPath: string;
   expectedCloudId: string;
-  artifactDir: string;
 }): boolean {
-  const { entry, expectedPath, expectedCloudId, artifactDir } = options;
+  const { prepared, expectedPath, expectedCloudId } = options;
+  const { entry } = prepared;
   if (!expectedCloudId || entry.cloudId !== expectedCloudId) {
     return false;
   }
@@ -1736,11 +1807,7 @@ function tryReusePrebuiltCollection(options: {
   }
 
   // Path confinement / symlink escape fail closed before ordinary mismatch.
-  const confined = assertPathWithinArtifactRoot(
-    entry.collectionPath,
-    artifactDir,
-    'prebuilt collection path'
-  );
+  const confined = prepared.confinedPath;
   if (confined !== expectedNormalized) {
     return false;
   }
@@ -1750,16 +1817,7 @@ function tryReusePrebuiltCollection(options: {
     return false;
   }
 
-  const files = readPrebuiltCollectionTreeFiles(confined, artifactDir);
-  if (files.length === 0) {
-    return false;
-  }
-  if (!isCanonicalV3CollectionTree(files)) {
-    return false;
-  }
-
-  const digest = computeArtifactDigest(files);
-  return digest === entry.artifactDigest;
+  return prepared.artifactDigest === entry.artifactDigest;
 }
 
 async function exportCollectionArtifact(options: {
@@ -1767,8 +1825,7 @@ async function exportCollectionArtifact(options: {
   collectionId: string;
   dirName: string;
   collectionsDir: string;
-  artifactDir: string;
-  prebuiltByRole: Map<PrebuiltCollectionRole, PrebuiltCollectionEntry>;
+  prebuiltByRole: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
   postman: RepoSyncDependencies['postman'];
   core: RepoSyncDependencies['core'];
 }): Promise<string | undefined> {
@@ -1777,7 +1834,6 @@ async function exportCollectionArtifact(options: {
     collectionId,
     dirName,
     collectionsDir,
-    artifactDir,
     prebuiltByRole,
     postman,
     core
@@ -1790,10 +1846,9 @@ async function exportCollectionArtifact(options: {
   const entry = prebuiltByRole.get(role);
   if (entry) {
     const reused = tryReusePrebuiltCollection({
-      entry,
+      prepared: entry,
       expectedPath,
-      expectedCloudId: collectionId,
-      artifactDir
+      expectedCloudId: collectionId
     });
     if (reused) {
       core.info(
@@ -1875,6 +1930,7 @@ async function exportArtifacts(
     existingSpecs?: CloudResourceMap;
     releaseLabel?: string;
     priorState?: PostmanResourcesState | null;
+    preparedPrebuiltCollections: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
   }
 ): Promise<void> {
   if (!inputs.workspaceId) {
@@ -1922,25 +1978,13 @@ async function exportArtifacts(
         )
       : undefined;
 
-  // Fail closed on hostile/malformed manifests before any cloud export work.
-  const prebuiltEntries = parsePrebuiltCollectionsJson(inputs.prebuiltCollectionsJson ?? '');
-  for (const entry of prebuiltEntries) {
-    assertPathWithinArtifactRoot(
-      entry.collectionPath,
-      inputs.artifactDir,
-      `prebuilt ${entry.role} collection path`
-    );
-  }
-  const prebuiltByRole = new Map(
-    prebuiltEntries.map((entry) => [entry.role, entry] as const)
-  );
+  const prebuiltByRole = options.preparedPrebuiltCollections;
 
   const baselineRef = await exportCollectionArtifact({
     role: 'baseline',
     collectionId: inputs.baselineCollectionId,
     dirName: getCollectionDirectoryName('Baseline', assetProjectName),
     collectionsDir,
-    artifactDir: inputs.artifactDir,
     prebuiltByRole,
     postman: dependencies.postman,
     core: dependencies.core
@@ -1954,7 +1998,6 @@ async function exportArtifacts(
     collectionId: inputs.smokeCollectionId,
     dirName: getCollectionDirectoryName('Smoke', assetProjectName),
     collectionsDir,
-    artifactDir: inputs.artifactDir,
     prebuiltByRole,
     postman: dependencies.postman,
     core: dependencies.core
@@ -1968,7 +2011,6 @@ async function exportArtifacts(
     collectionId: inputs.contractCollectionId,
     dirName: getCollectionDirectoryName('Contract', assetProjectName),
     collectionsDir,
-    artifactDir: inputs.artifactDir,
     prebuiltByRole,
     postman: dependencies.postman,
     core: dependencies.core
@@ -2004,7 +2046,7 @@ async function exportArtifacts(
     options.priorState
   ));
 
-  if (mappedSpec && Object.keys(manifestCollections).length > 0) {
+  if (mappedSpec) {
     let existingWorkflows: string | undefined;
     try {
       existingWorkflows = readFileSync('.postman/workflows.yaml', 'utf8');
@@ -2245,6 +2287,8 @@ async function runRepoSyncInner(
       }
     }
   }
+
+  const preparedPrebuiltCollections = preparePrebuiltCollections(inputs);
 
   // Repo-link admission guard: Bifrost enforces global uniqueness of
   // (repository URL, path) -> workspace. Probe before any asset writes so a
@@ -2597,7 +2641,8 @@ async function runRepoSyncInner(
     priorWorkspaceId: resourcesState?.workspace?.id,
     existingSpecs: resourcesState?.cloudResources?.specs,
     releaseLabel,
-    priorState: resourcesState
+    priorState: resourcesState,
+    preparedPrebuiltCollections
   });
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);

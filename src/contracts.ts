@@ -361,7 +361,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Postman integration APIs.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `<name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (canonical `.resources/definition.yaml` plus request/resource YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
       'Link the Postman workspace to the repository (GitHub or GitLab) through Postman integration APIs.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

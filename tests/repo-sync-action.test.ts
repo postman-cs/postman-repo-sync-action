@@ -193,18 +193,19 @@ function writeCanonicalV3Tree(
   definitionBody = '$kind: collection\nname: Fixture\n'
 ): { artifactDigest: string; files: Array<{ relative: string; bytes: Buffer }> } {
   mkdirSync(join(collectionPath, '.resources'), { recursive: true });
+  mkdirSync(join(collectionPath, 'Folder', '.resources'), { recursive: true });
   writeFileSync(join(collectionPath, '.resources', 'definition.yaml'), definitionBody, 'utf8');
   writeFileSync(join(collectionPath, 'List.request.yaml'), '$kind: http-request\nmethod: GET\n', 'utf8');
+  writeFileSync(join(collectionPath, 'Folder', '.resources', 'definition.yaml'), '$kind: collection\nname: Folder\n', 'utf8');
+  writeFileSync(join(collectionPath, 'Folder', 'Created.example.yaml'), '$kind: http-example\n', 'utf8');
+  writeFileSync(join(collectionPath, 'Folder', 'Event.message.yaml'), '$kind: websocket-message\n', 'utf8');
   const files = [
-    {
-      relative: '.resources/definition.yaml',
-      bytes: readFileSync(join(collectionPath, '.resources', 'definition.yaml'))
-    },
-    {
-      relative: 'List.request.yaml',
-      bytes: readFileSync(join(collectionPath, 'List.request.yaml'))
-    }
-  ];
+    '.resources/definition.yaml',
+    'List.request.yaml',
+    'Folder/.resources/definition.yaml',
+    'Folder/Created.example.yaml',
+    'Folder/Event.message.yaml'
+  ].map((relative) => ({ relative, bytes: readFileSync(join(collectionPath, relative)) }));
   return { artifactDigest: computeArtifactDigest(files), files };
 }
 
@@ -590,6 +591,43 @@ describe('repo sync action', () => {
       expect(
         readFileSync('postman/collections/core-payments/.resources/definition.yaml', 'utf8')
       ).toContain('$kind: collection');
+      expect(readFileSync('postman/collections/core-payments/Folder/Event.message.yaml', 'utf8')).toContain('$kind: websocket-message');
+    });
+
+    it.each([
+      ['legacy filename', 'collection.yaml', '$kind: collection\n'],
+      ['missing kind', 'Broken.request.yaml', 'method: GET\n'],
+      ['malformed YAML', 'Broken.request.yaml', '$kind: [unterminated\n'],
+      ['wrong kind family', 'Broken.request.yaml', '$kind: http-example\n']
+    ])('rejects a present canonical tree with %s before Postman writes', async (_name, relative, body) => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      writeFileSync(join(root, relative), body, 'utf8');
+      const postman = createExportPostmanStub();
+      await expect(runRepoSync(createInputs({
+        generateCiWorkflow: false,
+        prebuiltCollectionsJson: buildPrebuiltManifest([{
+          role: 'baseline', collectionPath: root, cloudId: 'col-baseline', artifactDigest: fixture.artifactDigest
+        }])
+      }), deps(postman))).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
+      expect(postman.createEnvironment).not.toHaveBeenCalled();
+      expect(postman.updateEnvironment).not.toHaveBeenCalled();
+      expect(postman.createMock).not.toHaveBeenCalled();
+      expect(postman.createMonitor).not.toHaveBeenCalled();
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+    });
+
+    it('rejects a malformed manifest before Postman writes or generated artifacts', async () => {
+      const postman = createExportPostmanStub();
+      await expect(runRepoSync(
+        createInputs({ prebuiltCollectionsJson: '{not-json' }), deps(postman)
+      )).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
+      expect(postman.createEnvironment).not.toHaveBeenCalled();
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('postman')).toBe(false);
+      expect(existsSync('.postman')).toBe(false);
+      expect(existsSync('.github/workflows/ci.yml')).toBe(false);
     });
 
     it('cloud-exports when digest, path, role name, or cloud ID mismatches', async () => {
@@ -864,7 +902,7 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/exceeded .* bytes/);
     });
 
-    it('merge-preserves unrelated workflows/options and stays ID-free', async () => {
+    it('reconciles current-spec pairs by composite identity and stays idempotent and ID-free', async () => {
       mkdirSync('.postman', { recursive: true });
       mkdirSync('packages/sdk', { recursive: true });
       writeFileSync(
@@ -882,8 +920,12 @@ describe('repo sync action', () => {
           '  customKeep: true',
           '  syncSpecToCollection:',
           '    - spec: ../other.yaml',
-          '      collection: ../postman/collections/other',
-          '    - spec: ../stale.yaml',
+          '      collection: ../postman/collections/core-payments',
+          '      otherField: keep-other',
+          '    - spec: ../packages/sdk/openapi.json',
+          '      collection: ../postman/collections/stale-current',
+          '      stale: remove-me',
+          '    - spec: ../packages/sdk/openapi.json',
           '      collection: ../postman/collections/core-payments',
           '      extra: keep-extra'
         ].join('\n'),
@@ -891,15 +933,13 @@ describe('repo sync action', () => {
       );
 
       const postman = createExportPostmanStub();
-      await runRepoSync(
-        createInputs({
+      const inputs = createInputs({
           environments: ['prod'],
           generateCiWorkflow: false,
           specId: 'spec-123',
           specPath: 'packages/sdk/openapi.json'
-        }),
-        deps(postman)
-      );
+        });
+      await runRepoSync(inputs, deps(postman));
 
       const workflowsYaml = loadYaml(readFileSync('.postman/workflows.yaml', 'utf8')) as Record<
         string,
@@ -912,7 +952,8 @@ describe('repo sync action', () => {
         syncSpecToCollection: expect.arrayContaining([
           {
             spec: '../other.yaml',
-            collection: '../postman/collections/other'
+            collection: '../postman/collections/core-payments',
+            otherField: 'keep-other'
           },
           {
             spec: '../packages/sdk/openapi.json',
@@ -929,9 +970,12 @@ describe('repo sync action', () => {
           }
         ])
       });
+      expect(JSON.stringify(workflowsYaml)).not.toContain('stale-current');
       const serialized = readFileSync('.postman/workflows.yaml', 'utf8');
       expect(serialized).not.toMatch(/\bid\s*:/);
       expect(serialized).not.toMatch(/collectionId|cloudId|uid:/i);
+      await runRepoSync(inputs, deps(createExportPostmanStub()));
+      expect(readFileSync('.postman/workflows.yaml', 'utf8')).toBe(serialized);
     });
   });
 
@@ -1798,6 +1842,39 @@ describe('state ownership persistence', () => {
       /Environment create failed for workspace ws-123 environment "core-payments - prod": env create denied\. verify access-token\/team\/workspace permissions then rerun/
     );
     expect(postman.createEnvironment).toHaveBeenCalled();
+  });
+
+  it('publishes each successful environment UID before a later create fails', async () => {
+    const { core, outputs } = createCoreStub();
+    const postman = {
+      ...makePostman(),
+      createEnvironment: vi.fn().mockResolvedValueOnce('env-prod-owned').mockRejectedValueOnce(new Error('stage create denied'))
+    };
+    await expect(runRepoSync(createInputs({
+      environments: ['prod', 'stage'],
+      generateCiWorkflow: false,
+      environmentSyncEnabled: false,
+      workspaceLinkEnabled: false
+    }), { core, postman, repoMutation: makeRepoMutation() })).rejects.toThrow(/stage create denied/);
+    expect(JSON.parse(outputs['environment-uids-json'] ?? '{}')).toEqual({ prod: 'env-prod-owned' });
+  });
+
+  it('publishes a successfully updated environment UID before a later create fails', async () => {
+    const { core, outputs } = createCoreStub();
+    const postman = {
+      ...makePostman(),
+      updateEnvironment: vi.fn().mockResolvedValue(undefined),
+      createEnvironment: vi.fn().mockRejectedValue(new Error('stage create denied'))
+    };
+    await expect(runRepoSync(createInputs({
+      environments: ['prod', 'stage'],
+      environmentUids: { prod: 'env-prod-existing' },
+      generateCiWorkflow: false,
+      environmentSyncEnabled: false,
+      workspaceLinkEnabled: false
+    }), { core, postman, repoMutation: makeRepoMutation() })).rejects.toThrow(/stage create denied/);
+    expect(postman.updateEnvironment).toHaveBeenCalledWith('env-prod-existing', 'core-payments - prod', expect.any(Array));
+    expect(JSON.parse(outputs['environment-uids-json'] ?? '{}')).toEqual({ prod: 'env-prod-existing' });
   });
 
   it('surfaces environment discovery failure with operation, entity, cause, and remediation', async () => {

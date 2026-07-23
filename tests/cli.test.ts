@@ -490,6 +490,8 @@ describe('CLI partial result output containment', () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
+    __resetIdentityMemo();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -500,6 +502,80 @@ describe('CLI partial result output containment', () => {
     process.chdir(dir);
     try { return await fn(dir); } finally { process.chdir(previous); }
   }
+
+  function baseArgs(resultJson: string): string[] {
+    return [
+      '--project-name', 'result-boundary',
+      '--postman-api-key', 'pmak-ok',
+      '--postman-access-token', 'tok-ok',
+      '--credential-preflight', 'warn',
+      '--repo-write-mode', 'commit-only',
+      '--result-json', resultJson
+    ];
+  }
+
+  function stubMatchingIdentity(): void {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/me')) {
+        return new Response(JSON.stringify({ user: { id: 'u-pmak', teamId: 333 } }), { status: 200 });
+      }
+      if (url.includes('/api/sessions/current')) {
+        return new Response(JSON.stringify({ identity: { team: 333 }, data: { user: { id: 'u-sess' } } }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  }
+
+  it('rejects a result nested under the artifact root before execution and writes no file', async () => {
+    await withTempCwd(async (dir) => {
+      const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+      await expect(runCli(baseArgs('postman/results/result.json'), {
+        env: {}, executeRepoSync, writeStdout: () => undefined
+      })).rejects.toThrow(/must not overlap a generated or staged repository path/);
+      expect(executeRepoSync).not.toHaveBeenCalled();
+      await expect(readFile(path.join(dir, 'postman/results/result.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('rejects a symlink alias into the staged artifact root', async () => {
+    await withTempCwd(async (dir) => {
+      await mkdir(path.join(dir, 'postman'), { recursive: true });
+      await symlink(path.join(dir, 'postman'), path.join(dir, 'artifact-alias'));
+      const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+      await expect(runCli(baseArgs('artifact-alias/result.json'), {
+        env: {}, executeRepoSync, writeStdout: () => undefined
+      })).rejects.toThrow(/must not overlap a generated or staged repository path/);
+      expect(executeRepoSync).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    '.postman/result.json',
+    '.github/workflows/ci.yml',
+    '.github/workflows/postman-preview-gc.yml'
+  ])('rejects generated or staged result path %s', async (resultJson) => {
+    await withTempCwd(async () => {
+      const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+      await expect(runCli(baseArgs(resultJson), {
+        env: {}, executeRepoSync, writeStdout: () => undefined
+      })).rejects.toThrow(/must not overlap a generated or staged repository path/);
+      expect(executeRepoSync).not.toHaveBeenCalled();
+    });
+  });
+
+  it('allows a path-component sibling beside the artifact root', async () => {
+    stubMatchingIdentity();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await withTempCwd(async (dir) => {
+      const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+      await runCli(baseArgs('postman-results/result.json'), {
+        env: {}, executeRepoSync, writeStdout: () => undefined
+      });
+      expect(executeRepoSync).toHaveBeenCalledTimes(1);
+      await expect(readFile(path.join(dir, 'postman-results/result.json'), 'utf8')).resolves.toContain('repo-sync-summary-json');
+    });
+  });
 
   it('rejects a parent-directory symlink before writing partial output', async () => {
     await withTempCwd(async (dir) => {
