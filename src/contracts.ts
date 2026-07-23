@@ -5,6 +5,30 @@ export type ActionInputDefinition = {
   allowedValues?: string[];
 };
 
+export type PrebuiltCollectionRole = 'baseline' | 'smoke' | 'contract';
+
+export type PrebuiltCollectionEntry = {
+  /** Unique role within the manifest ('baseline', 'smoke', or 'contract'). */
+  role: PrebuiltCollectionRole;
+  /** Confined repo-relative path to the locally materialized Collection v3 tree. */
+  collectionPath: string;
+  /** Legacy alias for collectionPath accepted at parse time. */
+  path?: string;
+  /** Canonical cloud ID for the collection. */
+  cloudId: string;
+  /** SHA-256 digest of the canonical v2 payload (optional; verified when present). */
+  payloadDigest?: string;
+  /** SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL). */
+  artifactDigest: string;
+};
+
+export type PrebuiltCollectionsManifest =
+  | PrebuiltCollectionEntry[]
+  | {
+      schemaVersion: 1;
+      collections: PrebuiltCollectionEntry[];
+    };
+
 export type ActionOutputDefinition = {
   description: string;
 };
@@ -105,6 +129,12 @@ export const postmanRepoSyncActionContract: {
     'contract-collection-id': {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
+    },
+    'prebuilt-collections-json': {
+      description:
+        'Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.',
+      required: false,
+      default: ''
     },
     'collection-sync-mode': {
       description: 'Collection sync lifecycle mode (refresh or version).',
@@ -355,7 +385,7 @@ export const postmanRepoSyncActionContract: {
       'Create or update Postman environments from runtime URLs.',
       'Associate Postman environments to system environments through Postman integration APIs.',
       'Create mock servers and smoke monitors from generated collections.',
-      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (e.g., `<name>/collection.yaml`, nested folder and request YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
+      'Export Postman collections in the Collection v3 multi-file YAML directory structure under `postman/collections/` (canonical `.resources/definition.yaml` plus request/resource YAML files), and export environments plus `.postman/resources.yaml` into the repository.',
       'Link the Postman workspace to the repository (GitHub or GitLab) through Postman integration APIs.',
       'Commit synced artifacts and push them back to the current checked out ref.'
     ],

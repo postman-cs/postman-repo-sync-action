@@ -1,7 +1,9 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,7 +14,11 @@ import {
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
-import { convertAndSplitAnyCollection } from './postman-v3/converter.js';
+import {
+  appendArtifactDigestFileStreaming,
+  ArtifactDigestStreamError,
+  convertAndSplitAnyCollection
+} from './postman-v3/converter.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
@@ -78,6 +84,8 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  /** Optional digest-bound prebuilt collection manifest JSON from bootstrap. */
+  prebuiltCollectionsJson?: string;
   collectionSyncMode: 'refresh' | 'version';
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
@@ -453,6 +461,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     baselineCollectionId: getInput('baseline-collection-id', env),
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
+    prebuiltCollectionsJson: getInput('prebuilt-collections-json', env),
     specId: getInput('spec-id', env),
     specContentChanged: parseBooleanInput(getInput('spec-content-changed', env), true),
     specPath: getInput('spec-path', env),
@@ -717,6 +726,14 @@ function normalizeToPosix(filePath: string): string {
   return filePath.split(path.sep).join('/').replace(/\\/g, '/');
 }
 
+/** Platform/to-posix path compare form: strip leading `./`, collapse separators, drop trailing `/`. */
+function canonicalizeRelativePath(value: string): string {
+  return normalizeToPosix(String(value ?? '').trim())
+    .replace(/^\.\/+/, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+$/g, '');
+}
+
 function isOpenApiSpecFile(filePath: string): boolean {
   if (!(filePath.endsWith('.json') || filePath.endsWith('.yaml') || filePath.endsWith('.yml'))) {
     return false;
@@ -855,6 +872,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_PREBUILT_COLLECTIONS_JSON: readInput(actionCore, 'prebuilt-collections-json'),
     INPUT_SPEC_ID: readInput(actionCore, 'spec-id'),
     INPUT_SPEC_PATH: readInput(actionCore, 'spec-path'),
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
@@ -1101,6 +1119,7 @@ async function upsertEnvironments(
         );
       }
       envUids[envName] = existingUid;
+      dependencies.core.setOutput('environment-uids-json', JSON.stringify(envUids));
       continue;
     }
 
@@ -1112,6 +1131,7 @@ async function upsertEnvironments(
         displayName,
         values
       );
+      dependencies.core.setOutput('environment-uids-json', JSON.stringify(envUids));
     } catch (error) {
       throw new Error(
         formatOrchestrationIssue({
@@ -1292,25 +1312,570 @@ function buildResourcesManifest(
   });
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Merge-preserving upsert for `.postman/workflows.yaml`: keep unknown top-level
+ * keys, unknown workflow kinds, unrelated syncSpecToCollection pairs, and any
+ * generation/sync options. Reconcile the current spec by exact (spec,
+ * collection) identity; never introduce IDs or reverse links.
+ */
 function buildSpecCollectionWorkflowManifest(
   specRef: string,
-  collectionRefs: string[]
+  collectionRefs: string[],
+  existingRaw?: string
 ): string {
-  return dumpYaml(
-    {
-      workflows: {
-        syncSpecToCollection: collectionRefs.map((collectionRef) => ({
-          spec: specRef,
-          collection: collectionRef
-        }))
-      }
-    },
-    {
-      lineWidth: -1,
-      noRefs: true,
-      sortKeys: false
+  const pairs = collectionRefs.map((collectionRef) => ({
+    spec: specRef,
+    collection: collectionRef
+  }));
+
+  let root: Record<string, unknown> = {};
+  if (typeof existingRaw === 'string' && existingRaw.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = loadYaml(existingRaw);
+    } catch (error) {
+      throw new Error(
+        `CONTRACT_WORKFLOWS_UNREADABLE: .postman/workflows.yaml exists but is not parseable YAML (${error instanceof Error ? error.message : String(error)}). Fix or delete the file; refusing to overwrite unrelated workflow data.`,
+        { cause: error }
+      );
     }
+    if (parsed === null || parsed === undefined) {
+      root = {};
+    } else if (!isPlainObject(parsed)) {
+      throw new Error(
+        'CONTRACT_WORKFLOWS_UNREADABLE: .postman/workflows.yaml exists but does not contain a YAML mapping. Fix or delete the file; refusing to overwrite unrelated workflow data.'
+      );
+    } else {
+      root = { ...parsed };
+    }
+  }
+
+  const workflows = isPlainObject(root.workflows) ? { ...root.workflows } : {};
+  const desiredCollections = new Set(collectionRefs);
+  const currentPairs = (Array.isArray(workflows.syncSpecToCollection)
+    ? workflows.syncSpecToCollection
+    : []
+  )
+    .map((entry) => (isPlainObject(entry) ? { ...entry } : null))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .filter(
+      (entry) =>
+        String(entry.spec ?? '') !== specRef ||
+        desiredCollections.has(String(entry.collection ?? ''))
+    );
+
+  for (const pair of pairs) {
+    const index = currentPairs.findIndex(
+      (entry) =>
+        String(entry.spec ?? '') === pair.spec &&
+        String(entry.collection ?? '') === pair.collection
+    );
+    if (index >= 0) {
+      const previous = currentPairs[index]!;
+      currentPairs[index] = { ...previous, spec: pair.spec, collection: pair.collection };
+    } else {
+      currentPairs.push({ spec: pair.spec, collection: pair.collection });
+    }
+  }
+
+  workflows.syncSpecToCollection = currentPairs;
+  root.workflows = workflows;
+
+  return dumpYaml(root, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false
+  });
+}
+
+type PrebuiltCollectionRole = 'baseline' | 'smoke' | 'contract';
+
+type PrebuiltCollectionEntry = {
+  role: PrebuiltCollectionRole;
+  collectionPath: string;
+  cloudId: string;
+  payloadDigest?: string;
+  artifactDigest: string;
+};
+
+type PreparedPrebuiltCollectionEntry = {
+  entry: PrebuiltCollectionEntry;
+  confinedPath: string;
+  artifactDigest?: string;
+};
+
+type PrebuiltTreeFileMeta = {
+  absolute: string;
+  relative: string;
+  dev: number;
+  ino: number | bigint;
+  size: number;
+};
+
+const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
+  'baseline',
+  'smoke',
+  'contract'
+]);
+
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+/** Nonempty Postman collection id: safe characters, no arbitrary length cap. */
+const PREBUILT_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+function failPrebuiltCollections(detail: string): never {
+  throw new Error(`CONTRACT_PREBUILT_COLLECTIONS_INVALID: ${detail}`);
+}
+
+function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch (error) {
+    throw new Error(
+      `CONTRACT_PREBUILT_COLLECTIONS_INVALID: malformed JSON (${error instanceof Error ? error.message : String(error)})`,
+      { cause: error }
+    );
+  }
+
+  let entriesRaw: unknown[];
+  if (Array.isArray(parsed)) {
+    entriesRaw = parsed;
+  } else if (isPlainObject(parsed)) {
+    if (parsed.schemaVersion !== 1) {
+      failPrebuiltCollections('schemaVersion must be 1');
+    }
+    if (!Array.isArray(parsed.collections)) {
+      failPrebuiltCollections('collections must be an array when schemaVersion is set');
+    }
+    entriesRaw = parsed.collections;
+  } else {
+    failPrebuiltCollections('expected a JSON array or {schemaVersion:1,collections:[]}');
+  }
+
+  const seenRoles = new Set<PrebuiltCollectionRole>();
+  const entries: PrebuiltCollectionEntry[] = [];
+
+  for (const [index, value] of entriesRaw.entries()) {
+    if (!isPlainObject(value)) {
+      failPrebuiltCollections(`collections[${index}] must be an object`);
+    }
+    const roleRaw = String(value.role ?? '').trim();
+    if (!PREBUILT_COLLECTION_ROLES.has(roleRaw as PrebuiltCollectionRole)) {
+      failPrebuiltCollections(
+        `collections[${index}].role must be one of baseline|smoke|contract`
+      );
+    }
+    const role = roleRaw as PrebuiltCollectionRole;
+    if (seenRoles.has(role)) {
+      failPrebuiltCollections(`duplicate role ${role}`);
+    }
+    seenRoles.add(role);
+
+    const collectionPath = String(
+      value.collectionPath ?? value.path ?? ''
+    ).trim();
+    if (!collectionPath || hasControlCharacter(collectionPath)) {
+      failPrebuiltCollections(
+        `collections[${index}].collectionPath must be a non-empty confined relative path`
+      );
+    }
+
+    const cloudId = String(value.cloudId ?? '').trim();
+    if (!cloudId || !PREBUILT_CLOUD_ID.test(cloudId)) {
+      failPrebuiltCollections(
+        `collections[${index}].cloudId must be a non-empty Postman collection id`
+      );
+    }
+
+    let payloadDigest: string | undefined;
+    if (Object.prototype.hasOwnProperty.call(value, 'payloadDigest')) {
+      const payloadDigestRaw = value.payloadDigest;
+      if (payloadDigestRaw !== undefined && payloadDigestRaw !== null) {
+        payloadDigest = String(payloadDigestRaw).trim();
+        if (!SHA256_HEX.test(payloadDigest)) {
+          failPrebuiltCollections(
+            `collections[${index}].payloadDigest must be lowercase 64-hex`
+          );
+        }
+      }
+    }
+
+    const artifactDigest = String(value.artifactDigest ?? '').trim();
+    if (!SHA256_HEX.test(artifactDigest)) {
+      failPrebuiltCollections(
+        `collections[${index}].artifactDigest must be lowercase 64-hex`
+      );
+    }
+
+    entries.push({
+      role,
+      collectionPath,
+      cloudId,
+      ...(payloadDigest !== undefined ? { payloadDigest } : {}),
+      artifactDigest
+    });
+  }
+
+  return entries;
+}
+
+function assertPathWithinArtifactRoot(
+  targetPath: string,
+  artifactDir: string,
+  fieldName: string
+): string {
+  assertPathWithinCwd(targetPath, fieldName);
+  assertPathWithinCwd(artifactDir, 'artifact-dir');
+
+  const cwd = realpathSync(process.cwd());
+  const artifactRoot = path.resolve(cwd, artifactDir.trim());
+  const resolved = path.resolve(cwd, targetPath.trim());
+  const relativeToArtifact = path.relative(artifactRoot, resolved);
+  if (
+    !relativeToArtifact ||
+    relativeToArtifact.startsWith('..') ||
+    path.isAbsolute(relativeToArtifact)
+  ) {
+    failPrebuiltCollections(
+      `${fieldName} must stay under artifact-dir (${artifactDir}); received ${targetPath}`
+    );
+  }
+
+  let existingPath = resolved;
+  while (!existsSync(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) {
+      break;
+    }
+    existingPath = parent;
+  }
+  const realExisting = realpathSync(existingPath);
+  const realRelative = path.relative(artifactRoot, realExisting);
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+    failPrebuiltCollections(
+      `${fieldName} resolves outside artifact-dir via symlink; received ${targetPath}`
+    );
+  }
+
+  return normalizeToPosix(path.relative(cwd, resolved));
+}
+
+export type PrebuiltDirectoryTraversalIdentityOptions = {
+  /** Injectable canonical path resolver; production uses realpathSync.native. */
+  resolveCanonicalPath?: (absolutePath: string) => string;
+  /** Injectable platform; production uses process.platform. */
+  platform?: NodeJS.Platform;
+};
+
+/**
+ * Directory identity for prebuilt tree cycle detection.
+ * Win32: always lowercased canonical realpath (directory inode pairs may be
+ * nonzero yet non-unique).
+ * Non-Windows nonzero inode: stable `${dev}:${ino}`.
+ * Non-Windows zero inode: canonical path via realpathSync.native.
+ */
+export function prebuiltDirectoryTraversalIdentity(
+  absolutePath: string,
+  stats: { dev: number; ino: number | bigint },
+  options: PrebuiltDirectoryTraversalIdentityOptions = {}
+): string {
+  const platform = options.platform ?? process.platform;
+  const inodeIsZero = stats.ino === 0 || stats.ino === 0n;
+  if (platform !== 'win32' && !inodeIsZero) {
+    return `${stats.dev}:${stats.ino}`;
+  }
+
+  const resolveCanonicalPath =
+    options.resolveCanonicalPath ?? ((candidate) => realpathSync.native(candidate));
+  const canonical = resolveCanonicalPath(absolutePath);
+  return platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+function listPrebuiltCollectionTreeFiles(
+  collectionPath: string,
+  artifactDir: string
+): PrebuiltTreeFileMeta[] {
+  const confined = assertPathWithinArtifactRoot(
+    collectionPath,
+    artifactDir,
+    'prebuilt collection path'
   );
+  const absRoot = path.resolve(process.cwd(), confined);
+  if (!existsSync(absRoot)) {
+    return [];
+  }
+
+  let rootStat;
+  try {
+    rootStat = lstatSync(absRoot);
+  } catch {
+    return [];
+  }
+  if (rootStat.isSymbolicLink()) {
+    failPrebuiltCollections(
+      `prebuilt collection path must not be a symlink; received ${collectionPath}`
+    );
+  }
+  if (!rootStat.isDirectory()) {
+    return [];
+  }
+
+  const files: PrebuiltTreeFileMeta[] = [];
+  const pendingDirectories: string[] = [absRoot];
+  const seenDirectories = new Set<string>();
+
+  while (pendingDirectories.length > 0) {
+    const currentAbsolute = pendingDirectories.pop();
+    if (!currentAbsolute) {
+      break;
+    }
+    const currentStat = lstatSync(currentAbsolute);
+    if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
+      failPrebuiltCollections(
+        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
+      );
+    }
+    const currentKey = prebuiltDirectoryTraversalIdentity(currentAbsolute, currentStat);
+    if (seenDirectories.has(currentKey)) {
+      failPrebuiltCollections(
+        `prebuilt collection tree directory cycle detected at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
+      );
+    }
+    seenDirectories.add(currentKey);
+
+    const entries = readdirSync(currentAbsolute, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = path.join(currentAbsolute, entry.name);
+      if (entry.isSymbolicLink()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree must not contain symlinks; received ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      if (entry.isDirectory()) {
+        pendingDirectories.push(abs);
+        continue;
+      }
+      if (!entry.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree contains unsupported entry type at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      const fileLstat = lstatSync(abs);
+      if (fileLstat.isSymbolicLink() || !fileLstat.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      files.push({
+        absolute: abs,
+        relative: normalizeToPosix(path.relative(absRoot, abs)),
+        dev: fileLstat.dev,
+        ino: fileLstat.ino,
+        size: fileLstat.size
+      });
+    }
+  }
+
+  files.sort((a, b) => a.relative.localeCompare(b.relative));
+  return files;
+}
+
+function validateCanonicalV3CollectionFile(relative: string, bytes: Buffer): void {
+  let expectedKind: 'collection' | 'request' | 'example' | 'message';
+  if (/(^|\/)\.resources\/definition\.yaml$/.test(relative)) {
+    expectedKind = 'collection';
+  } else if (relative.endsWith('.request.yaml')) {
+    expectedKind = 'request';
+  } else if (relative.endsWith('.example.yaml')) {
+    expectedKind = 'example';
+  } else if (relative.endsWith('.message.yaml')) {
+    expectedKind = 'message';
+  } else {
+    failPrebuiltCollections(`prebuilt collection tree contains unexpected file ${relative}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(bytes.toString('utf8'));
+  } catch (error) {
+    failPrebuiltCollections(
+      `prebuilt collection tree contains malformed YAML at ${relative} (${error instanceof Error ? error.message : String(error)})`
+    );
+  }
+  if (!isPlainObject(parsed)) {
+    failPrebuiltCollections(`prebuilt collection tree file ${relative} must contain a YAML mapping`);
+  }
+  const kind = typeof parsed.$kind === 'string' ? parsed.$kind.trim() : '';
+  if (!kind) {
+    failPrebuiltCollections(`prebuilt collection tree file ${relative} must contain a nonempty $kind`);
+  }
+  const agrees = expectedKind === 'collection'
+    ? kind === 'collection'
+    : kind.endsWith(`-${expectedKind}`);
+  if (!agrees) {
+    failPrebuiltCollections(
+      `prebuilt collection tree file ${relative} has $kind ${kind} inconsistent with its filename`
+    );
+  }
+}
+
+async function digestAndValidatePrebuiltCollectionTree(
+  files: PrebuiltTreeFileMeta[]
+): Promise<string> {
+  if (!files.some((file) => file.relative === '.resources/definition.yaml')) {
+    failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
+  }
+
+  const hash = createHash('sha256');
+  for (const file of files) {
+    let bytes: Buffer;
+    try {
+      bytes = await appendArtifactDigestFileStreaming(hash, file.relative, file.absolute, {
+        dev: file.dev,
+        ino: file.ino,
+        size: file.size
+      });
+    } catch (error) {
+      if (error instanceof ArtifactDigestStreamError) {
+        failPrebuiltCollections(error.message);
+      }
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'ELOOP' || code === 'EPERM') {
+        failPrebuiltCollections(
+          `prebuilt collection tree file became a symlink or unsupported node at ${file.relative}`
+        );
+      }
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed or became unsupported at ${file.relative}`
+      );
+    }
+
+    validateCanonicalV3CollectionFile(file.relative, bytes);
+  }
+
+  return hash.digest('hex');
+}
+
+async function preparePrebuiltCollections(
+  inputs: ResolvedInputs
+): Promise<Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>> {
+  const prepared = new Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>();
+  for (const entry of parsePrebuiltCollectionsJson(inputs.prebuiltCollectionsJson ?? '')) {
+    const confinedPath = assertPathWithinArtifactRoot(
+      entry.collectionPath,
+      inputs.artifactDir,
+      `prebuilt ${entry.role} collection path`
+    );
+    const absolute = path.resolve(process.cwd(), confinedPath);
+    if (!existsSync(absolute)) {
+      prepared.set(entry.role, { entry, confinedPath });
+      continue;
+    }
+    const files = listPrebuiltCollectionTreeFiles(confinedPath, inputs.artifactDir);
+    const artifactDigest = await digestAndValidatePrebuiltCollectionTree(files);
+    prepared.set(entry.role, {
+      entry,
+      confinedPath,
+      artifactDigest
+    });
+  }
+  return prepared;
+}
+
+/**
+ * Attempt digest-bound reuse of a bootstrap-materialized Collection v3 tree.
+ * Returns true when the entry exactly matches path, cloud ID, canonical tree,
+ * and artifactDigest. Ordinary mismatches return false (caller cloud-exports).
+ * Hostile/malformed trees fail closed via thrown CONTRACT_* errors.
+ */
+function tryReusePrebuiltCollection(options: {
+  prepared: PreparedPrebuiltCollectionEntry;
+  expectedPath: string;
+  expectedCloudId: string;
+}): boolean {
+  const { prepared, expectedPath, expectedCloudId } = options;
+  const { entry } = prepared;
+  if (!expectedCloudId || entry.cloudId !== expectedCloudId) {
+    return false;
+  }
+
+  const expectedNormalized = canonicalizeRelativePath(expectedPath);
+  const entryNormalized = canonicalizeRelativePath(entry.collectionPath);
+  if (entryNormalized !== expectedNormalized) {
+    return false;
+  }
+
+  // Path confinement / symlink escape fail closed before ordinary mismatch.
+  // Confinement (realpath-relative) remains authoritative after path form normalization.
+  const confined = canonicalizeRelativePath(prepared.confinedPath);
+  if (confined !== expectedNormalized) {
+    return false;
+  }
+
+  const expectedName = path.posix.basename(expectedNormalized);
+  if (path.posix.basename(confined) !== expectedName) {
+    return false;
+  }
+
+  return prepared.artifactDigest === entry.artifactDigest;
+}
+
+async function exportCollectionArtifact(options: {
+  role: PrebuiltCollectionRole;
+  collectionId: string;
+  dirName: string;
+  collectionsDir: string;
+  prebuiltByRole: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
+  postman: RepoSyncDependencies['postman'];
+  core: RepoSyncDependencies['core'];
+}): Promise<string | undefined> {
+  const {
+    role,
+    collectionId,
+    dirName,
+    collectionsDir,
+    prebuiltByRole,
+    postman,
+    core
+  } = options;
+  if (!collectionId) {
+    return undefined;
+  }
+
+  const expectedPath = `${collectionsDir}/${dirName}`;
+  const entry = prebuiltByRole.get(role);
+  if (entry) {
+    const reused = tryReusePrebuiltCollection({
+      prepared: entry,
+      expectedPath,
+      expectedCloudId: collectionId
+    });
+    if (reused) {
+      core.info(
+        `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
+      );
+      return `../${expectedPath}`;
+    }
+    core.info(
+      `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`
+    );
+  }
+
+  const col = await postman.getCollection(collectionId);
+  await convertAndSplitAnyCollection(
+    col as Parameters<typeof convertAndSplitAnyCollection>[0],
+    expectedPath
+  );
+  return `../${expectedPath}`;
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -1374,6 +1939,7 @@ async function exportArtifacts(
     existingSpecs?: CloudResourceMap;
     releaseLabel?: string;
     priorState?: PostmanResourcesState | null;
+    preparedPrebuiltCollections: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
   }
 ): Promise<void> {
   if (!inputs.workspaceId) {
@@ -1421,26 +1987,45 @@ async function exportArtifacts(
         )
       : undefined;
 
-  if (inputs.baselineCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.baselineCollectionId);
-    const dirName = getCollectionDirectoryName('Baseline', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.baselineCollectionId;
+  const prebuiltByRole = options.preparedPrebuiltCollections;
+
+  const baselineRef = await exportCollectionArtifact({
+    role: 'baseline',
+    collectionId: inputs.baselineCollectionId,
+    dirName: getCollectionDirectoryName('Baseline', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (baselineRef) {
+    manifestCollections[baselineRef] = inputs.baselineCollectionId;
   }
-  if (inputs.smokeCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.smokeCollectionId);
-    const dirName = getCollectionDirectoryName('Smoke', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.smokeCollectionId;
+
+  const smokeRef = await exportCollectionArtifact({
+    role: 'smoke',
+    collectionId: inputs.smokeCollectionId,
+    dirName: getCollectionDirectoryName('Smoke', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (smokeRef) {
+    manifestCollections[smokeRef] = inputs.smokeCollectionId;
   }
-  if (inputs.contractCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.contractCollectionId);
-    const dirName = getCollectionDirectoryName('Contract', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.contractCollectionId;
+
+  const contractRef = await exportCollectionArtifact({
+    role: 'contract',
+    collectionId: inputs.contractCollectionId,
+    dirName: getCollectionDirectoryName('Contract', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (contractRef) {
+    manifestCollections[contractRef] = inputs.contractCollectionId;
   }
 
   for (const [envName, envUid] of Object.entries(envUids)) {
@@ -1470,12 +2055,21 @@ async function exportArtifacts(
     options.priorState
   ));
 
+  // Only reconcile when a mapped spec exists and at least one collection was
+  // actually exported. Env-only / zero-collection runs must leave prior bytes alone.
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
+    let existingWorkflows: string | undefined;
+    try {
+      existingWorkflows = readFileSync('.postman/workflows.yaml', 'utf8');
+    } catch {
+      existingWorkflows = undefined;
+    }
     writeFileSync(
       '.postman/workflows.yaml',
       buildSpecCollectionWorkflowManifest(
         mappedSpec.configRelativePath,
-        Object.keys(manifestCollections)
+        Object.keys(manifestCollections),
+        existingWorkflows
       )
     );
   }
@@ -1705,6 +2299,8 @@ async function runRepoSyncInner(
     }
   }
 
+  const preparedPrebuiltCollections = await preparePrebuiltCollections(inputs);
+
   // Repo-link admission guard: Bifrost enforces global uniqueness of
   // (repository URL, path) -> workspace. Probe before any asset writes so a
   // conflict fails cleanly instead of after env/mock/monitor creation.
@@ -1752,6 +2348,7 @@ async function runRepoSyncInner(
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
   const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
+  dependencies.core.setOutput('environment-uids-json', outputs['environment-uids-json']);
 
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
     const associations = Object.entries(envUids)
@@ -1897,6 +2494,7 @@ async function runRepoSyncInner(
       }
 
       outputs['mock-url'] = resolvedMockUrl;
+      dependencies.core.setOutput('mock-url', resolvedMockUrl);
     }
   }
 
@@ -1980,6 +2578,7 @@ async function runRepoSyncInner(
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
+      dependencies.core.setOutput('monitor-id', resolvedMonitorId);
 
       if (!effectiveCron && resolvedMonitorId) {
         try {
@@ -2053,7 +2652,8 @@ async function runRepoSyncInner(
     priorWorkspaceId: resourcesState?.workspace?.id,
     existingSpecs: resourcesState?.cloudResources?.specs,
     releaseLabel,
-    priorState: resourcesState
+    priorState: resourcesState,
+    preparedPrebuiltCollections
   });
 
   const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
@@ -2354,7 +2954,12 @@ export async function resolvePostmanApiKeyAndTeamId(
         bifrostBaseUrl: inputs.postmanBifrostBase,
         // No fallback on the org-mode probe: the expected non-org 400 must
         // surface verbatim, not be re-fired against the /_api alias.
-        secretMasker: masker
+        secretMasker: masker,
+        onRetryEvent: (event) => {
+          actionCore.info(
+            `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+          );
+        }
       });
       const squads = await gateway.getSquads(teamId);
       if (squads.length > 0) {
@@ -2446,7 +3051,12 @@ export function createRepoSyncDependencies(
     fallbackBaseUrl: inputs.postmanFallbackBase,
     teamId: resolved.teamId,
     orgMode: inputs.orgMode,
-    secretMasker: masker
+    secretMasker: masker,
+    onRetryEvent: (event) => {
+      factories.core.info(
+        `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+      );
+    }
   });
   const gatewayAssets = new PostmanGatewayAssetsClient({
     gateway,
@@ -2608,7 +3218,10 @@ export async function runAction(
   // invalid key) and falls through to the existing missing-token guard.
   await mintAccessTokenIfNeeded(inputs, {
     info: (message) => actionCore.info(message),
-    warning: (message) => actionCore.warning(message)
+    warning: (message) => actionCore.warning(message),
+    retryEvent: (event) => actionCore.info(
+      `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+    )
   }, (secret) => actionCore.setSecret(secret));
 
   const masker = createSecretMasker([
@@ -2634,7 +3247,12 @@ export async function runAction(
     explicitTeamId: inputs.teamId || undefined,
     mode: inputs.credentialPreflight,
     mask: masker,
-    log: actionCore
+    log: {
+      ...actionCore,
+      retryEvent: (event) => actionCore.info(
+        `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+      )
+    }
   });
 
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {

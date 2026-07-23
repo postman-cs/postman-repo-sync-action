@@ -138,6 +138,7 @@ with:
 | `monitor-type` | Type of monitor to create ("cloud" or "cli"). "cli" will skip cloud monitor creation and rely on the CI workflow. | no | `cloud` |
 | `smoke-collection-id` | Smoke collection ID used for monitor creation. | no |  |
 | `contract-collection-id` | Contract collection ID used for exported artifacts. | no |  |
+| `prebuilt-collections-json` | Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export. | no | `""` |
 | `collection-sync-mode` | Collection sync lifecycle mode (refresh or version). | no | `refresh` |
 | `spec-sync-mode` | Spec sync lifecycle mode (update or version). | no | `update` |
 | `release-label` | Optional release label used for versioned naming. | no |  |

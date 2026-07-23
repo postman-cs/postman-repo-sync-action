@@ -1,3 +1,5 @@
+import { createHash, type Hash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
@@ -160,6 +162,143 @@ function isV2Collection(collection: unknown): boolean {
 function structuredCloneSafe<T>(value: T): T {
   if (typeof structuredClone === 'function') return structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Append one path+NUL+bytes+NUL record to a SHA-256 hasher. Shared wire format
+ * with bootstrap's local-artifact digest (and {@link computeArtifactDigest}).
+ */
+export function appendArtifactDigestFile(
+  hash: Hash,
+  relative: string,
+  bytes: Buffer | string
+): void {
+  hash.update(relative);
+  hash.update('\0');
+  hash.update(typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes);
+  hash.update('\0');
+}
+
+export type ArtifactDigestFileIdentity = {
+  dev: number;
+  ino: number | bigint;
+  size: number;
+};
+
+export class ArtifactDigestStreamError extends Error {
+  readonly code = 'ARTIFACT_DIGEST_STREAM' as const;
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ArtifactDigestStreamError';
+  }
+}
+
+function sameFileIdentity(
+  left: { dev: number; ino: number | bigint; size: number },
+  right: { dev: number; ino: number | bigint; size: number }
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+}
+
+/**
+ * Stream one on-disk file into the artifact digest hasher (path+NUL+bytes+NUL)
+ * from a single descriptor opened with O_NOFOLLOW when supported. Compares
+ * FileHandle.stat() before/after to the enumerated identity, closes exactly once,
+ * and returns only the current file bytes for YAML validation.
+ */
+export async function appendArtifactDigestFileStreaming(
+  hash: Hash,
+  relative: string,
+  absolute: string,
+  expected: ArtifactDigestFileIdentity
+): Promise<Buffer> {
+  const flags =
+    typeof fsConstants.O_NOFOLLOW === 'number'
+      ? fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+      : fsConstants.O_RDONLY;
+
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(absolute, flags);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'ELOOP' || code === 'EMLINK' || code === 'EINVAL') {
+      throw new ArtifactDigestStreamError(
+        `prebuilt collection tree file became a symlink or unsupported node at ${relative}`,
+        { cause: error }
+      );
+    }
+    throw new ArtifactDigestStreamError(
+      `prebuilt collection tree file changed or became unsupported at ${relative}`,
+      { cause: error }
+    );
+  }
+
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || !sameFileIdentity(before, expected)) {
+      throw new ArtifactDigestStreamError(
+        `prebuilt collection tree file changed or became unsupported at ${relative}`
+      );
+    }
+
+    hash.update(relative);
+    hash.update('\0');
+    // Preallocate once from the before-stat size so hashing stays chunked without
+    // chunk-array + concat amplification. YAML validation still needs the bytes.
+    const content = Buffer.allocUnsafe(expected.size);
+    let total = 0;
+    // Stream via the same descriptor (not createReadStream) so after-stat and a
+    // single close remain valid — FileHandle streams can close the fd early.
+    const buffer = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      if (total + bytesRead > expected.size) {
+        throw new ArtifactDigestStreamError(
+          `prebuilt collection tree file changed while reading at ${relative}`
+        );
+      }
+      buffer.copy(content, total, 0, bytesRead);
+      hash.update(buffer.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    hash.update('\0');
+
+    const after = await handle.stat();
+    if (
+      !after.isFile() ||
+      !sameFileIdentity(after, expected) ||
+      total !== expected.size
+    ) {
+      throw new ArtifactDigestStreamError(
+        `prebuilt collection tree file changed while reading at ${relative}`
+      );
+    }
+
+    return total === expected.size ? content : content.subarray(0, total);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * SHA-256 over canonical sorted relative file paths + raw bytes for a Collection
+ * v3 tree. Matches bootstrap's local-artifact digest so prebuilt manifests can
+ * be reused without a cloud export round-trip.
+ */
+export function computeArtifactDigest(
+  files: Array<{ relative: string; bytes: Buffer | string }>
+): string {
+  const hash = createHash('sha256');
+  const sorted = [...files].sort((a, b) => a.relative.localeCompare(b.relative));
+  for (const file of sorted) {
+    appendArtifactDigestFile(hash, file.relative, file.bytes);
+  }
+  return hash.digest('hex');
 }
 
 /**

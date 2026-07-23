@@ -2,7 +2,7 @@ import { HttpError } from '../http-error.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 import type { SecretMasker } from '../secrets.js';
 import { createSecretMasker } from '../secrets.js';
-import type { AccessTokenProvider } from './token-provider.js';
+import type { AccessTokenProvider, RetryEvent } from './token-provider.js';
 import { fullJitterDelayMs, parseRetryAfterMs } from '../retry.js';
 import {
   defaultPostmanAppVersionProvider,
@@ -48,7 +48,9 @@ export interface AccessTokenGatewayClientOptions {
   requestTimeoutMs?: number;
   retryMaxDelayMs?: number;
   randomImpl?: () => number;
+  onRetryEvent?: (event: RetryEvent) => void;
 }
+
 
 function isExpiredAuthError(status: number, body: string): boolean {
   return (
@@ -101,6 +103,7 @@ export class AccessTokenGatewayClient {
   private readonly requestTimeoutMs: number;
   private readonly retryMaxDelayMs: number;
   private readonly randomImpl: () => number;
+  private readonly onRetryEvent?: (event: RetryEvent) => void;
 
   constructor(options: AccessTokenGatewayClientOptions) {
     this.tokenProvider = options.tokenProvider;
@@ -122,6 +125,7 @@ export class AccessTokenGatewayClient {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.retryMaxDelayMs = options.retryMaxDelayMs ?? 5_000;
     this.randomImpl = options.randomImpl ?? Math.random;
+    this.onRetryEvent = options.onRetryEvent;
   }
 
   configureTeamContext(teamId: string, orgMode: boolean): void {
@@ -194,9 +198,11 @@ export class AccessTokenGatewayClient {
 
   private async attemptFallback(
     request: GatewayRequest,
-    retryTransient: boolean
+    retryTransient: boolean,
+    status?: number
   ): Promise<Response | null> {
     if (!this.fallbackEligible(request, retryTransient)) return null;
+    this.emitRetryEvent('fallback', status, 1, 0);
     const response = await this.tryFallback(request);
     if (!response) return null;
     if (response.ok) return response;
@@ -226,6 +232,7 @@ export class AccessTokenGatewayClient {
       } catch (error) {
         if (retryTransient && attempt < this.maxRetries) {
           const delay = this.retryDelayMs(attempt);
+          this.emitRetryEvent('transport', undefined, attempt + 1, delay);
           attempt += 1;
           await this.sleepImpl(delay);
           continue;
@@ -239,7 +246,9 @@ export class AccessTokenGatewayClient {
         const inner = this.innerStatus(okBody);
         if (inner !== undefined) {
           if (retryTransient && this.isTransient(inner, okBody) && attempt < this.maxRetries) {
-            await this.sleepImpl(this.retryDelayMs(attempt)); attempt += 1; continue;
+            const delay = this.retryDelayMs(attempt);
+            this.emitRetryEvent('inner', inner, attempt + 1, delay);
+            await this.sleepImpl(delay); attempt += 1; continue;
           }
           throw this.toInnerHttpError(request, inner, okBody);
         }
@@ -248,6 +257,7 @@ export class AccessTokenGatewayClient {
 
       const body = await response.text().catch(() => '');
       if (isExpiredAuthError(response.status, body) && this.tokenProvider.canRefresh()) {
+        this.emitRetryEvent('auth', response.status, 1, 0);
         await this.tokenProvider.refresh();
         response = await this.send(request);
         if (response.ok) {
@@ -263,12 +273,13 @@ export class AccessTokenGatewayClient {
         attempt < this.maxRetries
       ) {
         const delay = this.retryDelayMs(attempt, parseRetryAfterMs(response.headers.get('retry-after')));
+        this.emitRetryEvent('http', response.status, attempt + 1, delay);
         attempt += 1;
         await this.sleepImpl(delay);
         continue;
       }
 
-      const fallbackResponse = await this.attemptFallback(request, retryTransient);
+      const fallbackResponse = await this.attemptFallback(request, retryTransient, response.status);
       if (fallbackResponse) return fallbackResponse;
       throw this.toHttpError(request, response, body);
     }
@@ -276,6 +287,19 @@ export class AccessTokenGatewayClient {
 
   private retryDelayMs(attempt: number, retryAfter?: number): number {
     return retryAfter === undefined ? fullJitterDelayMs(attempt, this.retryBaseDelayMs, this.retryMaxDelayMs, this.randomImpl) : Math.min(this.retryMaxDelayMs, retryAfter);
+  }
+  private emitRetryEvent(
+    retryClass: RetryEvent['class'],
+    status: number | undefined,
+    attempt: number,
+    delay: number
+  ): void {
+    this.onRetryEvent?.({
+      class: retryClass,
+      ...(status === undefined ? {} : { status }),
+      attempt: Math.max(1, attempt),
+      delay: Math.max(0, delay)
+    });
   }
   private isTransient(status: number, body: string): boolean {
     return status === 408 || status === 429 || status >= 500 || /ESOCKETTIMEDOUT|ETIMEDOUT|ECONNRESET|serverError|downstream/.test(body);

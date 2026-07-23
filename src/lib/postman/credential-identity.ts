@@ -1,5 +1,6 @@
 import type { SecretMasker } from '../secrets.js';
 import { __resetPmakDiagnosticMemo, inspectPmakIdentity } from './pmak-diagnostics.js';
+import type { RetryEvent } from './token-provider.js';
 
 export interface CredentialIdentity {
   source: 'pmak/me' | 'iapub/sessions';
@@ -36,6 +37,7 @@ export interface ResolveSessionIdentityOptions {
    * deterministic under test. Defaults to Math.random.
    */
   randomImpl?: () => number;
+  onRetryEvent?: (event: RetryEvent) => void;
 }
 
 /**
@@ -65,6 +67,7 @@ export interface CrossCheckIdentitiesArgs {
 export interface PreflightLogger {
   info(message: string): void;
   warning(message: string): void;
+  retryEvent?: (event: RetryEvent) => void;
 }
 
 export interface RunCredentialPreflightArgs {
@@ -82,6 +85,7 @@ export interface RunCredentialPreflightArgs {
   sleepImpl?: (ms: number) => Promise<void>;
   /** Injectable RNG threaded into the session-retry full-jitter fallback for tests. */
   randomImpl?: () => number;
+  retryEvent?: (event: RetryEvent) => void;
 }
 
 const sessionPath = '/api/sessions/current';
@@ -273,7 +277,8 @@ export async function resolveSessionIdentity(
       opts.fetchImpl ?? fetch,
       Math.max(1, opts.maxAttempts ?? SESSION_MAX_ATTEMPTS),
       opts.sleepImpl ?? defaultSessionSleep,
-      opts.randomImpl ?? defaultRandom
+      opts.randomImpl ?? defaultRandom,
+      opts.onRetryEvent
     );
     sessionMemo.set(memoKey, pending);
   }
@@ -340,7 +345,8 @@ async function probeSessionIdentity(
   fetchImpl: typeof fetch,
   maxAttempts: number,
   sleepImpl: (ms: number) => Promise<void>,
-  random: () => number
+  random: () => number,
+  onRetryEvent?: (event: RetryEvent) => void
 ): Promise<CredentialIdentity | undefined> {
   let failure: SessionResolutionFailure = 'unavailable';
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -355,7 +361,9 @@ async function probeSessionIdentity(
       // fall back to full jitter and retry.
       failure = 'unavailable';
       if (attempt < maxAttempts) {
-        await sleepImpl(computeSessionRetryDelayMs(undefined, attempt, random));
+        const delay = computeSessionRetryDelayMs(undefined, attempt, random);
+        onRetryEvent?.({ class: 'transport', attempt, delay });
+        await sleepImpl(delay);
         continue;
       }
       break;
@@ -384,7 +392,9 @@ async function probeSessionIdentity(
       // when present, else full jitter.
       failure = 'unavailable';
       if (attempt < maxAttempts) {
-        await sleepImpl(computeSessionRetryDelayMs(response, attempt, random));
+        const delay = computeSessionRetryDelayMs(response, attempt, random);
+        onRetryEvent?.({ class: 'http', status: response.status, attempt, delay });
+        await sleepImpl(delay);
         continue;
       }
       break;
@@ -514,7 +524,8 @@ export async function runCredentialPreflight(args: RunCredentialPreflightArgs): 
       accessToken,
       fetchImpl: args.fetchImpl,
       ...(args.sleepImpl ? { sleepImpl: args.sleepImpl } : {}),
-      ...(args.randomImpl ? { randomImpl: args.randomImpl } : {})
+      ...(args.randomImpl ? { randomImpl: args.randomImpl } : {}),
+      onRetryEvent: args.retryEvent ?? args.log.retryEvent
     });
   } catch (error) {
     args.log.warning(

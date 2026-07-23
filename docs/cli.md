@@ -22,6 +22,8 @@ postman-repo-sync \
 
 The CLI auto-detects repository URL, branch, and SHA from common CI environment variables (GitHub, GitLab, Bitbucket, Azure DevOps). It writes JSON to stdout, writes the same JSON to `--result-json`, and optionally writes shell-sourceable `POSTMAN_REPO_SYNC_*` values to `--dotenv-path`. Logs go to stderr.
 
+For every non-gated execution — including `--repo-write-mode none`, which still generates artifact and CI files — `--result-json` must stay outside generated or staged paths: the artifact root, `.postman/`, generated CI/preview-GC workflow files, and a staged legacy provision workflow. Path checks resolve symlink aliases and compare path components, so a sibling such as `postman-results/result.json` remains valid beside the default `postman/` artifact root.
+
 Use the same `postman-region` value as the target Postman team. For CI, prefer a service-account access token minted immediately before the CLI runs, then pass that token through `POSTMAN_ACCESS_TOKEN` and the resolved team ID through `POSTMAN_TEAM_ID`.
 
 CLI flags mirror the action inputs (kebab-case, prefixed with `--`). See the Inputs table in the [README](../README.md) for the full list.

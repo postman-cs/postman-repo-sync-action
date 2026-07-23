@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createExecutionPlan,
-  postmanRepoSyncActionContract
+  postmanRepoSyncActionContract,
+  type PrebuiltCollectionEntry,
+  type PrebuiltCollectionRole,
+  type PrebuiltCollectionsManifest
 } from '../src/contracts.js';
 import { resolveInputs } from '../src/index.js';
 
@@ -37,6 +40,7 @@ describe('postman-repo-sync-action contract', () => {
       'monitor-type',
       'smoke-collection-id',
       'contract-collection-id',
+      'prebuilt-collections-json',
       'collection-sync-mode',
       'spec-sync-mode',
       'release-label',
@@ -287,5 +291,54 @@ describe('postman-repo-sync-action contract', () => {
         githubRefName: 'feature/no-push'
       }).resolvedCurrentRef
     ).toBe('');
+  });
+
+  it('defines prebuilt-collections-json semantic contract schema and default behavior', () => {
+    const inputDef = postmanRepoSyncActionContract.inputs['prebuilt-collections-json'];
+    expect(inputDef).toBeDefined();
+    expect(inputDef.required).toBe(false);
+    expect(inputDef.default).toBe('');
+
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string; description?: string }>;
+    };
+    const actionInput = actionYaml.inputs['prebuilt-collections-json'];
+    expect(actionInput?.required).toBe(false);
+    expect(actionInput?.default).toBe('');
+    expect(actionInput?.description).toBe(inputDef.description);
+
+    // Verify descriptions contain semantic schema elements and no arbitrary cap language.
+    expect(inputDef.description).toContain('baseline, smoke, or contract roles');
+    expect(inputDef.description).toContain('confined repo-relative path');
+    expect(inputDef.description).toContain(
+      'SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL)'
+    );
+    expect(inputDef.description).toContain(
+      'optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate)'
+    );
+    expect(inputDef.description).toContain('canonical cloud ID');
+    expect(inputDef.description).not.toMatch(/depth|length|threshold|limit|cap/i);
+
+    // Verify schema type compatibility
+    const entry: PrebuiltCollectionEntry = {
+      role: 'baseline',
+      collectionPath: 'postman/collections/baseline',
+      cloudId: '12345678-baseline-id',
+      artifactDigest: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    };
+    const validRoles: PrebuiltCollectionRole[] = ['baseline', 'smoke', 'contract'];
+    expect(validRoles).toContain(entry.role);
+
+    const manifestArray: PrebuiltCollectionsManifest = [entry];
+    const manifestObject: PrebuiltCollectionsManifest = {
+      schemaVersion: 1,
+      collections: [entry]
+    };
+    expect(manifestArray).toBeDefined();
+    expect(manifestObject).toBeDefined();
+
+    // Standalone behavior absent input unchanged
+    const plan = createExecutionPlan();
+    expect(plan.outputs).toBeDefined();
   });
 });
