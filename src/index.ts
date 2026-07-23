@@ -1752,6 +1752,7 @@ async function runRepoSyncInner(
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
   const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
   outputs['environment-uids-json'] = JSON.stringify(envUids);
+  dependencies.core.setOutput('environment-uids-json', outputs['environment-uids-json']);
 
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
     const associations = Object.entries(envUids)

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -437,12 +437,15 @@ export function writeOptionalFileAtomic(filePath: string | undefined, content: s
   const { resolved, directory } = assertOutputFileAllowed(filePath);
   mkdirSync(directory, { recursive: true });
   const validated = assertOutputFileAllowed(filePath);
-  const temporary = path.join(realpathSync(validated.directory), `.${path.basename(resolved)}.${process.pid}.tmp`);
+  const temporaryDirectory = mkdtempSync(
+    path.join(realpathSync(validated.directory), `.${path.basename(resolved)}.`)
+  );
+  const temporary = path.join(temporaryDirectory, path.basename(resolved));
   try {
     writeFileSync(temporary, content, 'utf8');
     renameSync(temporary, resolved);
   } finally {
-    try { unlinkSync(temporary); } catch { /* already renamed or never created */ }
+    rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 }
 

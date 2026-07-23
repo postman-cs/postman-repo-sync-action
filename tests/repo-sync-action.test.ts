@@ -1941,6 +1941,7 @@ describe('monitor resolution paths', () => {
     ).rejects.toThrow(
       /Monitor create failed for monitor "core-payments - Smoke Monitor" workspace ws-123 collection col-smoke environment env-prod: monitor denied\. verify monitor IDs\/access or set monitor-cron then rerun/
     );
+    expect(JSON.parse(outputs['environment-uids-json'] ?? '{}')).toEqual({ prod: 'env-prod' });
     expect(outputs['mock-url']).toBe('https://mock.pstmn.io');
   });
 

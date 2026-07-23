@@ -523,6 +523,23 @@ describe('CLI partial result output containment', () => {
     });
   });
 
+  it('does not follow the former predictable temporary-file symlink', async () => {
+    await withTempCwd(async (dir) => {
+      const outside = await mkdtemp(path.join(tmpdir(), 'pm-repo-sync-outside-'));
+      tempDirs.push(outside);
+      const target = path.join(outside, 'target.json');
+      await writeFile(target, 'unchanged', 'utf8');
+      await symlink(target, path.join(dir, `.result.json.${process.pid}.tmp`));
+
+      writeOptionalFileAtomic('result.json', '{"mock-url":"owned"}');
+
+      await expect(readFile(target, 'utf8')).resolves.toBe('unchanged');
+      await expect(readFile(path.join(dir, 'result.json'), 'utf8')).resolves.toBe(
+        '{"mock-url":"owned"}'
+      );
+    });
+  });
+
   it('leaves normal in-workspace partial output atomic and readable after a later failure', async () => {
     await withTempCwd(async (dir) => {
       await mkdir(path.join(dir, 'results'), { recursive: true });
