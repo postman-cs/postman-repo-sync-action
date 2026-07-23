@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -14,7 +15,8 @@ import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 import {
-  computeArtifactDigest,
+  appendArtifactDigestFileStreaming,
+  ArtifactDigestStreamError,
   convertAndSplitAnyCollection
 } from './postman-v3/converter.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
@@ -724,6 +726,14 @@ function normalizeToPosix(filePath: string): string {
   return filePath.split(path.sep).join('/').replace(/\\/g, '/');
 }
 
+/** Platform/to-posix path compare form: strip leading `./`, collapse separators, drop trailing `/`. */
+function canonicalizeRelativePath(value: string): string {
+  return normalizeToPosix(String(value ?? '').trim())
+    .replace(/^\.\/+/, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+$/g, '');
+}
+
 function isOpenApiSpecFile(filePath: string): boolean {
   if (!(filePath.endsWith('.json') || filePath.endsWith('.yaml') || filePath.endsWith('.yml'))) {
     return false;
@@ -1388,7 +1398,7 @@ type PrebuiltCollectionEntry = {
   role: PrebuiltCollectionRole;
   collectionPath: string;
   cloudId: string;
-  payloadDigest: string;
+  payloadDigest?: string;
   artifactDigest: string;
 };
 
@@ -1398,27 +1408,23 @@ type PreparedPrebuiltCollectionEntry = {
   artifactDigest?: string;
 };
 
+type PrebuiltTreeFileMeta = {
+  absolute: string;
+  relative: string;
+  dev: number;
+  ino: number | bigint;
+  size: number;
+};
+
 const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
   'baseline',
   'smoke',
   'contract'
 ]);
 
-/** Conservative bounds for digest-bound prebuilt manifests and on-disk trees. */
-const PREBUILT_COLLECTIONS_LIMITS = {
-  maxEntries: 3,
-  maxInputBytes: 64 * 1024,
-  maxFilesPerTree: 2000,
-  maxDirectoriesPerTree: 512,
-  maxTreeEntries: 2500,
-  maxTreeDepth: 64,
-  maxBytesPerTree: 25 * 1024 * 1024,
-  maxPathLength: 512,
-  maxIdLength: 128
-} as const;
-
 const SHA256_HEX = /^[a-f0-9]{64}$/;
-const PREBUILT_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** Nonempty Postman collection id: safe characters, no arbitrary length cap. */
+const PREBUILT_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 function failPrebuiltCollections(detail: string): never {
   throw new Error(`CONTRACT_PREBUILT_COLLECTIONS_INVALID: ${detail}`);
@@ -1428,11 +1434,6 @@ function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
   const trimmed = String(raw ?? '').trim();
   if (!trimmed) {
     return [];
-  }
-  if (Buffer.byteLength(trimmed, 'utf8') > PREBUILT_COLLECTIONS_LIMITS.maxInputBytes) {
-    failPrebuiltCollections(
-      `input exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxInputBytes} bytes`
-    );
   }
 
   let parsed: unknown;
@@ -1460,12 +1461,6 @@ function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
     failPrebuiltCollections('expected a JSON array or {schemaVersion:1,collections:[]}');
   }
 
-  if (entriesRaw.length > PREBUILT_COLLECTIONS_LIMITS.maxEntries) {
-    failPrebuiltCollections(
-      `at most ${PREBUILT_COLLECTIONS_LIMITS.maxEntries} role entries are allowed`
-    );
-  }
-
   const seenRoles = new Set<PrebuiltCollectionRole>();
   const entries: PrebuiltCollectionEntry[] = [];
 
@@ -1488,11 +1483,7 @@ function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
     const collectionPath = String(
       value.collectionPath ?? value.path ?? ''
     ).trim();
-    if (
-      !collectionPath ||
-      collectionPath.length > PREBUILT_COLLECTIONS_LIMITS.maxPathLength ||
-      hasControlCharacter(collectionPath)
-    ) {
+    if (!collectionPath || hasControlCharacter(collectionPath)) {
       failPrebuiltCollections(
         `collections[${index}].collectionPath must be a non-empty confined relative path`
       );
@@ -1505,11 +1496,17 @@ function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
       );
     }
 
-    const payloadDigest = String(value.payloadDigest ?? '').trim();
-    if (!SHA256_HEX.test(payloadDigest)) {
-      failPrebuiltCollections(
-        `collections[${index}].payloadDigest must be lowercase 64-hex`
-      );
+    let payloadDigest: string | undefined;
+    if (Object.prototype.hasOwnProperty.call(value, 'payloadDigest')) {
+      const payloadDigestRaw = value.payloadDigest;
+      if (payloadDigestRaw !== undefined && payloadDigestRaw !== null) {
+        payloadDigest = String(payloadDigestRaw).trim();
+        if (!SHA256_HEX.test(payloadDigest)) {
+          failPrebuiltCollections(
+            `collections[${index}].payloadDigest must be lowercase 64-hex`
+          );
+        }
+      }
     }
 
     const artifactDigest = String(value.artifactDigest ?? '').trim();
@@ -1523,7 +1520,7 @@ function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
       role,
       collectionPath,
       cloudId,
-      payloadDigest,
+      ...(payloadDigest !== undefined ? { payloadDigest } : {}),
       artifactDigest
     });
   }
@@ -1572,10 +1569,10 @@ function assertPathWithinArtifactRoot(
   return normalizeToPosix(path.relative(cwd, resolved));
 }
 
-function readPrebuiltCollectionTreeFiles(
+function listPrebuiltCollectionTreeFiles(
   collectionPath: string,
   artifactDir: string
-): Array<{ relative: string; bytes: Buffer }> {
+): PrebuiltTreeFileMeta[] {
   const confined = assertPathWithinArtifactRoot(
     collectionPath,
     artifactDir,
@@ -1601,55 +1598,39 @@ function readPrebuiltCollectionTreeFiles(
     return [];
   }
 
-  const files: Array<{ relative: string; bytes: Buffer }> = [];
-  let totalBytes = 0;
-  let directoryCount = 1;
-  let entryCount = 0;
-  const pendingDirectories: Array<{ absolute: string; depth: number }> = [
-    { absolute: absRoot, depth: 0 }
-  ];
+  const files: PrebuiltTreeFileMeta[] = [];
+  const pendingDirectories: string[] = [absRoot];
+  const seenDirectories = new Set<string>();
 
   while (pendingDirectories.length > 0) {
-    const current = pendingDirectories.shift();
-    if (!current) {
+    const currentAbsolute = pendingDirectories.pop();
+    if (!currentAbsolute) {
       break;
     }
-    const currentStat = lstatSync(current.absolute);
+    const currentStat = lstatSync(currentAbsolute);
     if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
       failPrebuiltCollections(
-        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, current.absolute)) || '.'}`
+        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
       );
     }
-
-    const entries = readdirSync(current.absolute, { withFileTypes: true });
-    entryCount += entries.length;
-    if (entryCount > PREBUILT_COLLECTIONS_LIMITS.maxTreeEntries) {
+    const currentKey = `${currentStat.dev}:${currentStat.ino}`;
+    if (seenDirectories.has(currentKey)) {
       failPrebuiltCollections(
-        `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxTreeEntries} entries`
+        `prebuilt collection tree directory cycle detected at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
       );
     }
+    seenDirectories.add(currentKey);
 
+    const entries = readdirSync(currentAbsolute, { withFileTypes: true });
     for (const entry of entries) {
-      const abs = path.join(current.absolute, entry.name);
+      const abs = path.join(currentAbsolute, entry.name);
       if (entry.isSymbolicLink()) {
         failPrebuiltCollections(
           `prebuilt collection tree must not contain symlinks; received ${normalizeToPosix(path.relative(absRoot, abs))}`
         );
       }
       if (entry.isDirectory()) {
-        const depth = current.depth + 1;
-        if (depth > PREBUILT_COLLECTIONS_LIMITS.maxTreeDepth) {
-          failPrebuiltCollections(
-            `prebuilt collection tree exceeded depth ${PREBUILT_COLLECTIONS_LIMITS.maxTreeDepth}`
-          );
-        }
-        directoryCount += 1;
-        if (directoryCount > PREBUILT_COLLECTIONS_LIMITS.maxDirectoriesPerTree) {
-          failPrebuiltCollections(
-            `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxDirectoriesPerTree} directories`
-          );
-        }
-        pendingDirectories.push({ absolute: abs, depth });
+        pendingDirectories.push(abs);
         continue;
       }
       if (!entry.isFile()) {
@@ -1657,109 +1638,105 @@ function readPrebuiltCollectionTreeFiles(
           `prebuilt collection tree contains unsupported entry type at ${normalizeToPosix(path.relative(absRoot, abs))}`
         );
       }
-      if (files.length >= PREBUILT_COLLECTIONS_LIMITS.maxFilesPerTree) {
-        failPrebuiltCollections(
-          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxFilesPerTree} files`
-        );
-      }
-      const beforeLstat = lstatSync(abs);
-      const beforeStat = statSync(abs);
-      if (
-        beforeLstat.isSymbolicLink() ||
-        !beforeLstat.isFile() ||
-        !beforeStat.isFile() ||
-        beforeLstat.dev !== beforeStat.dev ||
-        beforeLstat.ino !== beforeStat.ino
-      ) {
+      const fileLstat = lstatSync(abs);
+      if (fileLstat.isSymbolicLink() || !fileLstat.isFile()) {
         failPrebuiltCollections(
           `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, abs))}`
         );
       }
-      const remainingBytes = PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree - totalBytes;
-      if (beforeStat.size > remainingBytes) {
-        failPrebuiltCollections(
-          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree} bytes`
-        );
-      }
-      const bytes = readFileSync(abs);
-      const afterStat = statSync(abs);
-      if (
-        bytes.byteLength !== beforeStat.size ||
-        afterStat.size !== beforeStat.size ||
-        afterStat.dev !== beforeStat.dev ||
-        afterStat.ino !== beforeStat.ino
-      ) {
-        failPrebuiltCollections(
-          `prebuilt collection tree file changed while reading at ${normalizeToPosix(path.relative(absRoot, abs))}`
-        );
-      }
-      totalBytes += bytes.byteLength;
-      if (totalBytes > PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree) {
-        failPrebuiltCollections(
-          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree} bytes`
-        );
-      }
       files.push({
+        absolute: abs,
         relative: normalizeToPosix(path.relative(absRoot, abs)),
-        bytes
+        dev: fileLstat.dev,
+        ino: fileLstat.ino,
+        size: fileLstat.size
       });
     }
   }
+
+  files.sort((a, b) => a.relative.localeCompare(b.relative));
   return files;
 }
 
-function validateCanonicalV3CollectionTree(
-  files: Array<{ relative: string; bytes: Buffer }>
-): void {
-  const definition = files.find(
-    (file) => file.relative === '.resources/definition.yaml'
-  );
-  if (!definition) {
-    failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
+function validateCanonicalV3CollectionFile(relative: string, bytes: Buffer): void {
+  let expectedKind: 'collection' | 'request' | 'example' | 'message';
+  if (/(^|\/)\.resources\/definition\.yaml$/.test(relative)) {
+    expectedKind = 'collection';
+  } else if (relative.endsWith('.request.yaml')) {
+    expectedKind = 'request';
+  } else if (relative.endsWith('.example.yaml')) {
+    expectedKind = 'example';
+  } else if (relative.endsWith('.message.yaml')) {
+    expectedKind = 'message';
+  } else {
+    failPrebuiltCollections(`prebuilt collection tree contains unexpected file ${relative}`);
   }
-  for (const file of files) {
-    let expectedKind: 'collection' | 'request' | 'example' | 'message';
-    if (/(^|\/)\.resources\/definition\.yaml$/.test(file.relative)) {
-      expectedKind = 'collection';
-    } else if (file.relative.endsWith('.request.yaml')) {
-      expectedKind = 'request';
-    } else if (file.relative.endsWith('.example.yaml')) {
-      expectedKind = 'example';
-    } else if (file.relative.endsWith('.message.yaml')) {
-      expectedKind = 'message';
-    } else {
-      failPrebuiltCollections(`prebuilt collection tree contains unexpected file ${file.relative}`);
-    }
 
-    let parsed: unknown;
-    try {
-      parsed = loadYaml(file.bytes.toString('utf8'));
-    } catch (error) {
-      failPrebuiltCollections(
-        `prebuilt collection tree contains malformed YAML at ${file.relative} (${error instanceof Error ? error.message : String(error)})`
-      );
-    }
-    if (!isPlainObject(parsed)) {
-      failPrebuiltCollections(`prebuilt collection tree file ${file.relative} must contain a YAML mapping`);
-    }
-    const kind = typeof parsed.$kind === 'string' ? parsed.$kind.trim() : '';
-    if (!kind) {
-      failPrebuiltCollections(`prebuilt collection tree file ${file.relative} must contain a nonempty $kind`);
-    }
-    const agrees = expectedKind === 'collection'
-      ? kind === 'collection'
-      : kind.endsWith(`-${expectedKind}`);
-    if (!agrees) {
-      failPrebuiltCollections(
-        `prebuilt collection tree file ${file.relative} has $kind ${kind} inconsistent with its filename`
-      );
-    }
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(bytes.toString('utf8'));
+  } catch (error) {
+    failPrebuiltCollections(
+      `prebuilt collection tree contains malformed YAML at ${relative} (${error instanceof Error ? error.message : String(error)})`
+    );
+  }
+  if (!isPlainObject(parsed)) {
+    failPrebuiltCollections(`prebuilt collection tree file ${relative} must contain a YAML mapping`);
+  }
+  const kind = typeof parsed.$kind === 'string' ? parsed.$kind.trim() : '';
+  if (!kind) {
+    failPrebuiltCollections(`prebuilt collection tree file ${relative} must contain a nonempty $kind`);
+  }
+  const agrees = expectedKind === 'collection'
+    ? kind === 'collection'
+    : kind.endsWith(`-${expectedKind}`);
+  if (!agrees) {
+    failPrebuiltCollections(
+      `prebuilt collection tree file ${relative} has $kind ${kind} inconsistent with its filename`
+    );
   }
 }
 
-function preparePrebuiltCollections(
+async function digestAndValidatePrebuiltCollectionTree(
+  files: PrebuiltTreeFileMeta[]
+): Promise<string> {
+  if (!files.some((file) => file.relative === '.resources/definition.yaml')) {
+    failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
+  }
+
+  const hash = createHash('sha256');
+  for (const file of files) {
+    let bytes: Buffer;
+    try {
+      bytes = await appendArtifactDigestFileStreaming(hash, file.relative, file.absolute, {
+        dev: file.dev,
+        ino: file.ino,
+        size: file.size
+      });
+    } catch (error) {
+      if (error instanceof ArtifactDigestStreamError) {
+        failPrebuiltCollections(error.message);
+      }
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'ELOOP' || code === 'EPERM') {
+        failPrebuiltCollections(
+          `prebuilt collection tree file became a symlink or unsupported node at ${file.relative}`
+        );
+      }
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed or became unsupported at ${file.relative}`
+      );
+    }
+
+    validateCanonicalV3CollectionFile(file.relative, bytes);
+  }
+
+  return hash.digest('hex');
+}
+
+async function preparePrebuiltCollections(
   inputs: ResolvedInputs
-): Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry> {
+): Promise<Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>> {
   const prepared = new Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>();
   for (const entry of parsePrebuiltCollectionsJson(inputs.prebuiltCollectionsJson ?? '')) {
     const confinedPath = assertPathWithinArtifactRoot(
@@ -1772,12 +1749,12 @@ function preparePrebuiltCollections(
       prepared.set(entry.role, { entry, confinedPath });
       continue;
     }
-    const files = readPrebuiltCollectionTreeFiles(confinedPath, inputs.artifactDir);
-    validateCanonicalV3CollectionTree(files);
+    const files = listPrebuiltCollectionTreeFiles(confinedPath, inputs.artifactDir);
+    const artifactDigest = await digestAndValidatePrebuiltCollectionTree(files);
     prepared.set(entry.role, {
       entry,
       confinedPath,
-      artifactDigest: computeArtifactDigest(files)
+      artifactDigest
     });
   }
   return prepared;
@@ -1800,14 +1777,15 @@ function tryReusePrebuiltCollection(options: {
     return false;
   }
 
-  const expectedNormalized = normalizeToPosix(expectedPath.replace(/\/+$/g, ''));
-  const entryNormalized = normalizeToPosix(entry.collectionPath.replace(/\/+$/g, ''));
+  const expectedNormalized = canonicalizeRelativePath(expectedPath);
+  const entryNormalized = canonicalizeRelativePath(entry.collectionPath);
   if (entryNormalized !== expectedNormalized) {
     return false;
   }
 
   // Path confinement / symlink escape fail closed before ordinary mismatch.
-  const confined = prepared.confinedPath;
+  // Confinement (realpath-relative) remains authoritative after path form normalization.
+  const confined = canonicalizeRelativePath(prepared.confinedPath);
   if (confined !== expectedNormalized) {
     return false;
   }
@@ -2046,7 +2024,9 @@ async function exportArtifacts(
     options.priorState
   ));
 
-  if (mappedSpec) {
+  // Only reconcile when a mapped spec exists and at least one collection was
+  // actually exported. Env-only / zero-collection runs must leave prior bytes alone.
+  if (mappedSpec && Object.keys(manifestCollections).length > 0) {
     let existingWorkflows: string | undefined;
     try {
       existingWorkflows = readFileSync('.postman/workflows.yaml', 'utf8');
@@ -2288,7 +2268,7 @@ async function runRepoSyncInner(
     }
   }
 
-  const preparedPrebuiltCollections = preparePrebuiltCollections(inputs);
+  const preparedPrebuiltCollections = await preparePrebuiltCollections(inputs);
 
   // Repo-link admission guard: Bifrost enforces global uniqueness of
   // (repository URL, path) -> workspace. Probe before any asset writes so a

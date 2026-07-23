@@ -5,6 +5,30 @@ export type ActionInputDefinition = {
   allowedValues?: string[];
 };
 
+export type PrebuiltCollectionRole = 'baseline' | 'smoke' | 'contract';
+
+export type PrebuiltCollectionEntry = {
+  /** Unique role within the manifest ('baseline', 'smoke', or 'contract'). */
+  role: PrebuiltCollectionRole;
+  /** Confined repo-relative path to the locally materialized Collection v3 tree. */
+  collectionPath: string;
+  /** Legacy alias for collectionPath accepted at parse time. */
+  path?: string;
+  /** Canonical cloud ID for the collection. */
+  cloudId: string;
+  /** SHA-256 digest of the canonical v2 payload (optional; verified when present). */
+  payloadDigest?: string;
+  /** SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL). */
+  artifactDigest: string;
+};
+
+export type PrebuiltCollectionsManifest =
+  | PrebuiltCollectionEntry[]
+  | {
+      schemaVersion: 1;
+      collections: PrebuiltCollectionEntry[];
+    };
+
 export type ActionOutputDefinition = {
   description: string;
 };
@@ -108,7 +132,7 @@ export const postmanRepoSyncActionContract: {
     },
     'prebuilt-collections-json': {
       description:
-        'Optional digest-bound JSON manifest of locally materialized Collection v3 trees (schemaVersion 1 or a bare entry array). Exact path/cloudId/tree/artifactDigest matches reuse the on-disk tree without cloud export.',
+        'Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.',
       required: false,
       default: ''
     },

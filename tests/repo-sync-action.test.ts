@@ -9,7 +9,20 @@ vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
 }));
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,7 +37,10 @@ import {
   type RepoSyncDependencies,
   type ResolvedInputs
 } from '../src/index.js';
-import { computeArtifactDigest } from '../src/postman-v3/converter.js';
+import {
+  appendArtifactDigestFileStreaming,
+  computeArtifactDigest
+} from '../src/postman-v3/converter.js';
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
@@ -209,6 +225,67 @@ function writeCanonicalV3Tree(
   return { artifactDigest: computeArtifactDigest(files), files };
 }
 
+/** Iterative on-disk digest matching production streaming wire format. */
+async function digestTreeOnDisk(collectionPath: string): Promise<string> {
+  const absRoot = join(process.cwd(), collectionPath);
+  const files: Array<{
+    absolute: string;
+    relative: string;
+    dev: number;
+    ino: number | bigint;
+    size: number;
+  }> = [];
+  const pending = [absRoot];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    for (const name of readdirSync(current)) {
+      const abs = join(current, name);
+      const st = lstatSync(abs);
+      if (st.isDirectory()) {
+        pending.push(abs);
+      } else if (st.isFile()) {
+        files.push({
+          absolute: abs,
+          relative: abs.slice(absRoot.length + 1).split(/[\\/]/).join('/'),
+          dev: st.dev,
+          ino: st.ino,
+          size: st.size
+        });
+      }
+    }
+  }
+  files.sort((a, b) => a.relative.localeCompare(b.relative));
+  const hash = createHash('sha256');
+  for (const file of files) {
+    await appendArtifactDigestFileStreaming(hash, file.relative, file.absolute, {
+      dev: file.dev,
+      ino: file.ino,
+      size: file.size
+    });
+  }
+  return hash.digest('hex');
+}
+
+function writeLargeCanonicalRequestYaml(filePath: string, minBytes: number): void {
+  const header = Buffer.from('$kind: http-request\nmethod: GET\ndescription: |\n');
+  const fd = openSync(filePath, 'w');
+  try {
+    writeSync(fd, header);
+    let written = header.byteLength;
+    // Chunked block-scalar body keeps peak fixture memory bounded.
+    const chunk = Buffer.alloc(1024 * 1024, 0x78); // 'x'
+    chunk[0] = 0x20;
+    chunk[1] = 0x20;
+    chunk[chunk.length - 1] = 0x0a;
+    while (written < minBytes) {
+      writeSync(fd, chunk);
+      written += chunk.byteLength;
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function buildPrebuiltManifest(
   entries: Array<{
     role: 'baseline' | 'smoke' | 'contract';
@@ -219,13 +296,18 @@ function buildPrebuiltManifest(
   }>,
   wrapped = false
 ): string {
-  const collections = entries.map((entry) => ({
-    role: entry.role,
-    collectionPath: entry.collectionPath,
-    cloudId: entry.cloudId,
-    payloadDigest: entry.payloadDigest ?? sha256Hex(`payload:${entry.role}`),
-    artifactDigest: entry.artifactDigest
-  }));
+  const collections = entries.map((entry) => {
+    const base: Record<string, string> = {
+      role: entry.role,
+      collectionPath: entry.collectionPath,
+      cloudId: entry.cloudId,
+      artifactDigest: entry.artifactDigest
+    };
+    if (entry.payloadDigest !== undefined) {
+      base.payloadDigest = entry.payloadDigest;
+    }
+    return base;
+  });
   return wrapped
     ? JSON.stringify({ schemaVersion: 1, collections })
     : JSON.stringify(collections);
@@ -675,10 +757,12 @@ describe('repo sync action', () => {
 
     it.each([
       ['invalid role', { role: 'admin' }],
+      ['unknown role', { role: 'unknown-role' }],
+      ['empty role', { role: '' }],
       ['malformed payload digest', { payloadDigest: 'not-a-digest' }],
       ['malformed artifact digest', { artifactDigest: 'ABC' }],
-      ['invalid cloudId', { cloudId: 'bad cloud id' }],
-      ['oversized cloudId', { cloudId: `c${'x'.repeat(128)}` }]
+      ['uppercase artifact digest', { artifactDigest: 'A'.repeat(64) }],
+      ['invalid cloudId', { cloudId: 'bad cloud id' }]
     ])('rejects %s in a prebuilt manifest', async (_name, override) => {
       const entry = {
         role: 'baseline',
@@ -697,94 +781,361 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
     });
 
-    it('rejects excessive prebuilt tree depth before descending recursively', async () => {
-      const root = 'postman/collections/core-payments';
-      const fixture = writeCanonicalV3Tree(root);
-      let current = root;
-      for (let depth = 0; depth < 65; depth += 1) {
-        current = join(current, 'nested');
-        mkdirSync(current);
-      }
-
+    it.each([
+      ['unsupported schemaVersion', JSON.stringify({ schemaVersion: 2, collections: [] })],
+      ['non-array collections', JSON.stringify({ schemaVersion: 1, collections: 'not-array' })],
+      ['non-object item in array', JSON.stringify([123])],
+      ['boolean top-level payload', 'true'],
+      ['number top-level payload', '123']
+    ])('rejects %s in prebuilt manifest schema', async (_name, prebuiltCollectionsJson) => {
       await expect(
         runRepoSync(
-          createInputs({
-            prebuiltCollectionsJson: buildPrebuiltManifest([{
+          createInputs({ prebuiltCollectionsJson }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
+    });
+
+    it('accepts an omitted payloadDigest and reuses on exact artifactDigest match', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
               role: 'baseline',
               collectionPath: root,
               cloudId: 'col-baseline',
               artifactDigest: fixture.artifactDigest
-            }])
-          }),
-          deps(createExportPostmanStub())
-        )
-      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*depth 64/);
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
     });
 
-    it('rejects excessive prebuilt directory count before descending', async () => {
+    it('accepts a long safe-character cloudId without an arbitrary length cap', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
-      for (let index = 0; index < 512; index += 1) {
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const longCloudId = `c${'x'.repeat(256)}`;
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          baselineCollectionId: longCloudId,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: longCloudId,
+              artifactDigest: fixture.artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).not.toHaveBeenCalledWith(longCloudId);
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts a >512-character confined collectionPath without an invented path-length cap', async () => {
+      // Host NAME_MAX is typically 255; build a multi-segment confined path >512 chars.
+      const segments = ['postman', 'collections'];
+      while (segments.join('/').length < 520) {
+        segments.push('p'.repeat(80));
+      }
+      const root = segments.join('/');
+      expect(root.length).toBeGreaterThan(512);
+      try {
+        const fixture = writeCanonicalV3Tree(root);
+        writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+        writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+        const postman = createExportPostmanStub();
+
+        // Manifest parsing + confined tree validation must accept the long path.
+        // Role export still uses the canonical project path, so a path mismatch
+        // falls through to cloud export rather than inventing a length rejection.
+        await runRepoSync(
+          createInputs({
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            prebuiltCollectionsJson: buildPrebuiltManifest([
+              {
+                role: 'baseline',
+                collectionPath: root,
+                cloudId: 'col-baseline',
+                artifactDigest: fixture.artifactDigest
+              }
+            ])
+          }),
+          deps(postman)
+        );
+
+        expect(postman.createEnvironment).toHaveBeenCalled();
+        expect(postman.getCollection).toHaveBeenCalled();
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENAMETOOLONG' || code === 'ENOENT') {
+          return;
+        }
+        throw error;
+      }
+    }, 60_000);
+
+    it('rejects file mutation during digest read (TOCTOU before/after identity)', async () => {
+      const root = 'postman/collections/core-payments';
+      writeCanonicalV3Tree(root);
+      const relative = 'List.request.yaml';
+      const absolute = join(root, relative);
+      const before = lstatSync(absolute);
+      const hash = createHash('sha256');
+      await expect(
+        appendArtifactDigestFileStreaming(hash, relative, absolute, {
+          dev: before.dev,
+          ino: before.ino,
+          size: before.size + 1
+        })
+      ).rejects.toThrow(/changed or became unsupported|changed while reading/);
+    });
+
+    it.each([
+      ['./postman/collections/core-payments', 'leading ./'],
+      ['postman/collections/core-payments/', 'trailing separator']
+    ])('reuses when collectionPath uses %s form', async (collectionPath) => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['./postman', 'postman/'])(
+      'reuses prebuilt trees when artifact-dir is %s',
+      async (artifactDir) => {
+        const root = 'postman/collections/core-payments';
+        const fixture = writeCanonicalV3Tree(root);
+        writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+        writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+        const postman = createExportPostmanStub();
+
+        await runRepoSync(
+          createInputs({
+            artifactDir,
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            prebuiltCollectionsJson: buildPrebuiltManifest([
+              {
+                role: 'baseline',
+                collectionPath: root,
+                cloudId: 'col-baseline',
+                artifactDigest: fixture.artifactDigest
+              }
+            ])
+          }),
+          deps(postman)
+        );
+
+        expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+        expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      }
+    );
+
+    it('accepts >2000 valid canonical YAML files with exact digest reuse and no whole-tree buffering', async () => {
+      const root = 'postman/collections/core-payments';
+      writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const body = '$kind: http-request\nmethod: GET\n';
+      for (let index = 0; index < 2001; index += 1) {
+        writeFileSync(join(root, `extra-${index}.request.yaml`), body, 'utf8');
+      }
+      const artifactDigest = await digestTreeOnDisk(root);
+      const postman = createExportPostmanStub();
+      const beforeHeap = process.memoryUsage().heapUsed;
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      const heapDelta = process.memoryUsage().heapUsed - beforeHeap;
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      // Streaming validation should not retain the whole tree (2000+ small files).
+      expect(heapDelta).toBeLessThan(32 * 1024 * 1024);
+    }, 120_000);
+
+    it('accepts >512 directories in a confined prebuilt tree', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      for (let index = 0; index < 520; index += 1) {
         mkdirSync(join(root, `dir-${index}`));
       }
+      // Empty dirs prove directory-count acceptance without changing the file digest.
+      const postman = createExportPostmanStub();
 
-      await expect(
-        runRepoSync(
-          createInputs({
-            prebuiltCollectionsJson: buildPrebuiltManifest([{
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
               role: 'baseline',
               collectionPath: root,
               cloudId: 'col-baseline',
               artifactDigest: fixture.artifactDigest
-            }])
-          }),
-          deps(createExportPostmanStub())
-        )
-      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*512 directories/);
-    });
+            }
+          ])
+        }),
+        deps(postman)
+      );
 
-    it('rejects prebuilt trees with more than 2000 files', async () => {
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+    }, 60_000);
+
+    it('accepts >64 nested depth when the host permits', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
-      for (let index = 0; index < 1999; index += 1) {
-        writeFileSync(join(root, `extra-${index}.yaml`), 'x');
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      let current = root;
+      try {
+        for (let depth = 0; depth < 70; depth += 1) {
+          current = join(current, 'n');
+          mkdirSync(current);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENAMETOOLONG' || code === 'ENOENT') {
+          return;
+        }
+        throw error;
       }
+      // Empty nested dirs prove depth acceptance without changing the file digest.
+      const artifactDigest = fixture.artifactDigest;
+      const postman = createExportPostmanStub();
 
-      await expect(
-        runRepoSync(
-          createInputs({
-            prebuiltCollectionsJson: buildPrebuiltManifest([{
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
               role: 'baseline',
               collectionPath: root,
               cloudId: 'col-baseline',
-              artifactDigest: fixture.artifactDigest
-            }])
-          }),
-          deps(createExportPostmanStub())
-        )
-      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*2000 files/);
-    });
+              artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
 
-    it('rejects an oversized sparse prebuilt file before allocating its contents', async () => {
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+    }, 60_000);
+
+    it('accepts a >25 MiB valid YAML file written in chunks without cloud export', async () => {
+      const root = 'postman/collections/core-payments';
+      writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      writeLargeCanonicalRequestYaml(join(root, 'Huge.request.yaml'), 25 * 1024 * 1024 + 1024);
+      const artifactDigest = await digestTreeOnDisk(root);
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    }, 180_000);
+
+    it('accepts a >64 KiB semantically valid prebuilt manifest', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
-      const sparse = join(root, 'oversized.bin');
-      writeFileSync(sparse, '');
-      truncateSync(sparse, 25 * 1024 * 1024 + 1);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const collections = [
+        {
+          role: 'baseline',
+          collectionPath: root,
+          cloudId: 'col-baseline',
+          artifactDigest: fixture.artifactDigest,
+          padding: 'x'.repeat(70 * 1024)
+        }
+      ];
+      const manifest = JSON.stringify({ schemaVersion: 1, collections });
+      expect(Buffer.byteLength(manifest, 'utf8')).toBeGreaterThan(64 * 1024);
+      const postman = createExportPostmanStub();
 
-      await expect(
-        runRepoSync(
-          createInputs({
-            prebuiltCollectionsJson: buildPrebuiltManifest([{
-              role: 'baseline',
-              collectionPath: root,
-              cloudId: 'col-baseline',
-              artifactDigest: fixture.artifactDigest
-            }])
-          }),
-          deps(createExportPostmanStub())
-        )
-      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*26214400 bytes/);
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: manifest
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
     });
 
     it.skipIf(process.platform === 'win32')('rejects a nested symlink in a prebuilt tree', async () => {
@@ -809,7 +1160,7 @@ describe('repo sync action', () => {
       rmSync(outside, { recursive: true, force: true });
     });
 
-    it('fails closed on malformed, traversal, symlink, and oversized manifests', async () => {
+    it('fails closed on malformed, traversal, and symlink manifests', async () => {
       const postman = createExportPostmanStub();
 
       await expect(
@@ -880,26 +1231,40 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID|symlink|repository root|artifact-dir/);
       rmSync('postman/collections/core-payments', { force: true });
       rmSync(outside, { recursive: true, force: true });
+    });
 
-      const oversized = {
-        schemaVersion: 1,
-        collections: [
-          {
-            role: 'baseline',
-            collectionPath: 'postman/collections/core-payments',
-            cloudId: 'col-baseline',
-            payloadDigest: sha256Hex('p'),
-            artifactDigest: sha256Hex('a'),
-            padding: 'x'.repeat(70 * 1024)
-          }
-        ]
-      };
-      await expect(
-        runRepoSync(
-          createInputs({ prebuiltCollectionsJson: JSON.stringify(oversized) }),
-          deps(postman)
-        )
-      ).rejects.toThrow(/exceeded .* bytes/);
+    it('leaves prior workflows.yaml unchanged on zero-collection env-only runs', async () => {
+      mkdirSync('.postman', { recursive: true });
+      mkdirSync('packages/sdk', { recursive: true });
+      writeFileSync(
+        'packages/sdk/openapi.json',
+        JSON.stringify({ openapi: '3.0.0', info: { title: 't', version: '1' }, paths: {} })
+      );
+      const prior = [
+        'workflows:',
+        '  syncSpecToCollection:',
+        '    - spec: ../packages/sdk/openapi.json',
+        '      collection: ../postman/collections/prior-only',
+        '      keep: true'
+      ].join('\n');
+      writeFileSync('.postman/workflows.yaml', prior, 'utf8');
+
+      const postman = createExportPostmanStub();
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          baselineCollectionId: '',
+          smokeCollectionId: '',
+          contractCollectionId: '',
+          specId: 'spec-123',
+          specPath: 'packages/sdk/openapi.json'
+        }),
+        deps(postman)
+      );
+
+      expect(readFileSync('.postman/workflows.yaml', 'utf8')).toBe(prior);
+      expect(postman.getCollection).not.toHaveBeenCalled();
     });
 
     it('reconciles current-spec pairs by composite identity and stays idempotent and ID-free', async () => {

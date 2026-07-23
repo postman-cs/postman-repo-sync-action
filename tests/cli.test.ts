@@ -538,6 +538,35 @@ describe('CLI partial result output containment', () => {
     });
   });
 
+  it('rejects overlapping result-json even when repo-write-mode is none', async () => {
+    await withTempCwd(async (dir) => {
+      const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+      await expect(
+        runCli(
+          [
+            '--project-name',
+            'result-boundary',
+            '--postman-api-key',
+            'pmak-ok',
+            '--postman-access-token',
+            'tok-ok',
+            '--credential-preflight',
+            'warn',
+            '--repo-write-mode',
+            'none',
+            '--result-json',
+            'postman/results/result.json'
+          ],
+          { env: {}, executeRepoSync, writeStdout: () => undefined }
+        )
+      ).rejects.toThrow(/must not overlap a generated or staged repository path/);
+      expect(executeRepoSync).not.toHaveBeenCalled();
+      await expect(
+        readFile(path.join(dir, 'postman/results/result.json'), 'utf8')
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   it('rejects a symlink alias into the staged artifact root', async () => {
     await withTempCwd(async (dir) => {
       await mkdir(path.join(dir, 'postman'), { recursive: true });

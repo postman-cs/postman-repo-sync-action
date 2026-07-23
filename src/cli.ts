@@ -559,7 +559,8 @@ export async function runCli(
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
   const branchDecision = decideBranchTier(inputs, config.inputEnv);
-  if (branchDecision.tier !== 'gated' && inputs.repoWriteMode !== 'none') {
+  // Non-gated runs still generate artifact/CI files even when repo-write-mode=none.
+  if (branchDecision.tier !== 'gated') {
     assertResultPathOutsideGeneratedPaths(config.resultJsonPath, inputs);
   }
   const partialOutputs: Record<string, string> = {};

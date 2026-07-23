@@ -4,6 +4,7 @@ import { join, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  computeArtifactDigest,
   convertAndSplitAnyCollection,
   convertAndSplitCollection,
   convertAndSplitV3Collection
@@ -202,5 +203,25 @@ describe('stale artifact removal on re-sync', () => {
     await convertAndSplitCollection(v2Collection, dir);
     const second = walk(dir).sort();
     expect(second).toEqual(first);
+  });
+});
+
+describe('computeArtifactDigest cross-package wire-format golden', () => {
+  it('matches the bootstrap local-collection-artifacts golden constant', () => {
+    // Identical constant is asserted in
+    // cse/postman-bootstrap-action/tests/local-collection-artifacts.test.ts
+    // to pin the cross-action digest wire format against drift.
+    expect(
+      computeArtifactDigest([
+        {
+          relative: 'postman/collections/demo/request.yaml',
+          bytes: '$kind: Request\nname: r1\n'
+        },
+        {
+          relative: 'postman/collections/demo/.resources/definition.yaml',
+          bytes: '$kind: Definition\nname: demo\n'
+        }
+      ])
+    ).toBe('ca388562133f1214ae6662ea655da203221bfcb914a4e42eecab7b8b28458674');
   });
 });
