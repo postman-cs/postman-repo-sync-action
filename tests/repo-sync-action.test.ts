@@ -55,6 +55,7 @@ let readActionInputs: IndexModule['readActionInputs'];
 let resolvePostmanApiKeyAndTeamId: IndexModule['resolvePostmanApiKeyAndTeamId'];
 let runAction: IndexModule['runAction'];
 let runRepoSync: IndexModule['runRepoSync'];
+let prebuiltDirectoryTraversalIdentity: IndexModule['prebuiltDirectoryTraversalIdentity'];
 let __resetIdentityMemo: IdentityModule['__resetIdentityMemo'];
 let createInternalIntegrationAdapter: AdapterModule['createInternalIntegrationAdapter'];
 
@@ -67,7 +68,8 @@ async function reloadRepoSyncModules(): Promise<void> {
     readActionInputs,
     resolvePostmanApiKeyAndTeamId,
     runAction,
-    runRepoSync
+    runRepoSync,
+    prebuiltDirectoryTraversalIdentity
   } = await import('../src/index.js'));
   ({ __resetIdentityMemo } = await import('../src/lib/postman/credential-identity.js'));
   ({ createInternalIntegrationAdapter } = await import(ADAPTER_MODULE));
@@ -641,6 +643,90 @@ describe('repo sync action', () => {
           }
         ]
       }
+    });
+  });
+
+  describe('prebuiltDirectoryTraversalIdentity', () => {
+    it('keeps distinct zero-inode directories from colliding via canonical paths', () => {
+      const left = prebuiltDirectoryTraversalIdentity(
+        'C:\\artifact\\a',
+        { dev: 1, ino: 0 },
+        {
+          platform: 'win32',
+          resolveCanonicalPath: (absolutePath) => absolutePath
+        }
+      );
+      const right = prebuiltDirectoryTraversalIdentity(
+        'C:\\artifact\\b',
+        { dev: 1, ino: 0 },
+        {
+          platform: 'win32',
+          resolveCanonicalPath: (absolutePath) => absolutePath
+        }
+      );
+      expect(left).not.toBe(right);
+      expect(left).toBe('c:\\artifact\\a');
+      expect(right).toBe('c:\\artifact\\b');
+    });
+
+    it('collides aliases that resolve to the same canonical path under zero inode', () => {
+      const canonical = 'C:\\artifact\\real';
+      const viaAlias = prebuiltDirectoryTraversalIdentity(
+        'C:\\artifact\\alias',
+        { dev: 3, ino: 0n },
+        {
+          platform: 'win32',
+          resolveCanonicalPath: () => canonical
+        }
+      );
+      const viaReal = prebuiltDirectoryTraversalIdentity(
+        'C:\\artifact\\real',
+        { dev: 3, ino: 0 },
+        {
+          platform: 'win32',
+          resolveCanonicalPath: () => canonical
+        }
+      );
+      expect(viaAlias).toBe(viaReal);
+      expect(viaAlias).toBe('c:\\artifact\\real');
+    });
+
+    it('uses path-independent dev+ino identity when inode is nonzero', () => {
+      const left = prebuiltDirectoryTraversalIdentity(
+        '/tmp/tree/a',
+        { dev: 10, ino: 42 },
+        {
+          platform: 'linux',
+          resolveCanonicalPath: () => {
+            throw new Error('canonicalizer must not run for nonzero inode');
+          }
+        }
+      );
+      const right = prebuiltDirectoryTraversalIdentity(
+        '/tmp/tree/other-name',
+        { dev: 10, ino: 42n },
+        {
+          platform: 'linux',
+          resolveCanonicalPath: () => {
+            throw new Error('canonicalizer must not run for nonzero inode');
+          }
+        }
+      );
+      expect(left).toBe('10:42');
+      expect(right).toBe('10:42');
+      expect(left).toBe(right);
+    });
+
+    it('preserves canonical case on non-win32 zero-inode paths', () => {
+      const identity = prebuiltDirectoryTraversalIdentity(
+        '/tmp/Tree/A',
+        { dev: 2, ino: 0 },
+        {
+          platform: 'darwin',
+          resolveCanonicalPath: (absolutePath) => absolutePath
+        }
+      );
+      expect(identity).toBe('/tmp/Tree/A');
     });
   });
 

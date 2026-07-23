@@ -1569,6 +1569,36 @@ function assertPathWithinArtifactRoot(
   return normalizeToPosix(path.relative(cwd, resolved));
 }
 
+export type PrebuiltDirectoryTraversalIdentityOptions = {
+  /** Injectable canonical path resolver; production uses realpathSync.native. */
+  resolveCanonicalPath?: (absolutePath: string) => string;
+  /** Injectable platform; production uses process.platform. */
+  platform?: NodeJS.Platform;
+};
+
+/**
+ * Directory identity for prebuilt tree cycle detection.
+ * Nonzero inode: stable `${dev}:${ino}`.
+ * Numeric/bigint zero inode (common for Windows directories): canonical path via
+ * realpathSync.native, lowercased on win32 only.
+ */
+export function prebuiltDirectoryTraversalIdentity(
+  absolutePath: string,
+  stats: { dev: number; ino: number | bigint },
+  options: PrebuiltDirectoryTraversalIdentityOptions = {}
+): string {
+  const inodeIsZero = stats.ino === 0 || stats.ino === 0n;
+  if (!inodeIsZero) {
+    return `${stats.dev}:${stats.ino}`;
+  }
+
+  const resolveCanonicalPath =
+    options.resolveCanonicalPath ?? ((candidate) => realpathSync.native(candidate));
+  const platform = options.platform ?? process.platform;
+  const canonical = resolveCanonicalPath(absolutePath);
+  return platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
 function listPrebuiltCollectionTreeFiles(
   collectionPath: string,
   artifactDir: string
@@ -1613,7 +1643,7 @@ function listPrebuiltCollectionTreeFiles(
         `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
       );
     }
-    const currentKey = `${currentStat.dev}:${currentStat.ino}`;
+    const currentKey = prebuiltDirectoryTraversalIdentity(currentAbsolute, currentStat);
     if (seenDirectories.has(currentKey)) {
       failPrebuiltCollections(
         `prebuilt collection tree directory cycle detected at ${normalizeToPosix(path.relative(absRoot, currentAbsolute)) || '.'}`
