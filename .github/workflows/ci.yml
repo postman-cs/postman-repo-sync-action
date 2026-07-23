@@ -35,7 +35,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
           echo "ACTIONLINT_BIN=$RUNNER_TEMP/actionlint" >> "$GITHUB_ENV"
       # Bundle once before fan-out. Typecheck runs exactly once in the queue.
       - run: npm run bundle
@@ -101,48 +101,20 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          cache: npm
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
+          # node_modules is exact-lock cached below; skip setup-node's npm
+          # package-manager cache restore/save on this warm-sensitive lane.
+          package-manager-cache: false
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        id: windows-node-modules
+        with:
+          path: node_modules
+          key: Windows-node-24-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        if: steps.windows-node-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefer-offline --no-audit --no-fund
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm run bundle
-      - name: Run gates
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $gates = @(
-            @{ Name = 'lint'; Command = { npm run lint; if ($LASTEXITCODE -ne 0) { throw "gate:lint failed with exit code $LASTEXITCODE" } } },
-            @{ Name = 'test'; Command = { npm test; if ($LASTEXITCODE -ne 0) { throw "gate:test failed with exit code $LASTEXITCODE" } } },
-            @{ Name = 'typecheck'; Command = { npm run typecheck; if ($LASTEXITCODE -ne 0) { throw "gate:typecheck failed with exit code $LASTEXITCODE" } } },
-            @{ Name = 'dist'; Command = { npm run verify:dist:assert; if ($LASTEXITCODE -ne 0) { throw "gate:dist failed with exit code $LASTEXITCODE" } } }
-          )
-          $MAX_PARALLEL_GATES = 2
-          $running = @()
-          $results = @{}
-          foreach ($gate in $gates) {
-            while ($running.Count -ge $MAX_PARALLEL_GATES) {
-              $done = Wait-Job -Job $running -Any
-              # Continue + 2>&1: retain failed-child error text without aborting aggregation under Stop.
-              Receive-Job $done -ErrorAction Continue 2>&1 | Out-File "$($done.Name).log"
-              $results[$done.Name] = $done.State -eq 'Completed'
-              Remove-Job $done
-              $running = @($running | Where-Object Id -ne $done.Id)
-            }
-            $running += Start-Job -Name $gate.Name -ScriptBlock $gate.Command
-          }
-          foreach ($job in $running) {
-            Wait-Job $job | Out-Null
-            Receive-Job $job -ErrorAction Continue 2>&1 | Out-File "$($job.Name).log"
-            $results[$job.Name] = $job.State -eq 'Completed'
-            Remove-Job $job
-          }
-          $failed = $false
-          foreach ($gate in $gates) {
-            $name = $gate.Name
-            if ($results[$name]) { Write-Output "gate:$name=pass" } else { Write-Output "gate:$name=fail"; $failed = $true }
-            Write-Output "::group::$name"
-            Get-Content "$name.log"
-            Write-Output '::endgroup::'
-          }
-          if ($failed) { exit 1 }
+      # Node 24's built-in runner executes the same package.json "test" script
+      # without npm.cmd's multi-second Windows boot overhead.
+      - run: node --run test

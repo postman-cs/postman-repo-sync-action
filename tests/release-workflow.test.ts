@@ -85,6 +85,9 @@ describe('release workflow publishing contract', () => {
     expect(verify).not.toContain('cache:');
     expect(verify).toContain('npm ci');
     expect(verify.match(/^\s*- run: npm ci$/gm) ?? []).toHaveLength(1);
+    expect(verify).toContain('registry-url:');
+    expect(verify).toContain('https://registry.npmjs.org');
+    expect(verify).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}');
     expect(verify).toContain('npm run bundle');
     expect(verify.indexOf('npm run bundle')).toBeLessThan(verify.indexOf('Run gates'));
     expect(verify).toContain('MAX_PARALLEL_GATES=2');
