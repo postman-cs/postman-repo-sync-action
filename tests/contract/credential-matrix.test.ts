@@ -268,6 +268,7 @@ function baseInputs(overrides: Record<string, string> = {}): Record<string, stri
 
 describe('contract: repo-sync org x credential matrix', () => {
   let testDir: string;
+  let originalCwd = '';
 
   beforeEach(async () => {
     // Under isolate:false, repo-sync-action.test.ts's hoisted vi.mock of the
@@ -278,6 +279,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     ({ runAction } = await import('../../src/index.js'));
     ({ __resetIdentityMemo } = await import('../../src/lib/postman/credential-identity.js'));
     __resetIdentityMemo();
+    originalCwd = process.cwd();
     testDir = mkdtempSync(join(tmpdir(), 'repo-sync-contract-'));
     process.chdir(testDir);
     for (const name of NEUTRALIZED_ENV_VARS) {
@@ -289,12 +291,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     __resetIdentityMemo();
-    const originalCwd = testDir;
-    try {
-      process.chdir(join(tmpdir()));
-    } catch {
-      void originalCwd;
-    }
+    process.chdir(originalCwd);
     rmSync(testDir, { recursive: true, force: true });
   });
 

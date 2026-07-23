@@ -1,12 +1,20 @@
 // Mock must be at top of file — vitest hoists vi.mock before all imports
-vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
-  createInternalIntegrationAdapter: vi.fn(() => ({
-    createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
-    associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
-    connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
-    findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
-  }))
-}));
+const { ADAPTER_MODULE, createAdapterMockModule } = vi.hoisted(() => {
+  const ADAPTER_MODULE = '../src/lib/postman/internal-integration-adapter.js';
+  function createAdapterMockModule() {
+    return {
+      createInternalIntegrationAdapter: vi.fn(() => ({
+        createApiKey: vi.fn().mockResolvedValue('pmak-generated-from-mock'),
+        associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+        connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+        findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+      }))
+    };
+  }
+  return { ADAPTER_MODULE, createAdapterMockModule };
+});
+
+vi.mock('../src/lib/postman/internal-integration-adapter.js', createAdapterMockModule);
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,22 +23,46 @@ import { join } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  readActionInputs,
-  resolvePostmanApiKeyAndTeamId,
-  runAction,
-  runRepoSync,
-  type RepoSyncDependencies,
-  type ResolvedInputs
+import type {
+  RepoSyncDependencies,
+  ResolvedInputs
 } from '../src/index.js';
-import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
-import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
+
+type IndexModule = typeof import('../src/index.js');
+type IdentityModule = typeof import('../src/lib/postman/credential-identity.js');
+type AdapterModule = typeof import('../src/lib/postman/internal-integration-adapter.js');
+
+let readActionInputs: IndexModule['readActionInputs'];
+let resolvePostmanApiKeyAndTeamId: IndexModule['resolvePostmanApiKeyAndTeamId'];
+let runAction: IndexModule['runAction'];
+let runRepoSync: IndexModule['runRepoSync'];
+let __resetIdentityMemo: IdentityModule['__resetIdentityMemo'];
+let createInternalIntegrationAdapter: AdapterModule['createInternalIntegrationAdapter'];
+
+async function reloadRepoSyncModules(): Promise<void> {
+  // Under isolate:false, earlier suites may have doUnmock'd the adapter or
+  // reset the module graph. Reinstall the stub and rebind imports each test.
+  vi.doMock(ADAPTER_MODULE, createAdapterMockModule);
+  vi.resetModules();
+  ({
+    readActionInputs,
+    resolvePostmanApiKeyAndTeamId,
+    runAction,
+    runRepoSync
+  } = await import('../src/index.js'));
+  ({ __resetIdentityMemo } = await import('../src/lib/postman/credential-identity.js'));
+  ({ createInternalIntegrationAdapter } = await import(ADAPTER_MODULE));
+}
+
+beforeEach(async () => {
+  await reloadRepoSyncModules();
+});
 
 afterAll(() => {
   // isolate:false shares the process with later suites (e.g. credential-matrix)
   // that need the real Bifrost adapter. Clear the hoisted mock + module cache.
-  vi.doUnmock('../src/lib/postman/internal-integration-adapter.js');
+  vi.doUnmock(ADAPTER_MODULE);
   vi.resetModules();
 });
 
