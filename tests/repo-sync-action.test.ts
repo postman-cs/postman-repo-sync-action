@@ -8,7 +8,8 @@ vi.mock('../src/lib/postman/internal-integration-adapter.js', () => ({
   }))
 }));
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +24,7 @@ import {
   type RepoSyncDependencies,
   type ResolvedInputs
 } from '../src/index.js';
+import { computeArtifactDigest } from '../src/postman-v3/converter.js';
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 import { createInternalIntegrationAdapter } from '../src/lib/postman/internal-integration-adapter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
@@ -45,6 +47,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    prebuiltCollectionsJson: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
     releaseLabel: undefined,
@@ -178,6 +181,79 @@ function createCollectionFixture(name: string) {
         ]
       }
     ]
+  };
+}
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function writeCanonicalV3Tree(
+  collectionPath: string,
+  definitionBody = '$kind: collection\nname: Fixture\n'
+): { artifactDigest: string; files: Array<{ relative: string; bytes: Buffer }> } {
+  mkdirSync(join(collectionPath, '.resources'), { recursive: true });
+  writeFileSync(join(collectionPath, '.resources', 'definition.yaml'), definitionBody, 'utf8');
+  writeFileSync(join(collectionPath, 'List.request.yaml'), '$kind: http-request\nmethod: GET\n', 'utf8');
+  const files = [
+    {
+      relative: '.resources/definition.yaml',
+      bytes: readFileSync(join(collectionPath, '.resources', 'definition.yaml'))
+    },
+    {
+      relative: 'List.request.yaml',
+      bytes: readFileSync(join(collectionPath, 'List.request.yaml'))
+    }
+  ];
+  return { artifactDigest: computeArtifactDigest(files), files };
+}
+
+function buildPrebuiltManifest(
+  entries: Array<{
+    role: 'baseline' | 'smoke' | 'contract';
+    collectionPath: string;
+    cloudId: string;
+    artifactDigest: string;
+    payloadDigest?: string;
+  }>,
+  wrapped = false
+): string {
+  const collections = entries.map((entry) => ({
+    role: entry.role,
+    collectionPath: entry.collectionPath,
+    cloudId: entry.cloudId,
+    payloadDigest: entry.payloadDigest ?? sha256Hex(`payload:${entry.role}`),
+    artifactDigest: entry.artifactDigest
+  }));
+  return wrapped
+    ? JSON.stringify({ schemaVersion: 1, collections })
+    : JSON.stringify(collections);
+}
+
+function createExportPostmanStub() {
+  return {
+    createEnvironment: vi.fn().mockResolvedValue('env-prod'),
+    updateEnvironment: vi.fn().mockResolvedValue(undefined),
+    findEnvironmentByName: vi.fn().mockResolvedValue(null),
+    createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
+    createMonitor: vi.fn().mockResolvedValue('mon-1'),
+    getCollection: vi
+      .fn()
+      .mockResolvedValueOnce(createCollectionFixture('core-payments'))
+      .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
+      .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
+    getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+    listMonitors: vi.fn().mockResolvedValue([]),
+    listMocks: vi.fn().mockResolvedValue([]),
+    monitorExists: vi.fn().mockResolvedValue(false),
+    mockExists: vi.fn().mockResolvedValue(false),
+    findMonitorByCollection: vi.fn().mockResolvedValue(null),
+    findMockByCollection: vi.fn().mockResolvedValue(null),
+    runMonitor: vi.fn().mockResolvedValue(undefined),
+    listEnvironments: vi.fn().mockResolvedValue([]),
+    deleteEnvironment: vi.fn().mockResolvedValue(undefined),
+    deleteMock: vi.fn().mockResolvedValue(undefined),
+    deleteMonitor: vi.fn().mockResolvedValue(undefined)
   };
 }
 
@@ -443,6 +519,419 @@ describe('repo sync action', () => {
           }
         ]
       }
+    });
+  });
+
+  describe('prebuilt-collections-json digest-bound reuse', () => {
+    function deps(postman: ReturnType<typeof createExportPostmanStub>) {
+      return {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      };
+    }
+
+    it('keeps cloud export behavior when the prebuilt manifest is absent', async () => {
+      const postman = createExportPostmanStub();
+      await runRepoSync(createInputs({ prebuiltCollectionsJson: '' }), deps(postman));
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+    });
+
+    it('reuses an exact digest-bound canonical tree without cloud get/export', async () => {
+      const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
+      const smoke = writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      const contract = writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: 'postman/collections/core-payments',
+              cloudId: 'col-baseline',
+              artifactDigest: baseline.artifactDigest
+            },
+            {
+              role: 'smoke',
+              collectionPath: 'postman/collections/[Smoke] core-payments',
+              cloudId: 'col-smoke',
+              artifactDigest: smoke.artifactDigest
+            },
+            {
+              role: 'contract',
+              collectionPath: 'postman/collections/[Contract] core-payments',
+              cloudId: 'col-contract',
+              artifactDigest: contract.artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(0);
+      expect(
+        readFileSync('postman/collections/core-payments/.resources/definition.yaml', 'utf8')
+      ).toContain('$kind: collection');
+    });
+
+    it('cloud-exports when digest, path, role name, or cloud ID mismatches', async () => {
+      const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest(
+            [
+              {
+                role: 'baseline',
+                collectionPath: 'postman/collections/core-payments',
+                cloudId: 'col-baseline',
+                artifactDigest: sha256Hex('wrong-digest')
+              },
+              {
+                role: 'smoke',
+                collectionPath: 'postman/collections/wrong-smoke-name',
+                cloudId: 'col-smoke',
+                artifactDigest: baseline.artifactDigest
+              },
+              {
+                role: 'contract',
+                collectionPath: 'postman/collections/[Contract] core-payments',
+                cloudId: 'col-other',
+                artifactDigest: baseline.artifactDigest
+              }
+            ],
+            true
+          )
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
+    });
+
+    it.each([
+      ['invalid role', { role: 'admin' }],
+      ['malformed payload digest', { payloadDigest: 'not-a-digest' }],
+      ['malformed artifact digest', { artifactDigest: 'ABC' }],
+      ['invalid cloudId', { cloudId: 'bad cloud id' }],
+      ['oversized cloudId', { cloudId: `c${'x'.repeat(128)}` }]
+    ])('rejects %s in a prebuilt manifest', async (_name, override) => {
+      const entry = {
+        role: 'baseline',
+        collectionPath: 'postman/collections/core-payments',
+        cloudId: 'col-baseline',
+        payloadDigest: sha256Hex('payload'),
+        artifactDigest: sha256Hex('artifact'),
+        ...override
+      };
+
+      await expect(
+        runRepoSync(
+          createInputs({ prebuiltCollectionsJson: JSON.stringify([entry]) }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
+    });
+
+    it('rejects excessive prebuilt tree depth before descending recursively', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      let current = root;
+      for (let depth = 0; depth < 65; depth += 1) {
+        current = join(current, 'nested');
+        mkdirSync(current);
+      }
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([{
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }])
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*depth 64/);
+    });
+
+    it('rejects excessive prebuilt directory count before descending', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      for (let index = 0; index < 512; index += 1) {
+        mkdirSync(join(root, `dir-${index}`));
+      }
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([{
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }])
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*512 directories/);
+    });
+
+    it('rejects prebuilt trees with more than 2000 files', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      for (let index = 0; index < 1999; index += 1) {
+        writeFileSync(join(root, `extra-${index}.yaml`), 'x');
+      }
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([{
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }])
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*2000 files/);
+    });
+
+    it('rejects an oversized sparse prebuilt file before allocating its contents', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      const sparse = join(root, 'oversized.bin');
+      writeFileSync(sparse, '');
+      truncateSync(sparse, 25 * 1024 * 1024 + 1);
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([{
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }])
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*26214400 bytes/);
+    });
+
+    it.skipIf(process.platform === 'win32')('rejects a nested symlink in a prebuilt tree', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      const outside = mkdtempSync(join(tmpdir(), 'prebuilt-nested-link-'));
+      symlinkSync(outside, join(root, 'nested-link'));
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([{
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: fixture.artifactDigest
+            }])
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*symlinks/);
+      rmSync(outside, { recursive: true, force: true });
+    });
+
+    it('fails closed on malformed, traversal, symlink, and oversized manifests', async () => {
+      const postman = createExportPostmanStub();
+
+      await expect(
+        runRepoSync(
+          createInputs({ prebuiltCollectionsJson: '{not-json' }),
+          deps(postman)
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID/);
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([
+              {
+                role: 'baseline',
+                collectionPath: '../escape',
+                cloudId: 'col-baseline',
+                artifactDigest: sha256Hex('x')
+              }
+            ])
+          }),
+          deps(postman)
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID|repository root|artifact-dir/);
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            prebuiltCollectionsJson: buildPrebuiltManifest([
+              {
+                role: 'baseline',
+                collectionPath: 'postman/collections/core-payments',
+                cloudId: 'col-baseline',
+                artifactDigest: sha256Hex('a')
+              },
+              {
+                role: 'baseline',
+                collectionPath: 'postman/collections/other',
+                cloudId: 'col-other',
+                artifactDigest: sha256Hex('b')
+              }
+            ])
+          }),
+          deps(postman)
+        )
+      ).rejects.toThrow(/duplicate role/);
+
+      mkdirSync('postman/collections', { recursive: true });
+      const outside = mkdtempSync(join(tmpdir(), 'prebuilt-escape-'));
+      writeCanonicalV3Tree(outside);
+      symlinkSync(outside, 'postman/collections/core-payments');
+      await expect(
+        runRepoSync(
+          createInputs({
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            prebuiltCollectionsJson: buildPrebuiltManifest([
+              {
+                role: 'baseline',
+                collectionPath: 'postman/collections/core-payments',
+                cloudId: 'col-baseline',
+                artifactDigest: sha256Hex('symlink-tree')
+              }
+            ])
+          }),
+          deps(postman)
+        )
+      ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID|symlink|repository root|artifact-dir/);
+      rmSync('postman/collections/core-payments', { force: true });
+      rmSync(outside, { recursive: true, force: true });
+
+      const oversized = {
+        schemaVersion: 1,
+        collections: [
+          {
+            role: 'baseline',
+            collectionPath: 'postman/collections/core-payments',
+            cloudId: 'col-baseline',
+            payloadDigest: sha256Hex('p'),
+            artifactDigest: sha256Hex('a'),
+            padding: 'x'.repeat(70 * 1024)
+          }
+        ]
+      };
+      await expect(
+        runRepoSync(
+          createInputs({ prebuiltCollectionsJson: JSON.stringify(oversized) }),
+          deps(postman)
+        )
+      ).rejects.toThrow(/exceeded .* bytes/);
+    });
+
+    it('merge-preserves unrelated workflows/options and stays ID-free', async () => {
+      mkdirSync('.postman', { recursive: true });
+      mkdirSync('packages/sdk', { recursive: true });
+      writeFileSync(
+        'packages/sdk/openapi.json',
+        JSON.stringify({ openapi: '3.0.0', info: { title: 't', version: '1' }, paths: {} })
+      );
+      writeFileSync(
+        '.postman/workflows.yaml',
+        [
+          'generation:',
+          '  mode: keep-me',
+          'sync:',
+          '  option: preserved',
+          'workflows:',
+          '  customKeep: true',
+          '  syncSpecToCollection:',
+          '    - spec: ../other.yaml',
+          '      collection: ../postman/collections/other',
+          '    - spec: ../stale.yaml',
+          '      collection: ../postman/collections/core-payments',
+          '      extra: keep-extra'
+        ].join('\n'),
+        'utf8'
+      );
+
+      const postman = createExportPostmanStub();
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          specId: 'spec-123',
+          specPath: 'packages/sdk/openapi.json'
+        }),
+        deps(postman)
+      );
+
+      const workflowsYaml = loadYaml(readFileSync('.postman/workflows.yaml', 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      expect(workflowsYaml.generation).toEqual({ mode: 'keep-me' });
+      expect(workflowsYaml.sync).toEqual({ option: 'preserved' });
+      expect(workflowsYaml.workflows).toMatchObject({
+        customKeep: true,
+        syncSpecToCollection: expect.arrayContaining([
+          {
+            spec: '../other.yaml',
+            collection: '../postman/collections/other'
+          },
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/core-payments',
+            extra: 'keep-extra'
+          },
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/[Smoke] core-payments'
+          },
+          {
+            spec: '../packages/sdk/openapi.json',
+            collection: '../postman/collections/[Contract] core-payments'
+          }
+        ])
+      });
+      const serialized = readFileSync('.postman/workflows.yaml', 'utf8');
+      expect(serialized).not.toMatch(/\bid\s*:/);
+      expect(serialized).not.toMatch(/collectionId|cloudId|uid:/i);
     });
   });
 

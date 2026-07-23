@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
@@ -160,6 +161,25 @@ function isV2Collection(collection: unknown): boolean {
 function structuredCloneSafe<T>(value: T): T {
   if (typeof structuredClone === 'function') return structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * SHA-256 over canonical sorted relative file paths + raw bytes for a Collection
+ * v3 tree. Matches bootstrap's local-artifact digest so prebuilt manifests can
+ * be reused without a cloud export round-trip.
+ */
+export function computeArtifactDigest(
+  files: Array<{ relative: string; bytes: Buffer | string }>
+): string {
+  const hash = createHash('sha256');
+  const sorted = [...files].sort((a, b) => a.relative.localeCompare(b.relative));
+  for (const file of sorted) {
+    hash.update(file.relative);
+    hash.update('\0');
+    hash.update(typeof file.bytes === 'string' ? Buffer.from(file.bytes, 'utf8') : file.bytes);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
 /**

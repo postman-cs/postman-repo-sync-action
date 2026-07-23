@@ -106,6 +106,12 @@ export const postmanRepoSyncActionContract: {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
     },
+    'prebuilt-collections-json': {
+      description:
+        'Optional digest-bound JSON manifest of locally materialized Collection v3 trees (schemaVersion 1 or a bare entry array). Exact path/cloudId/tree/artifactDigest matches reuse the on-disk tree without cloud export.',
+      required: false,
+      default: ''
+    },
     'collection-sync-mode': {
       description: 'Collection sync lifecycle mode (refresh or version).',
       required: false,

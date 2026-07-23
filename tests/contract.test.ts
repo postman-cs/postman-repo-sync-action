@@ -37,6 +37,7 @@ describe('postman-repo-sync-action contract', () => {
       'monitor-type',
       'smoke-collection-id',
       'contract-collection-id',
+      'prebuilt-collections-json',
       'collection-sync-mode',
       'spec-sync-mode',
       'release-label',

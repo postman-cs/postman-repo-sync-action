@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -12,7 +13,10 @@ import {
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
-import { convertAndSplitAnyCollection } from './postman-v3/converter.js';
+import {
+  computeArtifactDigest,
+  convertAndSplitAnyCollection
+} from './postman-v3/converter.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
@@ -78,6 +82,8 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  /** Optional digest-bound prebuilt collection manifest JSON from bootstrap. */
+  prebuiltCollectionsJson?: string;
   collectionSyncMode: 'refresh' | 'version';
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
@@ -453,6 +459,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     baselineCollectionId: getInput('baseline-collection-id', env),
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
+    prebuiltCollectionsJson: getInput('prebuilt-collections-json', env),
     specId: getInput('spec-id', env),
     specContentChanged: parseBooleanInput(getInput('spec-content-changed', env), true),
     specPath: getInput('spec-path', env),
@@ -855,6 +862,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_PREBUILT_COLLECTIONS_JSON: readInput(actionCore, 'prebuilt-collections-json'),
     INPUT_SPEC_ID: readInput(actionCore, 'spec-id'),
     INPUT_SPEC_PATH: readInput(actionCore, 'spec-path'),
     INPUT_COLLECTION_SYNC_MODE: readInput(actionCore, 'collection-sync-mode') || 'refresh',
@@ -1292,25 +1300,518 @@ function buildResourcesManifest(
   });
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Merge-preserving upsert for `.postman/workflows.yaml`: keep unknown top-level
+ * keys, unknown workflow kinds, unrelated syncSpecToCollection pairs, and any
+ * generation/sync options. Upsert only the current ID-free pairs by collection
+ * path; never introduce IDs or reverse links.
+ */
 function buildSpecCollectionWorkflowManifest(
   specRef: string,
-  collectionRefs: string[]
+  collectionRefs: string[],
+  existingRaw?: string
 ): string {
-  return dumpYaml(
-    {
-      workflows: {
-        syncSpecToCollection: collectionRefs.map((collectionRef) => ({
-          spec: specRef,
-          collection: collectionRef
-        }))
-      }
-    },
-    {
-      lineWidth: -1,
-      noRefs: true,
-      sortKeys: false
+  const pairs = collectionRefs.map((collectionRef) => ({
+    spec: specRef,
+    collection: collectionRef
+  }));
+
+  let root: Record<string, unknown> = {};
+  if (typeof existingRaw === 'string' && existingRaw.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = loadYaml(existingRaw);
+    } catch (error) {
+      throw new Error(
+        `CONTRACT_WORKFLOWS_UNREADABLE: .postman/workflows.yaml exists but is not parseable YAML (${error instanceof Error ? error.message : String(error)}). Fix or delete the file; refusing to overwrite unrelated workflow data.`,
+        { cause: error }
+      );
     }
+    if (parsed === null || parsed === undefined) {
+      root = {};
+    } else if (!isPlainObject(parsed)) {
+      throw new Error(
+        'CONTRACT_WORKFLOWS_UNREADABLE: .postman/workflows.yaml exists but does not contain a YAML mapping. Fix or delete the file; refusing to overwrite unrelated workflow data.'
+      );
+    } else {
+      root = { ...parsed };
+    }
+  }
+
+  const workflows = isPlainObject(root.workflows) ? { ...root.workflows } : {};
+  const currentPairs = (Array.isArray(workflows.syncSpecToCollection)
+    ? workflows.syncSpecToCollection
+    : []
+  )
+    .map((entry) => (isPlainObject(entry) ? { ...entry } : null))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+
+  for (const pair of pairs) {
+    const index = currentPairs.findIndex(
+      (entry) => String(entry.collection ?? '') === pair.collection
+    );
+    if (index >= 0) {
+      const previous = currentPairs[index]!;
+      currentPairs[index] = { ...previous, spec: pair.spec, collection: pair.collection };
+    } else {
+      currentPairs.push({ spec: pair.spec, collection: pair.collection });
+    }
+  }
+
+  workflows.syncSpecToCollection = currentPairs;
+  root.workflows = workflows;
+
+  return dumpYaml(root, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false
+  });
+}
+
+type PrebuiltCollectionRole = 'baseline' | 'smoke' | 'contract';
+
+type PrebuiltCollectionEntry = {
+  role: PrebuiltCollectionRole;
+  collectionPath: string;
+  cloudId: string;
+  payloadDigest: string;
+  artifactDigest: string;
+};
+
+const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
+  'baseline',
+  'smoke',
+  'contract'
+]);
+
+/** Conservative bounds for digest-bound prebuilt manifests and on-disk trees. */
+const PREBUILT_COLLECTIONS_LIMITS = {
+  maxEntries: 3,
+  maxInputBytes: 64 * 1024,
+  maxFilesPerTree: 2000,
+  maxDirectoriesPerTree: 512,
+  maxTreeEntries: 2500,
+  maxTreeDepth: 64,
+  maxBytesPerTree: 25 * 1024 * 1024,
+  maxPathLength: 512,
+  maxIdLength: 128
+} as const;
+
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+const PREBUILT_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function failPrebuiltCollections(detail: string): never {
+  throw new Error(`CONTRACT_PREBUILT_COLLECTIONS_INVALID: ${detail}`);
+}
+
+function parsePrebuiltCollectionsJson(raw: string): PrebuiltCollectionEntry[] {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (Buffer.byteLength(trimmed, 'utf8') > PREBUILT_COLLECTIONS_LIMITS.maxInputBytes) {
+    failPrebuiltCollections(
+      `input exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxInputBytes} bytes`
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch (error) {
+    throw new Error(
+      `CONTRACT_PREBUILT_COLLECTIONS_INVALID: malformed JSON (${error instanceof Error ? error.message : String(error)})`,
+      { cause: error }
+    );
+  }
+
+  let entriesRaw: unknown[];
+  if (Array.isArray(parsed)) {
+    entriesRaw = parsed;
+  } else if (isPlainObject(parsed)) {
+    if (parsed.schemaVersion !== 1) {
+      failPrebuiltCollections('schemaVersion must be 1');
+    }
+    if (!Array.isArray(parsed.collections)) {
+      failPrebuiltCollections('collections must be an array when schemaVersion is set');
+    }
+    entriesRaw = parsed.collections;
+  } else {
+    failPrebuiltCollections('expected a JSON array or {schemaVersion:1,collections:[]}');
+  }
+
+  if (entriesRaw.length > PREBUILT_COLLECTIONS_LIMITS.maxEntries) {
+    failPrebuiltCollections(
+      `at most ${PREBUILT_COLLECTIONS_LIMITS.maxEntries} role entries are allowed`
+    );
+  }
+
+  const seenRoles = new Set<PrebuiltCollectionRole>();
+  const entries: PrebuiltCollectionEntry[] = [];
+
+  for (const [index, value] of entriesRaw.entries()) {
+    if (!isPlainObject(value)) {
+      failPrebuiltCollections(`collections[${index}] must be an object`);
+    }
+    const roleRaw = String(value.role ?? '').trim();
+    if (!PREBUILT_COLLECTION_ROLES.has(roleRaw as PrebuiltCollectionRole)) {
+      failPrebuiltCollections(
+        `collections[${index}].role must be one of baseline|smoke|contract`
+      );
+    }
+    const role = roleRaw as PrebuiltCollectionRole;
+    if (seenRoles.has(role)) {
+      failPrebuiltCollections(`duplicate role ${role}`);
+    }
+    seenRoles.add(role);
+
+    const collectionPath = String(
+      value.collectionPath ?? value.path ?? ''
+    ).trim();
+    if (
+      !collectionPath ||
+      collectionPath.length > PREBUILT_COLLECTIONS_LIMITS.maxPathLength ||
+      hasControlCharacter(collectionPath)
+    ) {
+      failPrebuiltCollections(
+        `collections[${index}].collectionPath must be a non-empty confined relative path`
+      );
+    }
+
+    const cloudId = String(value.cloudId ?? '').trim();
+    if (!cloudId || !PREBUILT_CLOUD_ID.test(cloudId)) {
+      failPrebuiltCollections(
+        `collections[${index}].cloudId must be a non-empty Postman collection id`
+      );
+    }
+
+    const payloadDigest = String(value.payloadDigest ?? '').trim();
+    if (!SHA256_HEX.test(payloadDigest)) {
+      failPrebuiltCollections(
+        `collections[${index}].payloadDigest must be lowercase 64-hex`
+      );
+    }
+
+    const artifactDigest = String(value.artifactDigest ?? '').trim();
+    if (!SHA256_HEX.test(artifactDigest)) {
+      failPrebuiltCollections(
+        `collections[${index}].artifactDigest must be lowercase 64-hex`
+      );
+    }
+
+    entries.push({
+      role,
+      collectionPath,
+      cloudId,
+      payloadDigest,
+      artifactDigest
+    });
+  }
+
+  return entries;
+}
+
+function assertPathWithinArtifactRoot(
+  targetPath: string,
+  artifactDir: string,
+  fieldName: string
+): string {
+  assertPathWithinCwd(targetPath, fieldName);
+  assertPathWithinCwd(artifactDir, 'artifact-dir');
+
+  const cwd = realpathSync(process.cwd());
+  const artifactRoot = path.resolve(cwd, artifactDir.trim());
+  const resolved = path.resolve(cwd, targetPath.trim());
+  const relativeToArtifact = path.relative(artifactRoot, resolved);
+  if (
+    !relativeToArtifact ||
+    relativeToArtifact.startsWith('..') ||
+    path.isAbsolute(relativeToArtifact)
+  ) {
+    failPrebuiltCollections(
+      `${fieldName} must stay under artifact-dir (${artifactDir}); received ${targetPath}`
+    );
+  }
+
+  let existingPath = resolved;
+  while (!existsSync(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) {
+      break;
+    }
+    existingPath = parent;
+  }
+  const realExisting = realpathSync(existingPath);
+  const realRelative = path.relative(artifactRoot, realExisting);
+  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+    failPrebuiltCollections(
+      `${fieldName} resolves outside artifact-dir via symlink; received ${targetPath}`
+    );
+  }
+
+  return normalizeToPosix(path.relative(cwd, resolved));
+}
+
+function readPrebuiltCollectionTreeFiles(
+  collectionPath: string,
+  artifactDir: string
+): Array<{ relative: string; bytes: Buffer }> {
+  const confined = assertPathWithinArtifactRoot(
+    collectionPath,
+    artifactDir,
+    'prebuilt collection path'
   );
+  const absRoot = path.resolve(process.cwd(), confined);
+  if (!existsSync(absRoot)) {
+    return [];
+  }
+
+  let rootStat;
+  try {
+    rootStat = lstatSync(absRoot);
+  } catch {
+    return [];
+  }
+  if (rootStat.isSymbolicLink()) {
+    failPrebuiltCollections(
+      `prebuilt collection path must not be a symlink; received ${collectionPath}`
+    );
+  }
+  if (!rootStat.isDirectory()) {
+    return [];
+  }
+
+  const files: Array<{ relative: string; bytes: Buffer }> = [];
+  let totalBytes = 0;
+  let directoryCount = 1;
+  let entryCount = 0;
+  const pendingDirectories: Array<{ absolute: string; depth: number }> = [
+    { absolute: absRoot, depth: 0 }
+  ];
+
+  while (pendingDirectories.length > 0) {
+    const current = pendingDirectories.shift();
+    if (!current) {
+      break;
+    }
+    const currentStat = lstatSync(current.absolute);
+    if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
+      failPrebuiltCollections(
+        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, current.absolute)) || '.'}`
+      );
+    }
+
+    const entries = readdirSync(current.absolute, { withFileTypes: true });
+    entryCount += entries.length;
+    if (entryCount > PREBUILT_COLLECTIONS_LIMITS.maxTreeEntries) {
+      failPrebuiltCollections(
+        `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxTreeEntries} entries`
+      );
+    }
+
+    for (const entry of entries) {
+      const abs = path.join(current.absolute, entry.name);
+      if (entry.isSymbolicLink()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree must not contain symlinks; received ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      if (entry.isDirectory()) {
+        const depth = current.depth + 1;
+        if (depth > PREBUILT_COLLECTIONS_LIMITS.maxTreeDepth) {
+          failPrebuiltCollections(
+            `prebuilt collection tree exceeded depth ${PREBUILT_COLLECTIONS_LIMITS.maxTreeDepth}`
+          );
+        }
+        directoryCount += 1;
+        if (directoryCount > PREBUILT_COLLECTIONS_LIMITS.maxDirectoriesPerTree) {
+          failPrebuiltCollections(
+            `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxDirectoriesPerTree} directories`
+          );
+        }
+        pendingDirectories.push({ absolute: abs, depth });
+        continue;
+      }
+      if (!entry.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree contains unsupported entry type at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      if (files.length >= PREBUILT_COLLECTIONS_LIMITS.maxFilesPerTree) {
+        failPrebuiltCollections(
+          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxFilesPerTree} files`
+        );
+      }
+      const beforeLstat = lstatSync(abs);
+      const beforeStat = statSync(abs);
+      if (
+        beforeLstat.isSymbolicLink() ||
+        !beforeLstat.isFile() ||
+        !beforeStat.isFile() ||
+        beforeLstat.dev !== beforeStat.dev ||
+        beforeLstat.ino !== beforeStat.ino
+      ) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      const remainingBytes = PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree - totalBytes;
+      if (beforeStat.size > remainingBytes) {
+        failPrebuiltCollections(
+          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree} bytes`
+        );
+      }
+      const bytes = readFileSync(abs);
+      const afterStat = statSync(abs);
+      if (
+        bytes.byteLength !== beforeStat.size ||
+        afterStat.size !== beforeStat.size ||
+        afterStat.dev !== beforeStat.dev ||
+        afterStat.ino !== beforeStat.ino
+      ) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed while reading at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      totalBytes += bytes.byteLength;
+      if (totalBytes > PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree) {
+        failPrebuiltCollections(
+          `prebuilt collection tree exceeded ${PREBUILT_COLLECTIONS_LIMITS.maxBytesPerTree} bytes`
+        );
+      }
+      files.push({
+        relative: normalizeToPosix(path.relative(absRoot, abs)),
+        bytes
+      });
+    }
+  }
+  return files;
+}
+
+function isCanonicalV3CollectionTree(
+  files: Array<{ relative: string; bytes: Buffer }>
+): boolean {
+  const definition = files.find(
+    (file) => file.relative === '.resources/definition.yaml'
+  );
+  if (!definition) {
+    return false;
+  }
+  try {
+    const parsed = loadYaml(definition.bytes.toString('utf8'));
+    if (!isPlainObject(parsed)) {
+      return false;
+    }
+    return parsed.$kind === 'collection';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempt digest-bound reuse of a bootstrap-materialized Collection v3 tree.
+ * Returns true when the entry exactly matches path, cloud ID, canonical tree,
+ * and artifactDigest. Ordinary mismatches return false (caller cloud-exports).
+ * Hostile/malformed trees fail closed via thrown CONTRACT_* errors.
+ */
+function tryReusePrebuiltCollection(options: {
+  entry: PrebuiltCollectionEntry;
+  expectedPath: string;
+  expectedCloudId: string;
+  artifactDir: string;
+}): boolean {
+  const { entry, expectedPath, expectedCloudId, artifactDir } = options;
+  if (!expectedCloudId || entry.cloudId !== expectedCloudId) {
+    return false;
+  }
+
+  const expectedNormalized = normalizeToPosix(expectedPath.replace(/\/+$/g, ''));
+  const entryNormalized = normalizeToPosix(entry.collectionPath.replace(/\/+$/g, ''));
+  if (entryNormalized !== expectedNormalized) {
+    return false;
+  }
+
+  // Path confinement / symlink escape fail closed before ordinary mismatch.
+  const confined = assertPathWithinArtifactRoot(
+    entry.collectionPath,
+    artifactDir,
+    'prebuilt collection path'
+  );
+  if (confined !== expectedNormalized) {
+    return false;
+  }
+
+  const expectedName = path.posix.basename(expectedNormalized);
+  if (path.posix.basename(confined) !== expectedName) {
+    return false;
+  }
+
+  const files = readPrebuiltCollectionTreeFiles(confined, artifactDir);
+  if (files.length === 0) {
+    return false;
+  }
+  if (!isCanonicalV3CollectionTree(files)) {
+    return false;
+  }
+
+  const digest = computeArtifactDigest(files);
+  return digest === entry.artifactDigest;
+}
+
+async function exportCollectionArtifact(options: {
+  role: PrebuiltCollectionRole;
+  collectionId: string;
+  dirName: string;
+  collectionsDir: string;
+  artifactDir: string;
+  prebuiltByRole: Map<PrebuiltCollectionRole, PrebuiltCollectionEntry>;
+  postman: RepoSyncDependencies['postman'];
+  core: RepoSyncDependencies['core'];
+}): Promise<string | undefined> {
+  const {
+    role,
+    collectionId,
+    dirName,
+    collectionsDir,
+    artifactDir,
+    prebuiltByRole,
+    postman,
+    core
+  } = options;
+  if (!collectionId) {
+    return undefined;
+  }
+
+  const expectedPath = `${collectionsDir}/${dirName}`;
+  const entry = prebuiltByRole.get(role);
+  if (entry) {
+    const reused = tryReusePrebuiltCollection({
+      entry,
+      expectedPath,
+      expectedCloudId: collectionId,
+      artifactDir
+    });
+    if (reused) {
+      core.info(
+        `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
+      );
+      return `../${expectedPath}`;
+    }
+    core.info(
+      `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`
+    );
+  }
+
+  const col = await postman.getCollection(collectionId);
+  await convertAndSplitAnyCollection(
+    col as Parameters<typeof convertAndSplitAnyCollection>[0],
+    expectedPath
+  );
+  return `../${expectedPath}`;
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -1421,26 +1922,59 @@ async function exportArtifacts(
         )
       : undefined;
 
-  if (inputs.baselineCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.baselineCollectionId);
-    const dirName = getCollectionDirectoryName('Baseline', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.baselineCollectionId;
+  // Fail closed on hostile/malformed manifests before any cloud export work.
+  const prebuiltEntries = parsePrebuiltCollectionsJson(inputs.prebuiltCollectionsJson ?? '');
+  for (const entry of prebuiltEntries) {
+    assertPathWithinArtifactRoot(
+      entry.collectionPath,
+      inputs.artifactDir,
+      `prebuilt ${entry.role} collection path`
+    );
   }
-  if (inputs.smokeCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.smokeCollectionId);
-    const dirName = getCollectionDirectoryName('Smoke', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.smokeCollectionId;
+  const prebuiltByRole = new Map(
+    prebuiltEntries.map((entry) => [entry.role, entry] as const)
+  );
+
+  const baselineRef = await exportCollectionArtifact({
+    role: 'baseline',
+    collectionId: inputs.baselineCollectionId,
+    dirName: getCollectionDirectoryName('Baseline', assetProjectName),
+    collectionsDir,
+    artifactDir: inputs.artifactDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (baselineRef) {
+    manifestCollections[baselineRef] = inputs.baselineCollectionId;
   }
-  if (inputs.contractCollectionId) {
-    const col = await dependencies.postman.getCollection(inputs.contractCollectionId);
-    const dirName = getCollectionDirectoryName('Contract', assetProjectName);
-    await convertAndSplitAnyCollection(col as Parameters<typeof convertAndSplitAnyCollection>[0], `${collectionsDir}/${dirName}`);
-    manifestCollections[`../${collectionsDir}/${dirName}`] =
-      inputs.contractCollectionId;
+
+  const smokeRef = await exportCollectionArtifact({
+    role: 'smoke',
+    collectionId: inputs.smokeCollectionId,
+    dirName: getCollectionDirectoryName('Smoke', assetProjectName),
+    collectionsDir,
+    artifactDir: inputs.artifactDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (smokeRef) {
+    manifestCollections[smokeRef] = inputs.smokeCollectionId;
+  }
+
+  const contractRef = await exportCollectionArtifact({
+    role: 'contract',
+    collectionId: inputs.contractCollectionId,
+    dirName: getCollectionDirectoryName('Contract', assetProjectName),
+    collectionsDir,
+    artifactDir: inputs.artifactDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core
+  });
+  if (contractRef) {
+    manifestCollections[contractRef] = inputs.contractCollectionId;
   }
 
   for (const [envName, envUid] of Object.entries(envUids)) {
@@ -1471,11 +2005,18 @@ async function exportArtifacts(
   ));
 
   if (mappedSpec && Object.keys(manifestCollections).length > 0) {
+    let existingWorkflows: string | undefined;
+    try {
+      existingWorkflows = readFileSync('.postman/workflows.yaml', 'utf8');
+    } catch {
+      existingWorkflows = undefined;
+    }
     writeFileSync(
       '.postman/workflows.yaml',
       buildSpecCollectionWorkflowManifest(
         mappedSpec.configRelativePath,
-        Object.keys(manifestCollections)
+        Object.keys(manifestCollections),
+        existingWorkflows
       )
     );
   }

@@ -138,6 +138,7 @@ with:
 | `monitor-type` | Type of monitor to create ("cloud" or "cli"). "cli" will skip cloud monitor creation and rely on the CI workflow. | no | `cloud` |
 | `smoke-collection-id` | Smoke collection ID used for monitor creation. | no |  |
 | `contract-collection-id` | Contract collection ID used for exported artifacts. | no |  |
+| `prebuilt-collections-json` | Optional digest-bound JSON manifest of locally materialized Collection v3 trees (schemaVersion 1 or a bare entry array). When a role entry exactly matches path, cloud ID, canonical tree, and artifactDigest, repo-sync reuses that tree instead of cloud-exporting the collection. | no | `""` |
 | `collection-sync-mode` | Collection sync lifecycle mode (refresh or version). | no | `refresh` |
 | `spec-sync-mode` | Spec sync lifecycle mode (update or version). | no | `update` |
 | `release-label` | Optional release label used for versioned naming. | no |  |

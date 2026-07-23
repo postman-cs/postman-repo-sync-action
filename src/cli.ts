@@ -44,6 +44,7 @@ const CLI_INPUT_NAMES = [
   'baseline-collection-id',
   'smoke-collection-id',
   'contract-collection-id',
+  'prebuilt-collections-json',
   'collection-sync-mode',
   'spec-sync-mode',
   'release-label',
