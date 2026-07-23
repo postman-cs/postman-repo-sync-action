@@ -2,10 +2,25 @@
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
+export const REDACTED_TOKEN_MARKER = '[REDACTED]';
 
 const DISPATCH_URL =
   'https://api.github.com/repos/postman-cs/postman-actions-e2e/actions/workflows/e2e.yml/dispatches';
 const GITHUB_API_VERSION = '2026-03-10';
+
+/**
+ * Replace every exact occurrence of `token` in arbitrary transport error text.
+ * Uses only string split/join (Node/JS built-ins); deterministic and non-regex.
+ *
+ * @param {unknown} text
+ * @param {string} token
+ * @returns {string}
+ */
+export function redactTokenOccurrences(text, token) {
+  const source = text == null ? '' : String(text);
+  if (!token) return source;
+  return source.split(token).join(REDACTED_TOKEN_MARKER);
+}
 
 export function buildDispatchPayload(action, ref, suite) {
   if (!['smoke', 'full'].includes(suite)) throw new Error(`E2E_GATE_SUITE must be smoke or full; got ${suite}`);
@@ -56,7 +71,10 @@ export async function dispatchE2eMonitor({
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`e2e monitor dispatch failed: ${message}`, { cause: error });
+    // Intentionally omit `cause`: the original transport error may embed
+    // E2E_DISPATCH_TOKEN; preserving it would re-expose the secret.
+    // eslint-disable-next-line preserve-caught-error -- token-bearing cause must not be preserved
+    throw new Error(`e2e monitor dispatch failed: ${redactTokenOccurrences(message, token)}`);
   }
   if (!response.ok) {
     throw new Error(`e2e monitor dispatch failed with HTTP ${response.status}`);

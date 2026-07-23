@@ -6,8 +6,9 @@ Git tags and GitHub releases are the public release identifiers for this action.
 
 ## Tag policy
 
-- Immutable releases use `v1.x.y` tags.
-- The rolling `v1` alias moves to the latest compatible `v1.x.y` release.
+- Immutable releases use exact `vN.x.y` tags derived from `package.json`.
+- When the package patch is zero, a zero-patch `vN.x` tag is also an accepted immutable publish form.
+- The rolling current-major `vN` alias moves to the latest compatible `vN.x.y` release.
 - Existing release tags are never force-pushed or rewritten.
 - `v0` tags stay frozen at the last `v0` release.
 - Every immutable release tag has a GitHub release with generated notes.
@@ -27,7 +28,7 @@ Run the package validators from this directory before pushing an immutable tag:
 
 ## npm package
 
-The CLI publishes as `@postman-cse/onboarding-repo-sync` with versions that match the GitHub release tag. The rolling `v1` alias updates the action channel and skips npm publishing.
+The CLI publishes as `@postman-cse/onboarding-repo-sync` with versions that match the GitHub release tag. The rolling current-major `vN` alias updates the action channel and skips npm publishing.
 
 ## Compatibility
 
@@ -35,4 +36,4 @@ Patch releases preserve the public action contract. Behavior that changes genera
 
 ## Security fixes
 
-Security fixes ship on the latest `v1.x.y` tag and move onto the rolling `v1` alias. Older immutable tags stay published for reproducibility. See [Security Policy](SECURITY.md).
+Security fixes ship on the latest immutable `vN.x.y` release on the current supported major (tracked by the rolling `vN` alias). Older immutable tags stay published for reproducibility. See [Security Policy](SECURITY.md).

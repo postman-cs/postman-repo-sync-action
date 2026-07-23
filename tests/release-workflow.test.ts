@@ -37,7 +37,7 @@ describe('release workflow publishing contract', () => {
     );
   });
 
-  it('keeps v1 as the only rolling alias and v1.x as a zero-patch publish tag via the pure classifier', () => {
+  it('keeps rolling-major as the only rolling alias and zero-patch-minor as a publish tag via the pure classifier', () => {
     const policy = readFileSync(join(process.cwd(), 'scripts/release-policy.mjs'), 'utf8');
     expect(policy).toContain("patch === '0' && tagVersion === `${major}.${minor}`");
     expect(policy).toContain("tagVersion === major");
@@ -46,6 +46,19 @@ describe('release workflow publishing contract', () => {
     expect(policy).toContain("npm_publish: 'true'");
     expect(policy).toContain("npm_publish: 'false'");
     expect(releaseWorkflow).toContain('node scripts/release-policy.mjs classify');
+  });
+
+  it('uses default shallow checkout for classify and verify-package; publish stays checkout-free', () => {
+    // Alias job bounded fetch (checkout fetch-depth:1, no fetch-tags:true, depth-one ref fetch)
+    // is asserted by the advance-major-alias contract below; do not restate it here.
+    const classify = job('classify');
+    const verify = job('verify-package');
+    const publish = job('publish');
+    expect(classify).toContain('actions/checkout@v7');
+    expect(classify).not.toContain('fetch-depth:');
+    expect(verify).toContain('actions/checkout@v7');
+    expect(verify).not.toContain('fetch-depth:');
+    expect(publish).not.toContain('actions/checkout');
   });
 
   it('classifies tags before npm ci and isolates publication to staged artifacts', () => {
@@ -94,6 +107,10 @@ describe('release workflow publishing contract', () => {
     const smoke = namedStep('Smoke test SEA binary with an empty environment');
     expect(smoke).toContain('env -i PATH=/nonexistent');
     expect(smoke).toContain('postman-repo-sync-${VERSION}-linux-x64');
+    expect(smoke).toMatch(
+      /out="\$\(env -i PATH=\/nonexistent "\$BIN" 2>&1 \|\| true\)"/
+    );
+    expect(smoke.indexOf('2>&1 || true')).toBeLessThan(smoke.indexOf('grep -qE'));
     expect(smoke).toContain('test "$(env -i PATH=/nonexistent');
     expect(smoke).toContain("NODE_OPTIONS='--this-flag-does-not-exist'");
     expect(smoke).toContain('test "$(NODE_OPTIONS=');
@@ -117,14 +134,31 @@ describe('release workflow publishing contract', () => {
 
   it('verifies the full artifact/SRI contract before any GitHub mutation and publishes exact assets', () => {
     const publish = job('publish');
-    expect(publish).toContain('exact artifact allowlist mismatch');
-    expect(publish).toContain('tarball package identity mismatch');
-    expect(publish).toContain('SEA sidecar digest does not match executable and manifest');
-    expect(publish).toContain("artifact.path.includes('..')");
-    expect(publish).toContain('unexpected filesystem entry');
+    expect(publish).not.toContain("node --input-type=module - <<'NODE'");
+    expect(publish).not.toContain("<<'NODE'");
+    expect(publish).toContain(
+      'tar -xOf release-artifacts/release.tgz package/scripts/verify-release-artifacts.mjs'
+    );
+    expect(publish).toContain("VERIFIER=\"$RUNNER_TEMP/verify-release-artifacts.mjs\"");
+    expect(publish).toMatch(/EXPECTED_SHA256='[a-f0-9]{64}'/);
+    expect(publish).toContain('test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"');
+    expect(publish).toContain('node "$VERIFIER" release-artifacts');
+    expect(publish.indexOf('EXPECTED_SHA256=')).toBeLessThan(publish.indexOf('node "$VERIFIER" release-artifacts'));
+    expect(publish.indexOf('tar -xOf release-artifacts/release.tgz')).toBeLessThan(
+      publish.indexOf('node "$VERIFIER" release-artifacts')
+    );
+    expect(publish.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
+      publish.indexOf('Publish npm package or verify registry identity')
+    );
     expect(publish.indexOf('Verify staged release artifacts')).toBeLessThan(
       publish.indexOf('Publish npm package or verify registry identity')
     );
+    expect(publish).not.toContain('actions/checkout');
+    expect(publish).not.toContain('npm ci');
+    expect(publish).not.toMatch(/\bnpm pack\b/);
+    expect(publish).not.toContain('cache:');
+    expect(publish).not.toContain('npm run bundle');
+    expect(publish).not.toContain('npm test');
     expect(publish).toContain('npm view "$PKG@$VERSION" dist.integrity');
     expect(publish).toContain("sha512-'+crypto.createHash('sha512')");
     expect(publish).toContain('Published npm integrity differs from staged tarball');
@@ -144,9 +178,15 @@ describe('release workflow publishing contract', () => {
   it('dispatches the post-release monitor without blocking publication', () => {
     const monitor = job('dispatch-live-monitor');
     expect(monitor).toContain('continue-on-error: true');
-    expect(monitor).toContain('contents: read');
+    expect(monitor).toMatch(/permissions:\n\s+contents: read\n/);
+    expect(monitor).not.toContain('id-token:');
+    expect(monitor).not.toMatch(/permissions:[\s\S]*?\n\s+actions:/);
+    expect(monitor).not.toContain('contents: write');
+    expect(monitor).not.toContain('pull-requests: write');
     expect(monitor).toContain('actions/checkout@v7');
     expect(monitor).toContain("needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success'");
+    expect(monitor).toContain('E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}');
+    expect(monitor).toContain('E2E_GATE_SUITE: smoke');
     expect(monitor).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
     expect(monitor).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
     expect(monitor.indexOf('actions/checkout@v7')).toBeLessThan(
@@ -163,6 +203,8 @@ describe('release workflow publishing contract', () => {
     expect(alias).toContain('isSemverOlder');
     expect(alias).toContain('scripts/release-policy.mjs');
     expect(alias).toContain('Candidate $CANDIDATE is older than current alias');
+    expect(alias).toContain('actions/checkout@v7');
+    expect(alias).toContain('fetch-depth: 1');
     expect(alias).toContain('git ls-remote --exit-code --tags origin "refs/tags/$MAJOR"');
     expect(alias).toContain('git fetch --depth=1 --no-tags origin "refs/tags/$MAJOR:refs/tags/$MAJOR"');
     expect(alias).toContain('failed to probe rolling alias');

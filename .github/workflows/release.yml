@@ -122,46 +122,13 @@ jobs:
           path: release-artifacts
       - name: Verify staged release artifacts
         run: |
-          node --input-type=module - <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { execFileSync } from 'node:child_process';
-          import { existsSync, readdirSync, readFileSync } from 'node:fs';
-          import { basename, join } from 'node:path';
-          const d = 'release-artifacts';
-          const SAFE = /^[A-Za-z0-9._-]+$/;
-          const HEX = /^[a-f0-9]{64}$/;
-          const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-          const manifest = JSON.parse(readFileSync(join(d, 'release-manifest.json'), 'utf8'));
-          if (manifest.schema_version !== 1 || typeof manifest.repository !== 'string' || typeof manifest.commit_sha !== 'string' || typeof manifest.tag !== 'string' || typeof manifest.package_name !== 'string' || typeof manifest.package_version !== 'string' || !Array.isArray(manifest.artifacts)) throw new Error('invalid manifest schema');
-          for (const [key, expected] of Object.entries({ repository: process.env.GITHUB_REPOSITORY, commit_sha: process.env.GITHUB_SHA, tag: process.env.GITHUB_REF_NAME })) if (manifest[key] !== expected) throw new Error(`manifest ${key} mismatch`);
-          const sea = `postman-repo-sync-${manifest.package_version}-linux-x64`;
-          const expectedNames = ['release.tgz', sea, `${sea}.sha256`];
-          const seen = new Set();
-          for (const artifact of manifest.artifacts) {
-            if (!artifact || typeof artifact.path !== 'string' || typeof artifact.sha256 !== 'string') throw new Error('invalid artifact manifest entry');
-            if (artifact.path !== basename(artifact.path) || artifact.path.includes('..') || artifact.path.includes('/') || artifact.path.includes('\\') || !SAFE.test(artifact.path) || !HEX.test(artifact.sha256)) throw new Error(`invalid artifact ${artifact.path}`);
-            if (seen.has(artifact.path)) throw new Error(`duplicate artifact path ${artifact.path}`);
-            seen.add(artifact.path);
-          }
-          if (expectedNames.some((name) => !seen.has(name)) || seen.size !== expectedNames.length) throw new Error('exact artifact allowlist mismatch');
-          const onDisk = new Set(readdirSync(d));
-          for (const name of expectedNames) if (!onDisk.has(name)) throw new Error(`missing artifact ${name}`);
-          for (const name of onDisk) if (name !== 'release-manifest.json' && !seen.has(name)) throw new Error(`unexpected filesystem entry ${name}`);
-          for (const artifact of manifest.artifacts) {
-            const full = join(d, artifact.path);
-            if (!existsSync(full)) throw new Error(`missing artifact ${artifact.path}`);
-            if (sha256(readFileSync(full)) !== artifact.sha256) throw new Error(`checksum mismatch for ${artifact.path}`);
-          }
-          const packageJson = JSON.parse(execFileSync('tar', ['-xOf', join(d, 'release.tgz'), 'package/package.json'], { encoding: 'utf8' }));
-          if (packageJson.name !== manifest.package_name || packageJson.version !== manifest.package_version) throw new Error('tarball package identity mismatch');
-          const [major, minor, patch] = manifest.package_version.split('.');
-          if (manifest.tag !== `v${manifest.package_version}` && !(patch === '0' && manifest.tag === `v${major}.${minor}`)) throw new Error(`tag ${manifest.tag} does not match package version ${manifest.package_version}`);
-          const sidecarText = readFileSync(join(d, `${sea}.sha256`), 'utf8').trim();
-          const [digest = '', filename = ''] = sidecarText.split(/\s+/);
-          const actual = sha256(readFileSync(join(d, sea)));
-          const seaEntry = manifest.artifacts.find((artifact) => artifact.path === sea);
-          if (!HEX.test(digest) || filename !== sea || digest !== actual || !seaEntry || digest !== seaEntry.sha256) throw new Error('SEA sidecar digest does not match executable and manifest');
-          NODE
+          set -euo pipefail
+          EXPECTED_SHA256='68001e833a50ff552932d1d01ae7483fb0d3a6410dc7fd05353f3e481f188499'
+          VERIFIER="$RUNNER_TEMP/verify-release-artifacts.mjs"
+          tar -xOf release-artifacts/release.tgz package/scripts/verify-release-artifacts.mjs > "$VERIFIER"
+          ACTUAL_SHA256="$(sha256sum "$VERIFIER" | awk '{print $1}')"
+          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          node "$VERIFIER" release-artifacts
       - name: Publish npm package or verify registry identity
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   DEFAULT_DISPATCH_TIMEOUT_MS,
+  REDACTED_TOKEN_MARKER,
   buildDispatchPayload,
   dispatchE2eMonitor
 } from './dispatch-e2e-monitor.mjs';
@@ -120,7 +121,28 @@ test('dispatchE2eMonitor surfaces network/abort failure without disclosing the t
     (error) => {
       assert.match(String(error.message), /e2e monitor dispatch failed:/);
       assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
-      assert.doesNotMatch(String(error.cause?.message ?? ''), new RegExp(SENTINEL_TOKEN));
+      assert.equal(error.cause, undefined);
+      return true;
+    }
+  );
+});
+
+test('dispatchE2eMonitor redacts token-bearing transport errors without preserving cause', async () => {
+  const hostileMessage = `fetch failed: Authorization Bearer ${SENTINEL_TOKEN} refused; retry with ${SENTINEL_TOKEN}`;
+  await assert.rejects(
+    () =>
+      dispatchE2eMonitor({
+        env: baseEnv,
+        fetchImpl: async () => {
+          throw new Error(hostileMessage);
+        }
+      }),
+    (error) => {
+      assert.match(String(error.message), /e2e monitor dispatch failed:/);
+      assert.match(String(error.message), new RegExp(REDACTED_TOKEN_MARKER.replace(/[[\]]/g, '\\$&')));
+      assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
+      assert.equal(error.cause, undefined);
+      assert.doesNotMatch(String(error.stack ?? ''), new RegExp(SENTINEL_TOKEN));
       return true;
     }
   );

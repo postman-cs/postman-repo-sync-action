@@ -193,7 +193,10 @@ export function validateSeaSidecar(directory, packageVersion, artifacts) {
 export function readTarballPackageIdentity(directory) {
   const tarball = join(directory, 'release.tgz');
   const packageJson = JSON.parse(
-    execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' })
+    execFileSync('tar', ['-xOf', tarball, 'package/package.json'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
   );
   return { name: packageJson.name, version: packageJson.version };
 }

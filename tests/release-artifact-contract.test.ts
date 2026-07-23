@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -264,30 +264,57 @@ describe('release artifact contract', () => {
     expect(sha256Hex('x')).toHaveLength(64);
   });
 
-  it('executes the production publish inline verifier against staged artifacts', () => {
+  it('pins publish to the checksummed canonical verifier packaged in release.tgz', () => {
     const releaseWorkflow = readFileSync(join(process.cwd(), '.github/workflows/release.yml'), 'utf8');
-    const match = releaseWorkflow.match(
-      /name: Verify staged release artifacts\n\s+run: \|\n\s+node --input-type=module - <<'NODE'\n([\s\S]*?)\n\s+NODE/
-    );
-    expect(match?.[1]).toBeTruthy();
-    const root = mkdtempSync(join(tmpdir(), 'inline-root-'));
-    const { directory } = stageReleaseDirectory();
-    const staged = join(root, 'release-artifacts');
-    cpSync(directory, staged, { recursive: true });
-    const inlinePath = join(root, 'inline-verify.mjs');
-    writeFileSync(inlinePath, match?.[1] ?? '');
-    const env = {
-      ...process.env,
-      GITHUB_REPOSITORY: 'postman-cs/postman-repo-sync-action',
-      GITHUB_SHA: 'abc123',
-      GITHUB_REF_NAME: 'v2.1.10'
+    const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
+      files: string[];
     };
+    const scriptPath = join(process.cwd(), 'scripts/verify-release-artifacts.mjs');
+    const expectedSha256 = createHash('sha256').update(readFileSync(scriptPath)).digest('hex');
+    const publishJob =
+      releaseWorkflow.match(/ {2}publish:\n[\s\S]*?(?=\n {2}[a-zA-Z0-9_-]+:|$)/)?.[0] ?? '';
+
+    expect(packageJson.files).toContain('scripts/verify-release-artifacts.mjs');
+    expect(publishJob).not.toContain("node --input-type=module - <<'NODE'");
+    expect(publishJob).not.toContain("<<'NODE'");
+    expect(publishJob).toContain(`EXPECTED_SHA256='${expectedSha256}'`);
+    expect(publishJob).toContain(
+      'tar -xOf release-artifacts/release.tgz package/scripts/verify-release-artifacts.mjs'
+    );
+    expect(publishJob).toContain("VERIFIER=\"$RUNNER_TEMP/verify-release-artifacts.mjs\"");
+    expect(publishJob).toContain('test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"');
+    expect(publishJob).toContain('node "$VERIFIER" release-artifacts');
+    expect(publishJob.indexOf('EXPECTED_SHA256=')).toBeLessThan(
+      publishJob.indexOf('node "$VERIFIER" release-artifacts')
+    );
+    expect(publishJob.indexOf('tar -xOf release-artifacts/release.tgz')).toBeLessThan(
+      publishJob.indexOf('node "$VERIFIER" release-artifacts')
+    );
+    expect(publishJob.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
+      publishJob.indexOf('Publish npm package or verify registry identity')
+    );
+
+    // In-process entrypoint (same module CI extracts); avoids double node spawn under host load.
+    const { directory, manifest } = stageReleaseDirectory();
     try {
-      execFileSync(process.execPath, [inlinePath], { cwd: root, env, stdio: 'pipe' });
-      writeFileSync(join(staged, 'release.tgz'), Buffer.from('tampered'));
-      expect(() => execFileSync(process.execPath, [inlinePath], { cwd: root, env, stdio: 'pipe' })).toThrow();
+      expect(() =>
+        verifyReleaseArtifacts({
+          directory,
+          repository: manifest.repository,
+          commitSha: manifest.commit_sha,
+          tag: manifest.tag
+        })
+      ).not.toThrow();
+      writeFileSync(join(directory, 'release.tgz'), Buffer.from('tampered'));
+      expect(() =>
+        verifyReleaseArtifacts({
+          directory,
+          repository: manifest.repository,
+          commitSha: manifest.commit_sha,
+          tag: manifest.tag
+        })
+      ).toThrow();
     } finally {
-      rmSync(root, { recursive: true, force: true });
       rmSync(directory, { recursive: true, force: true });
     }
   });

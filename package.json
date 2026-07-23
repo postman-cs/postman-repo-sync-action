@@ -9,7 +9,8 @@
   },
   "files": [
     "action.yml",
-    "dist"
+    "dist",
+    "scripts/verify-release-artifacts.mjs"
   ],
   "engines": {
     "node": ">=24"
