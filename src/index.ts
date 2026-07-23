@@ -1897,6 +1897,7 @@ async function runRepoSyncInner(
       }
 
       outputs['mock-url'] = resolvedMockUrl;
+      dependencies.core.setOutput('mock-url', resolvedMockUrl);
     }
   }
 
@@ -1980,6 +1981,7 @@ async function runRepoSyncInner(
       }
 
       outputs['monitor-id'] = resolvedMonitorId;
+      dependencies.core.setOutput('monitor-id', resolvedMonitorId);
 
       if (!effectiveCron && resolvedMonitorId) {
         try {
@@ -2354,7 +2356,12 @@ export async function resolvePostmanApiKeyAndTeamId(
         bifrostBaseUrl: inputs.postmanBifrostBase,
         // No fallback on the org-mode probe: the expected non-org 400 must
         // surface verbatim, not be re-fired against the /_api alias.
-        secretMasker: masker
+        secretMasker: masker,
+        onRetryEvent: (event) => {
+          actionCore.info(
+            `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+          );
+        }
       });
       const squads = await gateway.getSquads(teamId);
       if (squads.length > 0) {
@@ -2446,7 +2453,12 @@ export function createRepoSyncDependencies(
     fallbackBaseUrl: inputs.postmanFallbackBase,
     teamId: resolved.teamId,
     orgMode: inputs.orgMode,
-    secretMasker: masker
+    secretMasker: masker,
+    onRetryEvent: (event) => {
+      factories.core.info(
+        `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+      );
+    }
   });
   const gatewayAssets = new PostmanGatewayAssetsClient({
     gateway,
@@ -2608,7 +2620,10 @@ export async function runAction(
   // invalid key) and falls through to the existing missing-token guard.
   await mintAccessTokenIfNeeded(inputs, {
     info: (message) => actionCore.info(message),
-    warning: (message) => actionCore.warning(message)
+    warning: (message) => actionCore.warning(message),
+    retryEvent: (event) => actionCore.info(
+      `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+    )
   }, (secret) => actionCore.setSecret(secret));
 
   const masker = createSecretMasker([
@@ -2634,7 +2649,12 @@ export async function runAction(
     explicitTeamId: inputs.teamId || undefined,
     mode: inputs.credentialPreflight,
     mask: masker,
-    log: actionCore
+    log: {
+      ...actionCore,
+      retryEvent: (event) => actionCore.info(
+        `[postman retry] action=repo-sync class=${event.class} status=${event.status ?? 'none'} attempt=${event.attempt} delayMs=${event.delay}`
+      )
+    }
   });
 
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {

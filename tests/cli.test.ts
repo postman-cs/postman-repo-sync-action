@@ -1,11 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ConsoleReporter, parseCliArgs, runCli, toDotenv } from '../src/cli.js';
+import { ConsoleReporter, parseCliArgs, runCli, toDotenv, writeOptionalFileAtomic } from '../src/cli.js';
 import { resolveInputs, runRepoSync } from '../src/index.js';
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 
@@ -362,6 +362,7 @@ describe('runCli credential preflight seam', () => {
   it('fails closed before repo sync when enforce sees a cross-org team mismatch', async () => {
     const fetchMock = stubIdentityFetch(111, 222);
     const executeRepoSync = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(
       runCli(
@@ -378,6 +379,9 @@ describe('runCli credential preflight seam', () => {
     expect(executeRepoSync).not.toHaveBeenCalled();
     const probed = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(probed.some((url) => url.includes('/api/sessions/current'))).toBe(true);
+    expect(errorSpy.mock.calls.map((call) => String(call[0])).join('\n')).toMatch(
+      /\[repo-sync timing\] \{"stage":"credential preflight","ms":\d+(?:\.\d+)?,"status":"error"\}/
+    );
   });
 
   it('names both team ids in the enforce mismatch verdict', async () => {
@@ -421,6 +425,44 @@ describe('runCli credential preflight seam', () => {
     const logged = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
     expect(logged).toContain('postman: PMAK identity - ');
     expect(logged).toContain('postman: access-token session identity - ');
+    expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"access-token mint","ms":\d+(?:\.\d+)?,"status":"success"\}/);
+    expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"credential preflight","ms":\d+(?:\.\d+)?,"status":"success"\}/);
+    expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"API-key\/team resolution","ms":\d+(?:\.\d+)?,"status":"success"\}/);
+    expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"runRepoSync finalize","ms":\d+(?:\.\d+)?,"status":"success"\}/);
+  });
+
+  it('persists partial ownership outputs when a later repo-sync step fails', async () => {
+    stubIdentityFetch(333, 333);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await withTempCwd(async () => {
+      const executeRepoSync: typeof runRepoSync = async (_inputs, dependencies) => {
+        dependencies.core.setOutput('mock-url', 'https://owned.mock.pstmn.io');
+        dependencies.core.setOutput('monitor-id', 'owned-monitor');
+        throw new Error('late finalize failure');
+      };
+
+      await expect(
+        runCli(
+          [
+            '--project-name', 'partial-ownership',
+            '--postman-api-key', 'pmak-ok',
+            '--postman-access-token', 'tok-ok',
+            '--credential-preflight', 'warn',
+            '--result-json', 'partial-result.json'
+          ],
+          { env: {}, executeRepoSync, writeStdout: () => undefined }
+        )
+      ).rejects.toThrow('late finalize failure');
+
+      const receipt = JSON.parse(
+        await (await import('node:fs/promises')).readFile('partial-result.json', 'utf8')
+      ) as Record<string, unknown>;
+      expect(receipt).toMatchObject({
+        'mock-url': 'https://owned.mock.pstmn.io',
+        'monitor-id': 'owned-monitor'
+      });
+    });
   });
 
   it('rejects credential-preflight=off instead of skipping identity checks', async () => {
@@ -441,5 +483,53 @@ describe('runCli credential preflight seam', () => {
     ).rejects.toThrow(/Unsupported credential-preflight/);
 
     expect(executeRepoSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('CLI partial result output containment', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function withTempCwd<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const dir = await mkdtemp(path.join(tmpdir(), 'pm-repo-sync-output-'));
+    tempDirs.push(dir);
+    const previous = process.cwd();
+    process.chdir(dir);
+    try { return await fn(dir); } finally { process.chdir(previous); }
+  }
+
+  it('rejects a parent-directory symlink before writing partial output', async () => {
+    await withTempCwd(async (dir) => {
+      const outside = await mkdtemp(path.join(tmpdir(), 'pm-repo-sync-outside-'));
+      tempDirs.push(outside);
+      await symlink(outside, path.join(dir, 'escape'));
+      expect(() => writeOptionalFileAtomic('escape/result.json', '{}')).toThrow(/stay within workspace/);
+      await expect(readFile(path.join(outside, 'result.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('rejects a preexisting outside result-file symlink without changing its target', async () => {
+    await withTempCwd(async (dir) => {
+      const outside = await mkdtemp(path.join(tmpdir(), 'pm-repo-sync-outside-'));
+      tempDirs.push(outside);
+      const target = path.join(outside, 'target.json');
+      await writeFile(target, 'unchanged', 'utf8');
+      await symlink(target, path.join(dir, 'result.json'));
+      expect(() => writeOptionalFileAtomic('result.json', 'overwritten')).toThrow(/stay within workspace/);
+      await expect(readFile(target, 'utf8')).resolves.toBe('unchanged');
+    });
+  });
+
+  it('leaves normal in-workspace partial output atomic and readable after a later failure', async () => {
+    await withTempCwd(async (dir) => {
+      await mkdir(path.join(dir, 'results'), { recursive: true });
+      writeOptionalFileAtomic('results/result.json', '{"mock-url":"partial"}');
+      await expect(readFile(path.join(dir, 'results/result.json'), 'utf8')).resolves.toBe('{"mock-url":"partial"}');
+      expect(() => writeOptionalFileAtomic('../outside.json', 'escape')).toThrow(/stay within workspace/);
+      await expect(readFile(path.join(dir, 'results/result.json'), 'utf8')).resolves.toBe('{"mock-url":"partial"}');
+    });
   });
 });

@@ -1932,14 +1932,16 @@ describe('monitor resolution paths', () => {
       findMonitorByCollection: vi.fn().mockResolvedValue(null)
     });
     const github = makeGithub();
+    const { core, outputs } = createCoreStub();
     await expect(
       runRepoSync(
         createInputs({ environments: ['prod'], generateCiWorkflow: false }),
-        makeDeps(postman, github)
+        { ...makeDeps(postman, github), core }
       )
     ).rejects.toThrow(
       /Monitor create failed for monitor "core-payments - Smoke Monitor" workspace ws-123 collection col-smoke environment env-prod: monitor denied\. verify monitor IDs\/access or set monitor-cron then rerun/
     );
+    expect(outputs['mock-url']).toBe('https://mock.pstmn.io');
   });
 
   it('surfaces monitor discovery failure with operation, entity, cause, and remediation', async () => {

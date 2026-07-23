@@ -2,6 +2,14 @@ import { retry } from '../retry.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 import { formatRejectedMint, inspectPmakIdentity, maskPmakDiagnostic } from './pmak-diagnostics.js';
 
+export type RetryEventClass = 'http' | 'inner' | 'transport' | 'auth' | 'fallback';
+export interface RetryEvent {
+  class: RetryEventClass;
+  status?: number;
+  attempt: number;
+  delay: number;
+}
+
 export interface AccessTokenProviderOptions {
   /** Current access token (from action input or a prior mint). May be empty. */
   accessToken?: string;
@@ -19,6 +27,7 @@ export interface AccessTokenProviderOptions {
    */
   onToken?: (token: string) => void;
   sleep?: (delayMs: number) => Promise<void>;
+  onRetryEvent?: (event: RetryEvent) => void;
 }
 
 class MintError extends Error {
@@ -64,6 +73,7 @@ export class AccessTokenProvider {
   private readonly maxAttempts: number;
   private readonly onToken?: (token: string) => void;
   private readonly sleep?: (delayMs: number) => Promise<void>;
+  private readonly onRetryEvent?: (event: RetryEvent) => void;
   private inflight?: Promise<string>;
 
   constructor(options: AccessTokenProviderOptions) {
@@ -76,6 +86,7 @@ export class AccessTokenProvider {
     this.maxAttempts = Math.max(1, options.maxAttempts ?? 2);
     this.onToken = options.onToken;
     this.sleep = options.sleep;
+    this.onRetryEvent = options.onRetryEvent;
   }
 
   current(): string {
@@ -107,7 +118,12 @@ export class AccessTokenProvider {
       delayMs: 1000,
       backoffMultiplier: 2,
       ...(this.sleep ? { sleep: this.sleep } : {}),
-      shouldRetry: (error) => !(error instanceof MintError && error.permanent)
+       shouldRetry: (error) => !(error instanceof MintError && error.permanent),
+       onRetry: ({ attempt, delayMs, error }) => {
+         const status = error instanceof MintError ? error.status : undefined;
+         const retryClass = status === undefined ? 'transport' : 'http';
+         this.onRetryEvent?.({ class: retryClass, ...(status === undefined ? {} : { status }), attempt, delay: Math.max(0, delayMs) });
+       }
     });
     this.token = token;
     this.onToken?.(token);
@@ -141,7 +157,7 @@ export class AccessTokenProvider {
           true
         );
       }
-      throw new MintError(`postman: re-mint failed (service-account-tokens HTTP ${status}).`, false);
+       throw new MintError(`postman: re-mint failed (service-account-tokens HTTP ${status}).`, false, status);
     }
 
     let parsed: unknown;
@@ -162,6 +178,7 @@ export class AccessTokenProvider {
 export interface MintLog {
   info: (message: string) => void;
   warning: (message: string) => void;
+  retryEvent?: (event: RetryEvent) => void;
 }
 
 /**
@@ -214,7 +231,8 @@ export async function mintAccessTokenIfNeeded(
     apiKey: inputs.postmanApiKey,
     apiBaseUrl,
     fetchImpl,
-    onToken: (token) => setSecret?.(token)
+    onToken: (token) => setSecret?.(token),
+    onRetryEvent: (event) => log.retryEvent?.(event)
   });
   try {
     inputs.postmanAccessToken = await provider.refresh();

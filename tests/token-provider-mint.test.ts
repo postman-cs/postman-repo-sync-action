@@ -10,7 +10,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 function makeLog() {
-  return { info: vi.fn(), warning: vi.fn() };
+  return { info: vi.fn(), warning: vi.fn(), retryEvent: vi.fn() };
 }
 
 describe('mintAccessTokenIfNeeded (PMAK-only eager mint)', () => {
@@ -47,6 +47,23 @@ describe('mintAccessTokenIfNeeded (PMAK-only eager mint)', () => {
     await mintAccessTokenIfNeeded(inputs, makeLog(), undefined, fetchImpl as unknown as typeof fetch);
     expect(inputs.postmanAccessToken).toBe('PMAT-existing');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('emits one content-free HTTP retry event for a transient eager mint failure', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('busy', { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'minted' }));
+    const log = makeLog();
+    await mintAccessTokenIfNeeded(
+      { postmanAccessToken: '', postmanApiKey: 'secret-pmak', postmanApiBase: 'https://api.getpostman.com' },
+      log,
+      undefined,
+      fetchImpl
+    );
+    expect(log.retryEvent).toHaveBeenCalledTimes(1);
+    expect(log.retryEvent).toHaveBeenCalledWith({ class: 'http', status: 500, attempt: 1, delay: 1000 });
+    expect(JSON.stringify(log.retryEvent.mock.calls)).not.toContain('secret-pmak');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('is a no-op when no PMAK is present', async () => {
