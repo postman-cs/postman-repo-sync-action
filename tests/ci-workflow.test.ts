@@ -142,9 +142,12 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(linux).not.toContain('/main/scripts');
   });
 
-  it('caches Windows node_modules with pinned actions/cache and runs npm test directly', () => {
+  it('caches Windows node_modules with pinned actions/cache and runs the full test script via node --run', () => {
     expect(windows).toContain("node-version: '24'");
     expect(windows).not.toMatch(/^\s*cache:\s*npm\s*$/m);
+    // setup-node must not restore/save a redundant npm package-manager cache;
+    // node_modules is exact-lock cached by actions/cache below.
+    expect(windows).toMatch(/^\s*package-manager-cache:\s*false\s*$/m);
 
     expect(windows).toContain(
       'uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0',
@@ -161,16 +164,24 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(install).toContain('run: npm ci --prefer-offline --no-audit --no-fund');
     expect(install).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}');
 
-    // Cache hit skips only install; npm test is unconditional and unfiltered.
-    expect(windows).toMatch(/^\s*- run: npm test\s*$/m);
+    // Cache hit skips only install; the full unfiltered package.json "test"
+    // script runs via Node's built-in runner (no npm.cmd boot on Windows).
+    expect(windows).toMatch(/^\s*- run: node --run test\s*$/m);
+    expect(windows).not.toMatch(/^\s*- run: npm test\s*$/m);
+    expect(windows).not.toMatch(/node --run test --/);
     expect(windows).not.toMatch(/npm test --/);
     expect(windows.indexOf('id: windows-node-modules')).toBeLessThan(
       windows.indexOf('name: Install dependencies'),
     );
-    expect(windows.indexOf('name: Install dependencies')).toBeLessThan(windows.indexOf('- run: npm test'));
-    expect(windows.indexOf('- run: npm test')).toBeGreaterThan(
+    expect(windows.indexOf('name: Install dependencies')).toBeLessThan(
+      windows.indexOf('- run: node --run test'),
+    );
+    expect(windows.indexOf('- run: node --run test')).toBeGreaterThan(
       windows.indexOf("if: steps.windows-node-modules.outputs.cache-hit != 'true'"),
     );
+
+    // Linux gate still queues the full suite via npm test.
+    expect(linux).toContain('run test       npm test');
 
     // No queue / platform-neutral gates on Windows.
     expect(windows).not.toContain('name: Run gates');
