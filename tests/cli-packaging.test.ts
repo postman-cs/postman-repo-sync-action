@@ -19,11 +19,10 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const execFileAsync = promisify(execFile);
-const npmCommand = process.platform === 'win32' ? process.execPath : 'npm';
-const npmCliArgs = process.platform === 'win32' ? [process.env.npm_execpath || ''] : [];
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDirs: string[] = [];
 const CLI_SHEBANG = '#!/usr/bin/env node\n';
+const WINDOWS_CLI_ARGUMENTS = ['--help', '--version'] as const;
 /** Read-only git must not block on concurrent index.lock under multi-agent host load. */
 const gitReadEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', PATH: process.env.PATH ?? '' };
 
@@ -51,6 +50,53 @@ async function snapshotPackage(sourceRoot: string, snapshotRoot: string): Promis
     path.join(sourceRoot, 'scripts', 'verify-release-artifacts.mjs'),
     path.join(snapshotRoot, 'scripts', 'verify-release-artifacts.mjs')
   );
+}
+
+interface PackageMetadata {
+  name: string;
+  version: string;
+  bin: Record<string, string>;
+  files: string[];
+}
+
+function planWindowsPackage(metadata: PackageMetadata, prefixDir: string): {
+  installDir: string;
+  binName: string;
+  binTarget: string;
+  cmdPath: string;
+} {
+  const binEntries = Object.entries(metadata.bin);
+  if (binEntries.length !== 1) {
+    throw new Error('Expected exactly one package bin entry');
+  }
+  const [binName, relativeBinTarget] = binEntries[0];
+  const installDir = path.join(prefixDir, 'node_modules', ...metadata.name.split('/'));
+  const binTarget = path.join(installDir, relativeBinTarget);
+  return {
+    installDir,
+    binName,
+    binTarget,
+    cmdPath: path.join(prefixDir, 'node_modules', '.bin', `${binName}.cmd`)
+  };
+}
+
+function planWindowsCmdExecution(
+  comSpec: string,
+  cmdPath: string,
+  argument: string
+): {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments: true;
+} {
+  if (!(WINDOWS_CLI_ARGUMENTS as readonly string[]).includes(argument) || /[&|<>^()%!"]/.test(argument)) {
+    throw new Error(`Unsupported Windows CLI argument: ${argument}`);
+  }
+  return {
+    file: comSpec,
+    args: ['/d', '/s', '/c', `""${cmdPath}" ${argument}"`],
+    windowsVerbatimArguments: true
+  };
 }
 
 afterEach(async () => {
@@ -194,17 +240,94 @@ describe('CLI packaging contract', () => {
     expect(packagingSource.includes(wipeBan)).toBe(false);
   });
 
+  it('plans Windows package execution without npm pack, install, tar, or direct .cmd execution', () => {
+    const metadata: PackageMetadata = {
+      name: '@scope/example-package',
+      version: '1.2.3',
+      bin: { example: 'dist/cli.cjs' },
+      files: ['dist']
+    };
+    const packagePlan = planWindowsPackage(metadata, path.join('temp', 'prefix'));
+    const execution = planWindowsCmdExecution('C:\\Windows\\System32\\cmd.exe', packagePlan.cmdPath, '--help');
+
+    expect(packagePlan.installDir).toBe(
+      path.join('temp', 'prefix', 'node_modules', ...metadata.name.split('/'))
+    );
+    expect(packagePlan.binTarget).toBe(path.join(packagePlan.installDir, metadata.bin[packagePlan.binName]));
+    expect(execution.file).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(execution.file).not.toBe(packagePlan.cmdPath);
+    expect(execution.args).toEqual(['/d', '/s', '/c', `""${packagePlan.cmdPath}" --help"`]);
+    expect(JSON.stringify({ packagePlan, execution })).not.toMatch(/npm|\bpack\b|\binstall\b|\btar\b/i);
+    expect(() => planWindowsCmdExecution(execution.file, packagePlan.cmdPath, '--help & whoami')).toThrow(
+      /Unsupported Windows CLI argument/
+    );
+  });
+
   it('packs, extracts, and runs postman-repo-sync --help without shell parse errors', async () => {
     // Snapshot only for pack isolation so concurrent writers cannot mutate npm pack inputs.
     const packageSnapshotRoot = await makeTempDir('postman-repo-sync-package-snapshot-');
     await snapshotPackage(repoRoot, packageSnapshotRoot);
 
+    const packageJson = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as PackageMetadata;
+
+    if (process.platform === 'win32') {
+      const prefixDir = await makeTempDir('postman-repo-sync-prefix-');
+      const packagePlan = planWindowsPackage(packageJson, prefixDir);
+      expect(packageJson.files).toContain(path.dirname(packageJson.bin[packagePlan.binName]));
+      expect(packagePlan.binName).toBe(Object.keys(packageJson.bin)[0]);
+
+      await mkdir(packagePlan.installDir, { recursive: true });
+      await snapshotPackage(packageSnapshotRoot, packagePlan.installDir);
+      await Promise.all(packageJson.files.map((declaredPath) => access(path.join(packagePlan.installDir, declaredPath))));
+      await access(packagePlan.binTarget, constants.F_OK);
+
+      const binDir = path.dirname(packagePlan.cmdPath);
+      await mkdir(binDir, { recursive: true });
+      const relativeBinTarget = path.relative(binDir, packagePlan.binTarget).replaceAll(path.sep, '\\');
+      await writeFile(
+        packagePlan.cmdPath,
+        `@ECHO off\r\n"${process.execPath}" "%~dp0\\${relativeBinTarget}" %*\r\n`,
+        'utf8'
+      );
+
+      const comSpec = process.env.ComSpec ?? process.env.COMSPEC;
+      if (!comSpec) {
+        throw new Error('ComSpec is required for native Windows .cmd execution');
+      }
+      const env = {
+        ...process.env,
+        PATH: process.env.PATH ?? '',
+        INPUT_POSTMAN_API_KEY: '',
+        POSTMAN_API_KEY: '',
+        POSTMAN_ACCESS_TOKEN: ''
+      };
+      const execute = async (argument: (typeof WINDOWS_CLI_ARGUMENTS)[number]) => {
+        const execution = planWindowsCmdExecution(comSpec, packagePlan.cmdPath, argument);
+        return execFileAsync(execution.file, execution.args, {
+          encoding: 'utf8',
+          env,
+          maxBuffer: 1024 * 1024,
+          windowsVerbatimArguments: execution.windowsVerbatimArguments
+        });
+      };
+
+      const help = await execute('--help');
+      expect(help.stdout).toMatch(/Usage:\s+postman-repo-sync/i);
+      expect(help.stderr).not.toMatch(/permission denied|exec format|syntax error|unexpected token|"use strict"/i);
+      expect(help.stdout).not.toMatch(/"use strict"/);
+
+      const version = await execute('--version');
+      expect(version.stdout.trim()).toBe(packageJson.version);
+      expect(packageJson.name).toBe('@postman-cse/onboarding-repo-sync');
+      return;
+    }
+
     const packDir = await makeTempDir('postman-repo-sync-pack-');
     const prefixDir = await makeTempDir('postman-repo-sync-prefix-');
 
     const packResult = await execFileAsync(
-      npmCommand,
-      [...npmCliArgs, 'pack', '--ignore-scripts', '--json', '--pack-destination', packDir],
+      'npm',
+      ['pack', '--ignore-scripts', '--json', '--pack-destination', packDir],
       {
         cwd: packageSnapshotRoot,
         encoding: 'utf8',
@@ -278,9 +401,6 @@ describe('CLI packaging contract', () => {
       env: { ...process.env, PATH: process.env.PATH ?? '' },
       maxBuffer: 1024 * 1024
     });
-    const packageJson = JSON.parse(await readFile(path.join(packageSnapshotRoot, 'package.json'), 'utf8')) as {
-      version: string;
-    };
     expect(version.stdout.trim()).toBe(packageJson.version);
   }, 120_000);
 });
