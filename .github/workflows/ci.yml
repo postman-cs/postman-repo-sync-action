@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -102,8 +106,43 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm run lint
-      - run: npm test
-      - run: npm run typecheck
       - run: npm run bundle
-      - run: npm run verify:dist:assert
+      - name: Run gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gates = @(
+            @{ Name = 'lint'; Command = { npm run lint; if ($LASTEXITCODE -ne 0) { throw "gate:lint failed with exit code $LASTEXITCODE" } } },
+            @{ Name = 'test'; Command = { npm test; if ($LASTEXITCODE -ne 0) { throw "gate:test failed with exit code $LASTEXITCODE" } } },
+            @{ Name = 'typecheck'; Command = { npm run typecheck; if ($LASTEXITCODE -ne 0) { throw "gate:typecheck failed with exit code $LASTEXITCODE" } } },
+            @{ Name = 'dist'; Command = { npm run verify:dist:assert; if ($LASTEXITCODE -ne 0) { throw "gate:dist failed with exit code $LASTEXITCODE" } } }
+          )
+          $MAX_PARALLEL_GATES = 2
+          $running = @()
+          $results = @{}
+          foreach ($gate in $gates) {
+            while ($running.Count -ge $MAX_PARALLEL_GATES) {
+              $done = Wait-Job -Job $running -Any
+              # Continue + 2>&1: retain failed-child error text without aborting aggregation under Stop.
+              Receive-Job $done -ErrorAction Continue 2>&1 | Out-File "$($done.Name).log"
+              $results[$done.Name] = $done.State -eq 'Completed'
+              Remove-Job $done
+              $running = @($running | Where-Object Id -ne $done.Id)
+            }
+            $running += Start-Job -Name $gate.Name -ScriptBlock $gate.Command
+          }
+          foreach ($job in $running) {
+            Wait-Job $job | Out-Null
+            Receive-Job $job -ErrorAction Continue 2>&1 | Out-File "$($job.Name).log"
+            $results[$job.Name] = $job.State -eq 'Completed'
+            Remove-Job $job
+          }
+          $failed = $false
+          foreach ($gate in $gates) {
+            $name = $gate.Name
+            if ($results[$name]) { Write-Output "gate:$name=pass" } else { Write-Output "gate:$name=fail"; $failed = $true }
+            Write-Output "::group::$name"
+            Get-Content "$name.log"
+            Write-Output '::endgroup::'
+          }
+          if ($failed) { exit 1 }

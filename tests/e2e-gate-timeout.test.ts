@@ -3,17 +3,18 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const gateScript = readFileSync(join(process.cwd(), '.github/scripts/wait-for-e2e-gate.mjs'), 'utf8');
+const monitorScript = readFileSync(join(process.cwd(), '.github/scripts/dispatch-e2e-monitor.mjs'), 'utf8');
 
-describe('e2e gate timeout bounds', () => {
-  it('keeps the default gate poll timeout at 30 minutes (smoke runs finish in 3-4)', () => {
-    const match = gateScript.match(/const DEFAULT_TIMEOUT_SECONDS = (\d+);/);
-    expect(match).not.toBeNull();
-    expect(Number(match?.[1])).toBe(1800);
+describe('asynchronous e2e monitor dispatch', () => {
+  it('bounds the one-shot dispatch with AbortSignal and forbids poll/wait helpers', () => {
+    expect(monitorScript).toContain('actions/workflows/e2e.yml/dispatches');
+    expect(monitorScript).toContain("ref: 'main'");
+    expect(monitorScript).toContain('AbortSignal.timeout');
+    expect(monitorScript).toContain('DEFAULT_DISPATCH_TIMEOUT_MS');
+    expect(monitorScript).not.toContain('waitForTerminalRun');
+    expect(monitorScript).not.toContain('waitForMatchingRun');
+    expect(monitorScript).not.toContain('DEFAULT_POLL_SECONDS');
+    expect(monitorScript).not.toContain('setInterval');
+    expect(monitorScript).not.toContain('gate_required');
   });
-
-  it('keeps the env override hook for exceptional runs', () => {
-    expect(gateScript).toContain("parsePositiveInteger(process.env.E2E_GATE_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, 'E2E_GATE_TIMEOUT_SECONDS')");
-  });
-
 });
