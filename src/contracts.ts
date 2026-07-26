@@ -158,6 +158,11 @@ export const postmanRepoSyncActionContract: {
       description: 'Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one.',
       required: false
     },
+    'mock-environment-enabled': {
+      description: 'Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection.',
+      required: false,
+      default: 'false'
+    },
     'monitor-cron': {
       description: "Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run).",
       required: false,
@@ -358,6 +363,12 @@ export const postmanRepoSyncActionContract: {
     'mock-url': {
       description: 'Created or reused mock server URL.'
     },
+    'mock-environment-uid': {
+      description: 'Dedicated manual-validation environment UID when mock-environment-enabled succeeds.'
+    },
+    'mock-environment-status': {
+      description: 'Whether the optional manual-validation mock environment succeeded, was skipped, or failed.'
+    },
     'monitor-id': {
       description: 'Created or reused smoke monitor ID.'
     },
@@ -444,6 +455,8 @@ export function createExecutionPlan(
     outputs: {
       'environment-uids-json': '{}',
       'mock-url': '',
+      'mock-environment-uid': '',
+      'mock-environment-status': 'skipped',
       'monitor-id': '',
       'repo-sync-summary-json': JSON.stringify({
         artifactDir: postmanRepoSyncActionContract.defaults.artifactDir,

@@ -115,6 +115,15 @@ with:
 
 Repo-sync supports public mocks for anonymous validation. An explicit `mock-url` must match one mock in the resolved workspace and reference the expected baseline collection and environment. Discovered and newly created mocks pass the same live visibility check. Private mocks, responses without a recognized visibility field, stale URLs, and identity mismatches fail before `mock-url` is emitted; repo-sync never places a Postman API key in a collection or environment to make a private mock callable.
 
+For manual collection validation against that public mock, opt in to a dedicated Postman environment:
+
+```yaml
+with:
+  mock-environment-enabled: true
+```
+
+On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.postman_environment.json`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
+
 ### mTLS certificates for Postman CLI runs
 
 The generated CI workflow can run [Postman CLI collection runs](https://learning.postman.com/docs/postman-cli/postman-cli-collections/) with client certificates. Pass the cert material as inputs; when a GitHub token and repository context are available, the action persists them as repository secrets (`POSTMAN_SSL_CLIENT_CERT_B64`, `POSTMAN_SSL_CLIENT_KEY_B64`, `POSTMAN_SSL_CLIENT_PASSPHRASE`, `POSTMAN_SSL_EXTRA_CA_CERTS_B64`) for the generated workflow:
@@ -146,6 +155,7 @@ with:
 | `release-label` | Optional release label used for versioned naming. | no |  |
 | `monitor-id` | Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one. | no |  |
 | `mock-url` | Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one. | no |  |
+| `mock-environment-enabled` | Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection. | no | `false` |
 | `monitor-cron` | Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run). | no | `""` |
 | `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
@@ -193,6 +203,8 @@ with:
 | `environment-sync-status` | Whether environment sync succeeded, was skipped, or failed. |
 | `environment-uids-json` | JSON map of environment slug to Postman environment uid. |
 | `mock-url` | Created or reused mock server URL. |
+| `mock-environment-uid` | Dedicated manual-validation environment UID when mock-environment-enabled succeeds. |
+| `mock-environment-status` | Whether the optional manual-validation mock environment succeeded, was skipped, or failed. |
 | `monitor-id` | Created or reused smoke monitor ID. |
 | `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
 | `commit-sha` | Commit SHA produced by repo-write-mode, if any. |

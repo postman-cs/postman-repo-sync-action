@@ -129,6 +129,7 @@ export interface ResolvedInputs {
   orgMode: boolean;
   monitorId: string;
   mockUrl: string;
+  mockEnvironmentEnabled: boolean;
   monitorCron: string;
   sslClientCert: string;
   sslClientKey: string;
@@ -156,6 +157,8 @@ interface RepoSyncOutputs {
   'environment-sync-status': Status;
   'environment-uids-json': string;
   'mock-url': string;
+  'mock-environment-uid': string;
+  'mock-environment-status': Status;
   'monitor-id': string;
   'repo-sync-summary-json': string;
   'commit-sha': string;
@@ -584,6 +587,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     orgMode: parseBooleanInput(getInput('org-mode', env), false),
     monitorId: getInput('monitor-id', env),
     mockUrl: getInput('mock-url', env),
+    mockEnvironmentEnabled: parseBooleanInput(getInput('mock-environment-enabled', env), false),
     monitorCron: getInput('monitor-cron', env),
     sslClientCert: getInput('ssl-client-cert', env),
     sslClientKey: getInput('ssl-client-key', env),
@@ -911,6 +915,8 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'environment-sync-status': 'skipped',
     'environment-uids-json': JSON.stringify(inputs.environmentUids),
     'mock-url': '',
+    'mock-environment-uid': '',
+    'mock-environment-status': 'skipped',
     'monitor-id': '',
     'repo-sync-summary-json': '{}',
     'commit-sha': '',
@@ -980,6 +986,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_ORG_MODE: readInput(actionCore, 'org-mode'),
     INPUT_MONITOR_ID: readInput(actionCore, 'monitor-id'),
     INPUT_MOCK_URL: readInput(actionCore, 'mock-url'),
+    INPUT_MOCK_ENVIRONMENT_ENABLED: readInput(actionCore, 'mock-environment-enabled'),
     INPUT_MONITOR_CRON: readInput(actionCore, 'monitor-cron'),
     INPUT_SSL_CLIENT_CERT: sslClientCert,
     INPUT_SSL_CLIENT_KEY: sslClientKey,
@@ -1215,6 +1222,62 @@ async function upsertEnvironments(
   }
 
   return envUids;
+}
+
+async function upsertMockEnvironment(
+  inputs: ResolvedInputs,
+  dependencies: RepoSyncDependencies,
+  assetProjectName: string,
+  mockUrl: string
+): Promise<string> {
+  if (!inputs.mockEnvironmentEnabled || !inputs.workspaceId || !mockUrl) {
+    return '';
+  }
+  const displayName = `${assetProjectName} - Mock`;
+  const values = buildEnvironmentValues('mock', mockUrl);
+  const mask = resolveRepoSyncMasker(dependencies);
+  try {
+    const discovered = await dependencies.postman.findEnvironmentByName(
+      inputs.workspaceId,
+      displayName
+    );
+    if (discovered?.uid) {
+      try {
+        const existing = await dependencies.postman.getEnvironment(discovered.uid) as {
+          data?: { values?: Array<{ key?: string; value?: string }> };
+          values?: Array<{ key?: string; value?: string }>;
+        };
+        const currentValues = existing.data?.values ?? existing.values ?? [];
+        if (currentValues.some((value) => value.key === 'baseUrl' && value.value === mockUrl)) {
+          dependencies.core.info(`Mock environment already points to ${mockUrl}: ${discovered.uid}`);
+          return discovered.uid;
+        }
+      } catch {
+        // A failed comparison does not imply absence; converge through the verified update path.
+      }
+      await dependencies.postman.updateEnvironment(discovered.uid, displayName, values);
+      dependencies.core.info(`Updated mock environment ${displayName}: ${discovered.uid}`);
+      return discovered.uid;
+    }
+    const uid = await dependencies.postman.createEnvironment(
+      inputs.workspaceId,
+      displayName,
+      values
+    );
+    dependencies.core.info(`Created mock environment ${displayName}: ${uid}`);
+    return uid;
+  } catch (error) {
+    dependencies.core.warning(
+      formatOrchestrationIssue({
+        operation: 'Mock environment upsert',
+        entity: `workspace ${inputs.workspaceId} environment "${displayName}"`,
+        cause: error,
+        remediation: 'verify environment access or disable mock-environment-enabled then rerun',
+        mask
+      })
+    );
+    return '';
+  }
 }
 
 function ensureDir(path: string): void {
@@ -2005,6 +2068,7 @@ async function exportArtifacts(
     workspaceLinkStatus: Status;
     priorWorkspaceId?: string;
     existingSpecs?: CloudResourceMap;
+    mockEnvironmentUid?: string;
     releaseLabel?: string;
     priorState?: PostmanResourcesState | null;
     preparedPrebuiltCollections: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
@@ -2103,6 +2167,13 @@ async function exportArtifacts(
       true
     );
   }
+  if (options.mockEnvironmentUid) {
+    writeJsonFile(
+      `${mocksDir}/manual-validation.postman_environment.json`,
+      await dependencies.postman.getEnvironment(options.mockEnvironmentUid),
+      true
+    );
+  }
 
   const durableWorkspaceId = resolveDurableWorkspaceId({
     candidateId: inputs.workspaceId,
@@ -2172,6 +2243,8 @@ function createRepoSummary(
     commitSha: outputs['commit-sha'],
     environmentCount: Object.keys(envUids).length,
     environmentSyncStatus: outputs['environment-sync-status'],
+    mockEnvironmentStatus: outputs['mock-environment-status'],
+    mockEnvironmentUid: outputs['mock-environment-uid'],
     mockUrl: outputs['mock-url'],
     monitorId: outputs['monitor-id'],
     pushed,
@@ -2585,6 +2658,20 @@ async function runRepoSyncInner(
 
       outputs['mock-url'] = resolvedMockUrl;
       dependencies.core.setOutput('mock-url', resolvedMockUrl);
+      if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
+        const mockEnvironmentUid = await upsertMockEnvironment(
+          inputs,
+          dependencies,
+          assetProjectName,
+          resolvedMockUrl
+        );
+        outputs['mock-environment-uid'] = mockEnvironmentUid;
+        outputs['mock-environment-status'] = mockEnvironmentUid ? 'success' : 'failed';
+      } else if (inputs.mockEnvironmentEnabled) {
+        dependencies.core.warning(
+          'mock-environment-enabled is skipped for preview and channel runs so manual-validation environments cannot escape branch retention cleanup.'
+        );
+      }
     }
   }
 
@@ -2741,6 +2828,7 @@ async function runRepoSyncInner(
     workspaceLinkStatus: outputs['workspace-link-status'],
     priorWorkspaceId: resourcesState?.workspace?.id,
     existingSpecs: resourcesState?.cloudResources?.specs,
+    mockEnvironmentUid: outputs['mock-environment-uid'] || undefined,
     releaseLabel,
     priorState: resourcesState,
     preparedPrebuiltCollections

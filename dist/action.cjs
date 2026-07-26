@@ -136660,6 +136660,11 @@ var postmanRepoSyncActionContract = {
       description: "Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one.",
       required: false
     },
+    "mock-environment-enabled": {
+      description: "Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection.",
+      required: false,
+      default: "false"
+    },
     "monitor-cron": {
       description: "Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run).",
       required: false,
@@ -136852,6 +136857,12 @@ var postmanRepoSyncActionContract = {
     },
     "mock-url": {
       description: "Created or reused mock server URL."
+    },
+    "mock-environment-uid": {
+      description: "Dedicated manual-validation environment UID when mock-environment-enabled succeeds."
+    },
+    "mock-environment-status": {
+      description: "Whether the optional manual-validation mock environment succeeded, was skipped, or failed."
     },
     "monitor-id": {
       description: "Created or reused smoke monitor ID."
@@ -138785,6 +138796,7 @@ function resolveInputs(env = process.env) {
     orgMode: parseBooleanInput(getInput2("org-mode", env), false),
     monitorId: getInput2("monitor-id", env),
     mockUrl: getInput2("mock-url", env),
+    mockEnvironmentEnabled: parseBooleanInput(getInput2("mock-environment-enabled", env), false),
     monitorCron: getInput2("monitor-cron", env),
     sslClientCert: getInput2("ssl-client-cert", env),
     sslClientKey: getInput2("ssl-client-key", env),
@@ -139011,6 +139023,8 @@ function createOutputs(inputs) {
     "environment-sync-status": "skipped",
     "environment-uids-json": JSON.stringify(inputs.environmentUids),
     "mock-url": "",
+    "mock-environment-uid": "",
+    "mock-environment-status": "skipped",
     "monitor-id": "",
     "repo-sync-summary-json": "{}",
     "commit-sha": "",
@@ -139078,6 +139092,7 @@ function readActionInputs(actionCore) {
     INPUT_ORG_MODE: readInput(actionCore, "org-mode"),
     INPUT_MONITOR_ID: readInput(actionCore, "monitor-id"),
     INPUT_MOCK_URL: readInput(actionCore, "mock-url"),
+    INPUT_MOCK_ENVIRONMENT_ENABLED: readInput(actionCore, "mock-environment-enabled"),
     INPUT_MONITOR_CRON: readInput(actionCore, "monitor-cron"),
     INPUT_SSL_CLIENT_CERT: sslClientCert,
     INPUT_SSL_CLIENT_KEY: sslClientKey,
@@ -139278,6 +139293,52 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
     }
   }
   return envUids;
+}
+async function upsertMockEnvironment(inputs, dependencies, assetProjectName, mockUrl) {
+  if (!inputs.mockEnvironmentEnabled || !inputs.workspaceId || !mockUrl) {
+    return "";
+  }
+  const displayName = `${assetProjectName} - Mock`;
+  const values = buildEnvironmentValues("mock", mockUrl);
+  const mask = resolveRepoSyncMasker(dependencies);
+  try {
+    const discovered = await dependencies.postman.findEnvironmentByName(
+      inputs.workspaceId,
+      displayName
+    );
+    if (discovered?.uid) {
+      try {
+        const existing = await dependencies.postman.getEnvironment(discovered.uid);
+        const currentValues = existing.data?.values ?? existing.values ?? [];
+        if (currentValues.some((value) => value.key === "baseUrl" && value.value === mockUrl)) {
+          dependencies.core.info(`Mock environment already points to ${mockUrl}: ${discovered.uid}`);
+          return discovered.uid;
+        }
+      } catch {
+      }
+      await dependencies.postman.updateEnvironment(discovered.uid, displayName, values);
+      dependencies.core.info(`Updated mock environment ${displayName}: ${discovered.uid}`);
+      return discovered.uid;
+    }
+    const uid = await dependencies.postman.createEnvironment(
+      inputs.workspaceId,
+      displayName,
+      values
+    );
+    dependencies.core.info(`Created mock environment ${displayName}: ${uid}`);
+    return uid;
+  } catch (error2) {
+    dependencies.core.warning(
+      formatOrchestrationIssue({
+        operation: "Mock environment upsert",
+        entity: `workspace ${inputs.workspaceId} environment "${displayName}"`,
+        cause: error2,
+        remediation: "verify environment access or disable mock-environment-enabled then rerun",
+        mask
+      })
+    );
+    return "";
+  }
 }
 function ensureDir(path9) {
   (0, import_node_fs5.mkdirSync)(path9, { recursive: true });
@@ -139917,6 +139978,13 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
       true
     );
   }
+  if (options.mockEnvironmentUid) {
+    writeJsonFile(
+      `${mocksDir}/manual-validation.postman_environment.json`,
+      await dependencies.postman.getEnvironment(options.mockEnvironmentUid),
+      true
+    );
+  }
   const durableWorkspaceId = resolveDurableWorkspaceId({
     candidateId: inputs.workspaceId,
     priorId: options.priorWorkspaceId,
@@ -139975,6 +140043,8 @@ function createRepoSummary(outputs, envUids, pushed) {
     commitSha: outputs["commit-sha"],
     environmentCount: Object.keys(envUids).length,
     environmentSyncStatus: outputs["environment-sync-status"],
+    mockEnvironmentStatus: outputs["mock-environment-status"],
+    mockEnvironmentUid: outputs["mock-environment-uid"],
     mockUrl: outputs["mock-url"],
     monitorId: outputs["monitor-id"],
     pushed,
@@ -140300,6 +140370,20 @@ async function runRepoSyncInner(inputs, dependencies) {
       }
       outputs["mock-url"] = resolvedMockUrl;
       dependencies.core.setOutput("mock-url", resolvedMockUrl);
+      if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
+        const mockEnvironmentUid = await upsertMockEnvironment(
+          inputs,
+          dependencies,
+          assetProjectName,
+          resolvedMockUrl
+        );
+        outputs["mock-environment-uid"] = mockEnvironmentUid;
+        outputs["mock-environment-status"] = mockEnvironmentUid ? "success" : "failed";
+      } else if (inputs.mockEnvironmentEnabled) {
+        dependencies.core.warning(
+          "mock-environment-enabled is skipped for preview and channel runs so manual-validation environments cannot escape branch retention cleanup."
+        );
+      }
     }
   }
   if (inputs.workspaceId && inputs.smokeCollectionId && Object.keys(envUids).length > 0) {
@@ -140432,6 +140516,7 @@ async function runRepoSyncInner(inputs, dependencies) {
     workspaceLinkStatus: outputs["workspace-link-status"],
     priorWorkspaceId: resourcesState?.workspace?.id,
     existingSpecs: resourcesState?.cloudResources?.specs,
+    mockEnvironmentUid: outputs["mock-environment-uid"] || void 0,
     releaseLabel,
     priorState: resourcesState,
     preparedPrebuiltCollections
