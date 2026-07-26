@@ -136963,6 +136963,25 @@ var PostmanAssetsClient = class {
 };
 
 // src/lib/postman/postman-gateway-assets-client.ts
+var MockContractError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MockContractError";
+  }
+};
+function requirePublicMock(mock) {
+  if (mock.visibility === "private") {
+    throw new MockContractError(
+      `MOCK_NOT_PUBLIC: Mock ${mock.uid} is private. Make it public in Postman or remove/rename it so repo-sync can create the canonical public mock.`
+    );
+  }
+  if (mock.visibility !== "public") {
+    throw new MockContractError(
+      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is publicly callable.`
+    );
+  }
+  return mock;
+}
 var MAX_CREATE_FLIGHTS = 256;
 var createFlights = /* @__PURE__ */ new Map();
 var PostmanGatewayAssetsClient = class {
@@ -137143,6 +137162,41 @@ var PostmanGatewayAssetsClient = class {
     if (!record) return "";
     const id = record.uid ?? record.id;
     return typeof id === "string" ? id.trim() : String(id ?? "").trim();
+  }
+  decodeMockRecord(value, operation) {
+    const record = this.asRecord(value);
+    if (!record) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned a non-object mock record`
+      );
+    }
+    const uid = this.idOf(record);
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const collection = typeof record.collection === "string" ? record.collection.trim() : "";
+    const mockUrl = typeof (record.url ?? record.mockUrl) === "string" ? String(record.url ?? record.mockUrl).trim() : "";
+    const environment = typeof record.environment === "string" ? record.environment.trim() : "";
+    if (!uid) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned a mock without a UID`
+      );
+    }
+    if (!name) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a name`
+      );
+    }
+    if (!collection) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a collection UID`
+      );
+    }
+    if (!mockUrl) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a URL`
+      );
+    }
+    const visibility = typeof record.published === "boolean" ? record.published ? "public" : "private" : "unknown";
+    return { uid, name, collection, mockUrl, environment, visibility };
   }
   /**
    * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
@@ -137444,7 +137498,8 @@ var PostmanGatewayAssetsClient = class {
     return this.singleFlight(flightKey, flightKey, "mock", async () => {
       const existing = await this.findMockByCollection(collection, environment, mockName);
       if (existing) {
-        return { uid: existing.uid, url: existing.mockUrl };
+        const reusable = requirePublicMock(existing);
+        return { uid: reusable.uid, url: reusable.mockUrl };
       }
       const body = {
         name: mockName,
@@ -137467,13 +137522,12 @@ var PostmanGatewayAssetsClient = class {
       );
       const parseMock = (response) => {
         const record = this.dataOf(response);
-        const uid = this.idOf(record);
-        if (!uid) {
-          throw new Error("Mock create did not return a UID");
-        }
+        const created = requirePublicMock(
+          this.decodeMockRecord(record, "Mock create")
+        );
         return {
-          uid,
-          url: String(record?.url ?? record?.mockUrl ?? "").trim()
+          uid: created.uid,
+          url: created.mockUrl
         };
       };
       try {
@@ -137484,7 +137538,8 @@ var PostmanGatewayAssetsClient = class {
           error2
         );
         if (adopted) {
-          return { uid: adopted.uid, url: adopted.mockUrl };
+          const reusable = requirePublicMock(adopted);
+          return { uid: reusable.uid, url: reusable.mockUrl };
         }
         if (adopted === void 0) {
           const retried = await this.resendAbsentCreate(async () => parseMock(await send2("auto")));
@@ -137500,14 +137555,14 @@ var PostmanGatewayAssetsClient = class {
       method: "get",
       path: `/mocks?workspace=${this.workspaceId}`
     });
-    const items = Array.isArray(response) ? response : Array.isArray(this.asRecord(response)?.data) ? this.asRecord(response).data : [];
-    return items.map((raw) => this.asRecord(raw)).filter((m) => m !== null).map((m) => ({
-      uid: this.idOf(m),
-      name: String(m.name ?? ""),
-      collection: String(m.collection ?? ""),
-      mockUrl: String(m.url ?? m.mockUrl ?? ""),
-      environment: String(m.environment ?? "")
-    }));
+    const envelope = this.asRecord(response);
+    const items = Array.isArray(response) ? response : Array.isArray(envelope?.data) ? envelope.data : null;
+    if (!items) {
+      throw new MockContractError(
+        "CONTRACT_MOCK_RESPONSE_INVALID: Mock list envelope must be an array or contain a data array"
+      );
+    }
+    return items.map((raw) => this.decodeMockRecord(raw, "Mock list"));
   }
   /**
    * Delete an environment through the sync service (GC path). The path id is
@@ -137561,7 +137616,7 @@ var PostmanGatewayAssetsClient = class {
       `workspace ${this.workspaceId}, name "${mockName}", collection ${want}, and environment ${environment || "(none)"}`,
       matches
     );
-    return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
+    return match;
   }
   // --- monitors (service: monitors; collection-based = jobTemplates) ---
   /** Map raw jobTemplate records to the facade shape; `collection` is a flat public uid. */
@@ -138490,6 +138545,61 @@ function resolveRepoSyncMasker(dependencies) {
 }
 function causeText(cause) {
   return cause instanceof Error ? cause.message : String(cause);
+}
+function normalizeMockUrl(value, source) {
+  let url;
+  try {
+    url = new URL(String(value || "").trim());
+  } catch {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_URL_INVALID: ${source} is not a valid absolute URL`
+    );
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_URL_INVALID: ${source} must be an HTTPS URL without credentials, query parameters, or a fragment`
+    );
+  }
+  url.pathname = url.pathname.replace(/\/+$/g, "") || "/";
+  return url.toString();
+}
+function resolveExplicitPublicMock(mocks, explicitUrl, collectionUid, environmentUid) {
+  const normalized = normalizeMockUrl(explicitUrl, "mock-url");
+  const matches = mocks.filter(
+    (mock) => normalizeMockUrl(mock.mockUrl, `mock ${mock.uid} URL`) === normalized
+  );
+  if (matches.length === 0) {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_URL_NOT_FOUND: mock-url was not found in the resolved workspace mock inventory`
+    );
+  }
+  if (matches.length > 1) {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_URL_AMBIGUOUS: mock-url matched multiple workspace mocks (${matches.map((mock) => mock.uid).join(", ")})`
+    );
+  }
+  const match = matches[0];
+  if (match.collection !== collectionUid) {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_IDENTITY_MISMATCH: Mock ${match.uid} references collection ${match.collection || "(none)"}, expected ${collectionUid}`
+    );
+  }
+  if (match.environment !== environmentUid) {
+    throw new MockContractError(
+      `EXPLICIT_MOCK_IDENTITY_MISMATCH: Mock ${match.uid} references environment ${match.environment || "(none)"}, expected ${environmentUid}`
+    );
+  }
+  return requirePublicMock(match);
+}
+function shouldRetryMockCreate(error2) {
+  if (error2 instanceof MockContractError) return false;
+  if (error2 instanceof HttpError) {
+    return error2.status === 408 || error2.status === 429 || error2.status >= 500;
+  }
+  if (error2 instanceof Error && error2.message.startsWith("Multiple mocks match ")) {
+    return false;
+  }
+  return true;
 }
 function toOneLineDisplay(value) {
   return String(value ?? "").replace(/[\r\n\u0085\u2028\u2029\v\f]+/g, " ").replace(/[ \t]{2,}/g, " ").trim();
@@ -140117,20 +140227,37 @@ async function runRepoSyncInner(inputs, dependencies) {
       let resolvedMockUrl = "";
       const mockName = `${assetProjectName} Mock`;
       if (inputs.mockUrl) {
-        resolvedMockUrl = inputs.mockUrl;
+        let mocks;
+        try {
+          mocks = await dependencies.postman.listMocks();
+        } catch (error2) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: "Explicit mock-url lookup",
+              entity: `mock-url ${inputs.mockUrl} workspace ${inputs.workspaceId} collection ${inputs.baselineCollectionId} environment ${mockEnvUid}`,
+              cause: error2,
+              remediation: "verify the URL and mock access then rerun",
+              mask
+            }),
+            { cause: error2 }
+          );
+        }
+        resolvedMockUrl = resolveExplicitPublicMock(
+          mocks,
+          inputs.mockUrl,
+          inputs.baselineCollectionId,
+          mockEnvUid
+        ).mockUrl;
         dependencies.core.info(`Reusing mock from explicit input: ${resolvedMockUrl}`);
       }
       if (!resolvedMockUrl && inputs.baselineCollectionId) {
+        let discovered;
         try {
-          const discovered = await dependencies.postman.findMockByCollection(
+          discovered = await dependencies.postman.findMockByCollection(
             inputs.baselineCollectionId,
             mockEnvUid,
             mockName
           );
-          if (discovered) {
-            resolvedMockUrl = discovered.mockUrl;
-            dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
-          }
         } catch (error2) {
           throw new Error(
             formatOrchestrationIssue({
@@ -140142,6 +140269,10 @@ async function runRepoSyncInner(inputs, dependencies) {
             }),
             { cause: error2 }
           );
+        }
+        if (discovered) {
+          resolvedMockUrl = requirePublicMock(discovered).mockUrl;
+          dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
         }
       }
       if (!resolvedMockUrl) {
@@ -140159,6 +140290,7 @@ async function runRepoSyncInner(inputs, dependencies) {
               maxAttempts: 3,
               delayMs: 2e3,
               backoffMultiplier: 2,
+              shouldRetry: (error2) => shouldRetryMockCreate(error2),
               onRetry: ({ attempt, maxAttempts, error: error2 }) => {
                 dependencies.core.warning(
                   formatOrchestrationIssue({

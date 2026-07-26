@@ -43,7 +43,7 @@ function buildClient(fetchImpl: typeof fetch): PostmanGatewayAssetsClient {
 
 interface LiveAssets {
   environments: Array<{ id: string; name: string; owner: string }>;
-  mocks: Array<{ id: string; name: string; collection: string; environment?: string; url: string }>;
+  mocks: Array<{ id: string; name: string; collection: string; environment?: string; url: string; published: boolean }>;
   monitors: Array<{ id: string; name: string; collection: string; environment?: string; active: boolean }>;
 }
 
@@ -80,7 +80,8 @@ function liveApi(state: LiveAssets, ambiguousCreates = false) {
         name: String(body.name),
         collection: String(body.collection),
         ...(body.environment ? { environment: String(body.environment) } : {}),
-        url: 'https://mock-1.mock.pstmn.io'
+        url: 'https://mock-1.mock.pstmn.io',
+        published: true
       };
       state.mocks.push(mock);
       return ambiguousCreates
@@ -177,7 +178,8 @@ describe('accepted write followed by an ambiguous response', () => {
           name: 'Acme Mock',
           collection: COLLECTION_UID,
           environment: ENVIRONMENT_UID,
-          url: 'https://mock-adopted.mock.pstmn.io'
+          url: 'https://mock-adopted.mock.pstmn.io',
+          published: true
         }] : []);
       }
       if (method === 'post' && path.startsWith('/mocks?')) {
@@ -346,8 +348,8 @@ describe('exact live identity and duplicate handling', () => {
 
   it('fails closed when two mocks match name, collection, and environment', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([
-      { id: 'mock-a', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://a.mock' },
-      { id: 'mock-b', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://b.mock' }
+      { id: 'mock-a', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://a.mock', published: true },
+      { id: 'mock-b', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://b.mock', published: true }
     ]));
 
     await expect(buildClient(fetchImpl).findMockByCollection(
@@ -361,8 +363,8 @@ describe('exact live identity and duplicate handling', () => {
     let created = false;
     let posts = 0;
     const duplicates = [
-      { id: 'mock-a', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://a.mock' },
-      { id: 'mock-b', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://b.mock' }
+      { id: 'mock-a', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://a.mock', published: true },
+      { id: 'mock-b', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://b.mock', published: true }
     ];
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       const request = envelope(init);
@@ -406,16 +408,23 @@ describe('exact live identity and duplicate handling', () => {
 
   it('adopts exactly one full mock identity and ignores wrong name/environment siblings', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([
-      { id: 'wrong-name', name: 'Other Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://wrong-name.mock' },
-      { id: 'wrong-env', name: 'Acme Mock', collection: COLLECTION_UID, environment: 'env-other', url: 'https://wrong-env.mock' },
-      { id: 'mock-exact', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://exact.mock' }
+      { id: 'wrong-name', name: 'Other Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://wrong-name.mock', published: true },
+      { id: 'wrong-env', name: 'Acme Mock', collection: COLLECTION_UID, environment: 'env-other', url: 'https://wrong-env.mock', published: true },
+      { id: 'mock-exact', name: 'Acme Mock', collection: COLLECTION_UID, environment: ENVIRONMENT_UID, url: 'https://exact.mock', published: true }
     ]));
 
     await expect(buildClient(fetchImpl).findMockByCollection(
       COLLECTION_UID,
       ENVIRONMENT_UID,
       'Acme Mock'
-    )).resolves.toEqual({ uid: 'mock-exact', mockUrl: 'https://exact.mock' });
+    )).resolves.toEqual({
+      uid: 'mock-exact',
+      name: 'Acme Mock',
+      collection: COLLECTION_UID,
+      environment: ENVIRONMENT_UID,
+      mockUrl: 'https://exact.mock',
+      visibility: 'public'
+    });
   });
 
   it('does not use a monitor fallback when no full identity matches', async () => {
@@ -442,7 +451,8 @@ describe('exact live identity and duplicate handling', () => {
           name: 'Acme Mock',
           collection: COLLECTION_UID,
           environment: 'env-other',
-          url: 'https://wrong-env.mock'
+          url: 'https://wrong-env.mock',
+          published: true
         }]);
       }
       if (method === 'post' && path.startsWith('/mocks?')) {
@@ -644,7 +654,14 @@ describe('fresh-process orchestration live discovery reuse', () => {
     const findMockByCollection = vi
       .fn()
       .mockResolvedValueOnce(null)
-      .mockResolvedValue({ uid: 'mock-1', mockUrl: 'https://mock-1.mock.pstmn.io' });
+      .mockResolvedValue({
+        uid: 'mock-1',
+        name: 'Acme Mock',
+        collection: COLLECTION_UID,
+        environment: ENVIRONMENT_UID,
+        mockUrl: 'https://mock-1.mock.pstmn.io',
+        visibility: 'public'
+      });
     const createMock = vi.fn().mockResolvedValue({
       uid: 'mock-1',
       url: 'https://mock-1.mock.pstmn.io'

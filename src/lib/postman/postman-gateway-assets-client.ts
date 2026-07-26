@@ -4,6 +4,38 @@ import { retry, sleep as defaultSleep } from '../retry.js';
 
 type JsonRecord = Record<string, unknown>;
 
+export type MockVisibility = 'public' | 'private' | 'unknown';
+
+export interface MockRecord {
+  uid: string;
+  name: string;
+  collection: string;
+  mockUrl: string;
+  environment: string;
+  visibility: MockVisibility;
+}
+
+export class MockContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MockContractError';
+  }
+}
+
+export function requirePublicMock(mock: MockRecord): MockRecord {
+  if (mock.visibility === 'private') {
+    throw new MockContractError(
+      `MOCK_NOT_PUBLIC: Mock ${mock.uid} is private. Make it public in Postman or remove/rename it so repo-sync can create the canonical public mock.`
+    );
+  }
+  if (mock.visibility !== 'public') {
+    throw new MockContractError(
+      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is publicly callable.`
+    );
+  }
+  return mock;
+}
+
 const MAX_CREATE_FLIGHTS = 256;
 interface CreateFlight {
   fingerprint: string;
@@ -237,6 +269,46 @@ export class PostmanGatewayAssetsClient {
     if (!record) return '';
     const id = record.uid ?? record.id;
     return typeof id === 'string' ? id.trim() : String(id ?? '').trim();
+  }
+
+  private decodeMockRecord(value: unknown, operation: string): MockRecord {
+    const record = this.asRecord(value);
+    if (!record) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned a non-object mock record`
+      );
+    }
+    const uid = this.idOf(record);
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    const collection = typeof record.collection === 'string' ? record.collection.trim() : '';
+    const mockUrl = typeof (record.url ?? record.mockUrl) === 'string'
+      ? String(record.url ?? record.mockUrl).trim()
+      : '';
+    const environment = typeof record.environment === 'string' ? record.environment.trim() : '';
+    if (!uid) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned a mock without a UID`
+      );
+    }
+    if (!name) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a name`
+      );
+    }
+    if (!collection) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a collection UID`
+      );
+    }
+    if (!mockUrl) {
+      throw new MockContractError(
+        `CONTRACT_MOCK_RESPONSE_INVALID: ${operation} returned mock ${uid} without a URL`
+      );
+    }
+    const visibility: MockVisibility = typeof record.published === 'boolean'
+      ? (record.published ? 'public' : 'private')
+      : 'unknown';
+    return { uid, name, collection, mockUrl, environment, visibility };
   }
 
   /**
@@ -593,7 +665,8 @@ export class PostmanGatewayAssetsClient {
     return this.singleFlight(flightKey, flightKey, 'mock', async () => {
       const existing = await this.findMockByCollection(collection, environment, mockName);
       if (existing) {
-        return { uid: existing.uid, url: existing.mockUrl };
+        const reusable = requirePublicMock(existing);
+        return { uid: reusable.uid, url: reusable.mockUrl };
       }
 
       const body: JsonRecord = {
@@ -619,13 +692,12 @@ export class PostmanGatewayAssetsClient {
         );
       const parseMock = (response: JsonRecord | null) => {
         const record = this.dataOf(response);
-        const uid = this.idOf(record);
-        if (!uid) {
-          throw new Error('Mock create did not return a UID');
-        }
+        const created = requirePublicMock(
+          this.decodeMockRecord(record, 'Mock create')
+        );
         return {
-          uid,
-          url: String(record?.url ?? record?.mockUrl ?? '').trim()
+          uid: created.uid,
+          url: created.mockUrl
         };
       };
       try {
@@ -636,7 +708,8 @@ export class PostmanGatewayAssetsClient {
           error
         );
         if (adopted) {
-          return { uid: adopted.uid, url: adopted.mockUrl };
+          const reusable = requirePublicMock(adopted);
+          return { uid: reusable.uid, url: reusable.mockUrl };
         }
         if (adopted === undefined) {
           const retried = await this.resendAbsentCreate(async () => parseMock(await send('auto')));
@@ -647,29 +720,24 @@ export class PostmanGatewayAssetsClient {
     });
   }
 
-  async listMocks(): Promise<
-    Array<{ uid: string; name: string; collection: string; mockUrl: string; environment: string }>
-  > {
+  async listMocks(): Promise<MockRecord[]> {
     const response = await this.gateway.requestJson<unknown>({
       service: 'mock',
       method: 'get',
       path: `/mocks?workspace=${this.workspaceId}`
     });
+    const envelope = this.asRecord(response);
     const items = Array.isArray(response)
       ? response
-      : Array.isArray(this.asRecord(response)?.data)
-        ? ((this.asRecord(response) as JsonRecord).data as unknown[])
-        : [];
-    return items
-      .map((raw) => this.asRecord(raw))
-      .filter((m): m is JsonRecord => m !== null)
-      .map((m) => ({
-        uid: this.idOf(m),
-        name: String(m.name ?? ''),
-        collection: String(m.collection ?? ''),
-        mockUrl: String(m.url ?? m.mockUrl ?? ''),
-        environment: String(m.environment ?? '')
-      }));
+      : Array.isArray(envelope?.data)
+        ? (envelope.data as unknown[])
+        : null;
+    if (!items) {
+      throw new MockContractError(
+        'CONTRACT_MOCK_RESPONSE_INVALID: Mock list envelope must be an array or contain a data array'
+      );
+    }
+    return items.map((raw) => this.decodeMockRecord(raw, 'Mock list'));
   }
 
   /**
@@ -719,7 +787,7 @@ export class PostmanGatewayAssetsClient {
     collectionUid: string,
     environmentUid: string,
     name: string
-  ): Promise<{ uid: string; mockUrl: string } | null> {
+  ): Promise<MockRecord | null> {
     const mocks = await this.listMocks();
     // Both sides are public uids (`<owner>-<uuid>`): the mock list echoes the
     // `collection` uid it was created with, and the caller passes the same uid.
@@ -736,7 +804,7 @@ export class PostmanGatewayAssetsClient {
       `workspace ${this.workspaceId}, name "${mockName}", collection ${want}, and environment ${environment || '(none)'}`,
       matches
     );
-    return match ? { uid: match.uid, mockUrl: match.mockUrl } : null;
+    return match;
   }
 
   // --- monitors (service: monitors; collection-based = jobTemplates) ---

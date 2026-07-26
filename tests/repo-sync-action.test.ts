@@ -3068,16 +3068,60 @@ describe('mock resolution paths', () => {
   }; }
 
   it('reuses explicit mock-url from input', async () => {
-    const postman = makePostman();
+    const postman = makePostman({
+      listMocks: vi.fn().mockResolvedValue([{
+        uid: 'explicit-mock',
+        name: 'Existing Mock',
+        collection: 'col-baseline',
+        environment: 'env-prod',
+        mockUrl: 'https://explicit-mock.pstmn.io/',
+        visibility: 'public'
+      }])
+    });
     const github = makeGithub();
     await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false, mockUrl: 'https://explicit-mock.pstmn.io' }), makeDeps(postman, github));
-    
+
     expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.findMockByCollection).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for private, unknown, stale, and unrelated explicit mocks', async () => {
+    const base = {
+      uid: 'explicit-mock',
+      name: 'Existing Mock',
+      collection: 'col-baseline',
+      environment: 'env-prod',
+      mockUrl: 'https://explicit-mock.pstmn.io'
+    };
+    for (const [label, listMocks, message] of [
+      ['private', [{ ...base, visibility: 'private' }], /MOCK_NOT_PUBLIC.*explicit-mock/],
+      ['unknown', [{ ...base, visibility: 'unknown' }], /MOCK_VISIBILITY_UNKNOWN.*explicit-mock/],
+      ['stale', [], /EXPLICIT_MOCK_URL_NOT_FOUND/],
+      ['wrong collection', [{ ...base, collection: 'other-col', visibility: 'public' }], /EXPLICIT_MOCK_IDENTITY_MISMATCH.*collection/],
+      ['wrong environment', [{ ...base, environment: 'other-env', visibility: 'public' }], /EXPLICIT_MOCK_IDENTITY_MISMATCH.*environment/]
+    ] as const) {
+      const postman = makePostman({ listMocks: vi.fn().mockResolvedValue(listMocks) });
+      await expect(
+        runRepoSync(
+          createInputs({ environments: ['prod'], generateCiWorkflow: false, mockUrl: base.mockUrl }),
+          makeDeps(postman, makeGithub())
+        ),
+        label
+      ).rejects.toThrow(message);
+      expect(postman.createMock, label).not.toHaveBeenCalled();
+    }
   });
 
   it('discovers existing mock by baseline collection ID', async () => {
     const postman = makePostman({
-      findMockByCollection: vi.fn().mockResolvedValue({ uid: 'discovered-mock', mockUrl: 'https://discovered-mock.pstmn.io' })
+      findMockByCollection: vi.fn().mockResolvedValue({
+        uid: 'discovered-mock',
+        name: 'core-payments Mock',
+        collection: 'col-baseline',
+        environment: 'env-prod',
+        mockUrl: 'https://discovered-mock.pstmn.io',
+        visibility: 'public'
+      })
     });
     const github = makeGithub();
     await runRepoSync(createInputs({ environments: ['prod'], generateCiWorkflow: false }), makeDeps(postman, github));
@@ -3088,6 +3132,31 @@ describe('mock resolution paths', () => {
       'env-prod',
       'core-payments Mock'
     );
+  });
+
+  it('fails closed instead of reusing a discovered private or unknown mock', async () => {
+    for (const [visibility, message] of [
+      ['private', /MOCK_NOT_PUBLIC.*discovered-mock/],
+      ['unknown', /MOCK_VISIBILITY_UNKNOWN.*discovered-mock/]
+    ] as const) {
+      const postman = makePostman({
+        findMockByCollection: vi.fn().mockResolvedValue({
+          uid: 'discovered-mock',
+          name: 'core-payments Mock',
+          collection: 'col-baseline',
+          environment: 'env-prod',
+          mockUrl: 'https://discovered-mock.pstmn.io',
+          visibility
+        })
+      });
+      await expect(
+        runRepoSync(
+          createInputs({ environments: ['prod'], generateCiWorkflow: false }),
+          makeDeps(postman, makeGithub())
+        )
+      ).rejects.toThrow(message);
+      expect(postman.createMock).not.toHaveBeenCalled();
+    }
   });
 
   it('creates a new mock when no existing asset is found', async () => {
