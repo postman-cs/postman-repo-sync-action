@@ -53,6 +53,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     orgMode: false,
     monitorId: '',
     mockUrl: '',
+    mockVisibility: 'public',
     mockEnvironmentEnabled: false,
     monitorCron: '',
     sslClientCert: '',

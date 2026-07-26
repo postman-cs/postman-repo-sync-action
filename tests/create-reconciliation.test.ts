@@ -128,7 +128,7 @@ describe('accepted write followed by an ambiguous response', () => {
     const api = liveApi(emptyState(), true);
 
     await expect(buildClient(api.fetchImpl).createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID))
-      .resolves.toEqual({ uid: 'mock-1', url: 'https://mock-1.mock.pstmn.io' });
+      .resolves.toEqual({ uid: 'mock-1', url: 'https://mock-1.mock.pstmn.io', visibility: 'public' });
 
     expect(api.counts.mock).toBe(1);
   });
@@ -197,7 +197,8 @@ describe('accepted write followed by an ambiguous response', () => {
       ENVIRONMENT_UID
     )).resolves.toEqual({
       uid: 'mock-adopted',
-      url: 'https://mock-adopted.mock.pstmn.io'
+      url: 'https://mock-adopted.mock.pstmn.io',
+      visibility: 'public'
     });
     expect(posts).toBe(1);
   });
@@ -614,6 +615,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       monitorType: 'cloud',
       monitorId: '',
       mockUrl: '',
+      mockVisibility: 'public',
       mockEnvironmentEnabled: false,
       monitorCron: '',
       provider: 'github',

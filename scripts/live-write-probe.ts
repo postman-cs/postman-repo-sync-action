@@ -395,17 +395,37 @@ async function main(): Promise<void> {
     }
 
     if (mockUid && privateMockUid) {
-      const [publicCall, privateCall] = await Promise.all([
+      const runtimeApiKey = process.env.POSTMAN_API_KEY;
+      const runtimeAccessToken = provider.current();
+      const [publicCall, privateCall, privateApiKeyCall, privateAccessTokenCall] = await Promise.all([
         fetch(`https://${mockUid}.mock.pstmn.io`).catch(() => null),
-        fetch(`https://${privateMockUid}.mock.pstmn.io`).catch(() => null)
+        fetch(`https://${privateMockUid}.mock.pstmn.io`).catch(() => null),
+        runtimeApiKey
+          ? fetch(`https://${privateMockUid}.mock.pstmn.io`, {
+              headers: { 'x-api-key': runtimeApiKey }
+            }).catch(() => null)
+          : null,
+        runtimeAccessToken
+          ? fetch(`https://${privateMockUid}.mock.pstmn.io`, {
+              headers: { 'x-access-token': runtimeAccessToken }
+            }).catch(() => null)
+          : null
       ]);
       console.log(`  [anonymous] public mock status=${publicCall?.status ?? 'transport-error'}`);
       console.log(`  [anonymous] private mock status=${privateCall?.status ?? 'transport-error'}`);
+      console.log(`  [x-api-key] private mock status=${privateApiKeyCall?.status ?? 'not-configured'}`);
+      console.log(`  [x-access-token] private mock status=${privateAccessTokenCall?.status ?? 'not-configured'}`);
       if (publicCall && [401, 403].includes(publicCall.status)) {
         fail('public mock anonymous call', `unexpected status ${publicCall.status}`);
       }
       if (privateCall && ![401, 403, 404].includes(privateCall.status)) {
         fail('private mock anonymous call', `unexpected status ${privateCall.status}`);
+      }
+      if (privateApiKeyCall && [401, 403].includes(privateApiKeyCall.status)) {
+        fail('private mock x-api-key call', `unexpected auth status ${privateApiKeyCall.status}`);
+      }
+      if (privateAccessTokenCall && [401, 403].includes(privateAccessTokenCall.status)) {
+        fail('private mock x-access-token call', `unexpected auth status ${privateAccessTokenCall.status}`);
       }
     }
 
