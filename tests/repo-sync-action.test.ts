@@ -3271,6 +3271,10 @@ describe('mock resolution paths', () => {
     try {
       process.chdir(isolatedDir);
       vi.stubEnv('POSTMAN_BRANCH_ASSET_IDS', 'owned');
+      vi.stubEnv('POSTMAN_BRANCH_DECISION', '');
+      vi.stubEnv('GITHUB_HEAD_REF', '');
+      vi.stubEnv('GITHUB_REF_NAME', 'feature/mock-environment');
+      vi.stubEnv('GITHUB_REF', 'refs/heads/feature/mock-environment');
       const createEnvironment = vi.fn().mockResolvedValue('env-preview');
       const { core, warnings } = createCoreStub();
       const postman = makePostman({ createEnvironment });
