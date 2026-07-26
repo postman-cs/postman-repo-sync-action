@@ -175,8 +175,102 @@ describe('PostmanGatewayAssetsClient', () => {
     const serialized = JSON.stringify(patch?.body);
     expect(serialized).toContain('postmanPrivateMockApiKey');
     expect(serialized).toContain('x-api-key');
+    expect(serialized).toContain("join('.')");
+    expect(serialized).toContain('private-mock-auth-v2');
     expect(serialized).toContain('afterResponse');
     expect(serialized).not.toContain('pmak-');
+  });
+
+  it('replaces a stale private-mock hook generation instead of stacking a second copy', async () => {
+    const legacyMarker = 'postman-enterprise-automation: private-mock-auth';
+    const legacyBlock = [
+      `// ${legacyMarker}`,
+      "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
+      "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
+      "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+      "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+      '}'
+    ].join('\n');
+    const authorLine = "pm.environment.set('callerOwned', true);";
+
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/items/')) {
+        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
+      }
+      if (request.method === 'get') {
+        return {
+          data: {
+            id: 'req-1',
+            scripts: [
+              { type: 'beforeRequest', code: `${authorLine}\n${legacyBlock}`, language: 'text/javascript' }
+            ]
+          }
+        };
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
+    const code = scripts.find((script) => script.type === 'beforeRequest')?.code ?? '';
+
+    // Exactly one managed block survives, and it is the current generation.
+    expect(code.split(legacyMarker).length - 1).toBe(1);
+    expect(code).toContain('private-mock-auth-v2');
+    // The caller's own script is never discarded.
+    expect(code).toContain(authorLine);
+    // The broken String(array) form must not survive the upgrade.
+    expect(code).not.toContain("String(pm.request.url && pm.request.url.getHost");
+  });
+
+  it('leaves the request untouched when the current hook generation is already installed', async () => {
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/items/')) {
+        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
+      }
+      if (request.method === 'get') {
+        return {
+          data: {
+            id: 'req-1',
+            scripts: [
+              {
+                type: 'beforeRequest',
+                code: '// postman-enterprise-automation: private-mock-auth-v2\nvar privateMockApiKey = 1;',
+                language: 'text/javascript'
+              }
+            ]
+          }
+        };
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(0);
+    expect(requestJson.mock.calls.some(([request]) => request.method === 'patch')).toBe(false);
+  });
+
+  it('warns instead of silently sending nothing when a private mock host has no key', async () => {
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/items/')) {
+        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
+      }
+      if (request.method === 'get') return { data: { id: 'req-1', scripts: [] } };
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await assets.configurePrivateMockRuntimeAuth('owner-col-1');
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const code = JSON.stringify(patch?.body);
+
+    expect(code).toContain('console.warn');
+    expect(code).toContain('postmanPrivateMockApiKey');
+    // Host detection must survive getHost() returning an array of labels.
+    expect(code).toContain("join('.')");
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {

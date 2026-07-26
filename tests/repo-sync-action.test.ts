@@ -3245,6 +3245,68 @@ describe('mock resolution paths', () => {
     expect(readFileSync('.postman/resources.yaml', 'utf8')).not.toContain('env-mock');
   });
 
+  it('carries an empty secret slot for the caller key when the mock is private', async () => {
+    const createEnvironment = vi.fn().mockImplementation((_workspaceId: string, name: string) =>
+      Promise.resolve(name.endsWith(' - Mock') ? 'env-mock' : 'env-prod')
+    );
+    const notice = vi.fn();
+    const postman = makePostman({
+      createEnvironment,
+      createMock: vi.fn().mockResolvedValue({
+        uid: 'mock-1',
+        url: 'https://mock-new.pstmn.io',
+        visibility: 'private'
+      }),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(1)
+    });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        mockVisibility: 'private',
+        repoWriteMode: 'none'
+      }),
+      { ...makeDeps(postman, makeGithub()), core: { ...makeDeps(postman, makeGithub()).core, notice } }
+    );
+
+    const mockEnvCall = createEnvironment.mock.calls.find(([, name]) => name === 'core-payments - Mock');
+    const values = mockEnvCall?.[2] as Array<{ key: string; value: string; type: string }>;
+    const slot = values.find((value) => value.key === 'postmanPrivateMockApiKey');
+
+    // Named so the developer knows what to paste, secret-typed so the app masks it,
+    // and empty because repo-sync must never persist a credential.
+    expect(slot).toEqual({ key: 'postmanPrivateMockApiKey', value: '', type: 'secret' });
+    expect(result['mock-auth-required']).toBe('true');
+    expect(notice).toHaveBeenCalledWith(expect.stringContaining('postmanPrivateMockApiKey'));
+  });
+
+  it('omits the private-mock secret slot for a public mock', async () => {
+    const createEnvironment = vi.fn().mockImplementation((_workspaceId: string, name: string) =>
+      Promise.resolve(name.endsWith(' - Mock') ? 'env-mock' : 'env-prod')
+    );
+    const postman = makePostman({
+      createEnvironment,
+      findMockByCollection: vi.fn().mockResolvedValue(null)
+    });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    const mockEnvCall = createEnvironment.mock.calls.find(([, name]) => name === 'core-payments - Mock');
+    const values = mockEnvCall?.[2] as Array<{ key: string }>;
+
+    expect(values.some((value) => value.key === 'postmanPrivateMockApiKey')).toBe(false);
+    expect(result['mock-auth-required']).toBe('false');
+  });
+
   it('reuses an unchanged mock environment without mutating runtime selection', async () => {
     const updateEnvironment = vi.fn().mockResolvedValue(undefined);
     const postman = makePostman({

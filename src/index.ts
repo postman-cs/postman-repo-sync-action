@@ -50,7 +50,8 @@ import {
   PostmanGatewayAssetsClient,
   requireMockVisibility,
   type MockRecord,
-  type RequestedMockVisibility
+  type RequestedMockVisibility,
+  PRIVATE_MOCK_AUTH_VARIABLE
 } from './lib/postman/postman-gateway-assets-client.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
@@ -175,6 +176,8 @@ interface RepoSyncOutputs {
 interface CoreLike {
   getInput(name: string, options?: { required?: boolean }): string;
   info(message: string): void;
+  /** Optional: GitHub Actions surfaces this in the job summary. Test doubles and the CLI reporter may omit it. */
+  notice?(message: string): void;
   setFailed(message: string): void;
   setOutput(name: string, value: string): void;
   setSecret(secret: string): void;
@@ -191,7 +194,7 @@ export interface ExecLike {
 
 export interface RepoSyncDependencies {
   teamId?: string;
-  core: Pick<CoreLike, 'info' | 'setOutput' | 'warning'>;
+  core: Pick<CoreLike, 'info' | 'setOutput' | 'warning' | 'notice'>;
   postman: Pick<
     PostmanGatewayAssetsClient,
     | 'createEnvironment'
@@ -677,9 +680,19 @@ export function assertBranchAssetIds(
   }
 }
 
-function buildEnvironmentValues(envName: string, baseUrl: string): EnvironmentValues {
+function buildEnvironmentValues(
+  envName: string,
+  baseUrl: string,
+  options: { privateMockAuth?: boolean } = {}
+): EnvironmentValues {
   return [
     { key: 'baseUrl', value: baseUrl, type: 'default' },
+    // A private mock refuses anonymous calls, so the manual-validation environment
+    // carries a named, empty, secret-typed slot for the caller's own key. Repo-sync
+    // never writes a value here; the developer pastes one in the Postman app.
+    ...(options.privateMockAuth
+      ? [{ key: PRIVATE_MOCK_AUTH_VARIABLE, value: '', type: 'secret' as const }]
+      : []),
     { key: 'CI', value: 'false', type: 'default' },
     { key: 'RESPONSE_TIME_THRESHOLD', value: '2000', type: 'default' },
     { key: 'AWS_ACCESS_KEY_ID', value: '', type: 'secret' },
@@ -1247,13 +1260,14 @@ async function upsertMockEnvironment(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
   assetProjectName: string,
-  mockUrl: string
+  mockUrl: string,
+  privateMockAuth: boolean
 ): Promise<string> {
   if (!inputs.mockEnvironmentEnabled || !inputs.workspaceId || !mockUrl) {
     return '';
   }
   const displayName = `${assetProjectName} - Mock`;
-  const values = buildEnvironmentValues('mock', mockUrl);
+  const values = buildEnvironmentValues('mock', mockUrl, { privateMockAuth });
   const mask = resolveRepoSyncMasker(dependencies);
   try {
     const discovered = await dependencies.postman.findEnvironmentByName(
@@ -2242,14 +2256,16 @@ function renderCiWorkflow(inputs: ResolvedInputs): string {
       postmanCliInstallUrl: inputs.postmanCliInstallUrl,
       postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
       runnerOs: inputs.ciRunnerOs,
-      postmanRegion: inputs.postmanRegion
+      postmanRegion: inputs.postmanRegion,
+      privateMockAuth: inputs.mockVisibility === 'private'
     });
   }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
     postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
     runnerOs: inputs.ciRunnerOs,
-    postmanRegion: inputs.postmanRegion
+    postmanRegion: inputs.postmanRegion,
+    privateMockAuth: inputs.mockVisibility === 'private'
   });
 }
 
@@ -2697,10 +2713,21 @@ async function runRepoSyncInner(
             'PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection.'
           );
         }
+        const configured: string[] = [];
         for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
           if (collectionUid) {
             await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            configured.push(collectionUid);
           }
+        }
+        if (configured.length > 0) {
+          (dependencies.core.notice ?? dependencies.core.info)(
+            `Private mock: installed a request hook on ${configured.length} collection(s) that sends the ` +
+            `${PRIVATE_MOCK_AUTH_VARIABLE} variable as x-api-key, and only to *.mock.pstmn.io hosts. ` +
+            'The generated CI workflow supplies it from the POSTMAN_API_KEY secret. For manual runs in ' +
+            'the Postman app, set that variable to a key with access to the mock. No key is stored in ' +
+            'the collection, environment, outputs, or repository.'
+          );
         }
       }
       if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
@@ -2708,7 +2735,8 @@ async function runRepoSyncInner(
           inputs,
           dependencies,
           assetProjectName,
-          resolvedMockUrl
+          resolvedMockUrl,
+          resolvedMockVisibility === 'private'
         );
         outputs['mock-environment-uid'] = mockEnvironmentUid;
         outputs['mock-environment-status'] = mockEnvironmentUid ? 'success' : 'failed';

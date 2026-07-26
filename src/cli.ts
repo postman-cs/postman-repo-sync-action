@@ -128,6 +128,10 @@ export class ConsoleReporter implements ReporterCore {
     console.error(message);
   }
 
+  public notice(message: string): void {
+    console.error(`notice: ${message}`);
+  }
+
   public warning(message: string): void {
     console.error(`warning: ${message}`);
   }

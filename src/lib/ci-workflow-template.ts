@@ -12,7 +12,17 @@ type CiWorkflowTemplateOptions = {
   postmanCliWindowsInstallUrl?: string;
   postmanRegion?: string;
   runnerOs?: CiRunnerOs;
+  /**
+   * A private mock refuses anonymous calls, so the generated run steps forward the
+   * CI POSTMAN_API_KEY secret as the private-mock variable. The hook installed on
+   * the collection only sends it to *.mock.pstmn.io hosts, so it stays inert for
+   * runs that target a real environment.
+   */
+  privateMockAuth?: boolean;
 };
+
+/** Kept in sync with PRIVATE_MOCK_AUTH_VARIABLE in lib/postman/postman-gateway-assets-client.ts. */
+const PRIVATE_MOCK_AUTH_VARIABLE = 'postmanPrivateMockApiKey';
 
 function validateHttpsInstallUrl(url: string): string {
   const safeUrlPattern = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~/?=&%-]+$/;
@@ -49,10 +59,14 @@ export function renderCiWorkflowTemplate(options: CiWorkflowTemplateOptions = {}
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
   const postmanRegion = resolvePostmanRegion(options.postmanRegion);
-  return buildCiWorkflowLines(installUrl, postmanRegion).join('\n');
+  return buildCiWorkflowLines(installUrl, postmanRegion, options.privateMockAuth === true).join('\n');
 }
 
-function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
+function buildCiWorkflowLines(
+  installUrl: string,
+  postmanRegion: string,
+  privateMockAuth: boolean
+): string[] {
   return [
   'name: CI/CD Pipeline',
   'on:',
@@ -120,6 +134,9 @@ function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
   "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
+  ...(privateMockAuth
+    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")']
+    : []),
   "          if [ -f \"$RUNNER_TEMP/postman-ssl/client.crt\" ]; then",
   '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
   '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -139,6 +156,9 @@ function buildCiWorkflowLines(installUrl: string, postmanRegion: string): string
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
   "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
+  ...(privateMockAuth
+    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")']
+    : []),
   "          if [ -f \"$RUNNER_TEMP/postman-ssl/client.crt\" ]; then",
   '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
   '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -158,7 +178,8 @@ export const CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
 
 function buildAdoWindowsCollectionRunLines(
   displayName: string,
-  collectionEnvironmentName: 'POSTMAN_SMOKE_COLLECTION_UID' | 'POSTMAN_CONTRACT_COLLECTION_UID'
+  collectionEnvironmentName: 'POSTMAN_SMOKE_COLLECTION_UID' | 'POSTMAN_CONTRACT_COLLECTION_UID',
+  privateMockAuth: boolean
 ): string[] {
   return [
     '  - pwsh: |',
@@ -171,6 +192,9 @@ function buildAdoWindowsCollectionRunLines(
     '      $ciEnvironment = Resolve-AdoOptional $env:CI_ENVIRONMENT',
     "      if ([string]::IsNullOrWhiteSpace($ciEnvironment)) { $ciEnvironment = 'Production' }",
     `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment")`,
+    ...(privateMockAuth
+      ? [`      $arguments += @('--env-var', "${PRIVATE_MOCK_AUTH_VARIABLE}=$env:POSTMAN_API_KEY")`]
+      : []),
     "      $sslRoot = Join-Path $env:AGENT_TEMPDIRECTORY 'postman-ssl'",
     "      $clientCert = Join-Path $sslRoot 'client.crt'",
     "      $clientKey = Join-Path $sslRoot 'client.key'",
@@ -192,11 +216,16 @@ function buildAdoWindowsCollectionRunLines(
     `      ${collectionEnvironmentName}: $(${collectionEnvironmentName})`,
     '      POSTMAN_ENVIRONMENT_UID: $(POSTMAN_ENVIRONMENT_UID)',
     '      CI_ENVIRONMENT: $(CI_ENVIRONMENT)',
-    '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)'
+    '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)',
+    ...(privateMockAuth ? ['      POSTMAN_API_KEY: $(POSTMAN_API_KEY)'] : [])
   ];
 }
 
-function buildAdoWindowsCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
+function buildAdoWindowsCiWorkflowLines(
+  installUrl: string,
+  postmanRegion: string,
+  privateMockAuth: boolean
+): string[] {
   return [
     'trigger:',
     '  branches:',
@@ -281,13 +310,17 @@ function buildAdoWindowsCiWorkflowLines(installUrl: string, postmanRegion: strin
     '      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)',
     '      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)',
     '      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)',
-    ...buildAdoWindowsCollectionRunLines('Run Smoke Tests', 'POSTMAN_SMOKE_COLLECTION_UID'),
-    ...buildAdoWindowsCollectionRunLines('Run Contract Tests', 'POSTMAN_CONTRACT_COLLECTION_UID'),
+    ...buildAdoWindowsCollectionRunLines('Run Smoke Tests', 'POSTMAN_SMOKE_COLLECTION_UID', privateMockAuth),
+    ...buildAdoWindowsCollectionRunLines('Run Contract Tests', 'POSTMAN_CONTRACT_COLLECTION_UID', privateMockAuth),
     ''
   ];
 }
 
-function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): string[] {
+function buildAdoCiWorkflowLines(
+  installUrl: string,
+  postmanRegion: string,
+  privateMockAuth: boolean
+): string[] {
   return [
   'trigger:',
   '  branches:',
@@ -365,6 +398,9 @@ function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): str
   '        -e "$POSTMAN_ENVIRONMENT_UID"',
   '        --report-events',
   '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+  ...(privateMockAuth
+    ? ['        CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
+    : []),
   '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
   '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
   '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
@@ -380,6 +416,7 @@ function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): str
   '    env:',
   '      CI_ENVIRONMENT: $(CI_ENVIRONMENT)',
   '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)',
+  ...(privateMockAuth ? ['      POSTMAN_API_KEY: $(POSTMAN_API_KEY)'] : []),
   '  - script: |',
   '      normalize_azure_optional_var() {',
   '        local name="$1"',
@@ -396,6 +433,9 @@ function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): str
   '        -e "$POSTMAN_ENVIRONMENT_UID"',
   '        --report-events',
   '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+  ...(privateMockAuth
+    ? ['        CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
+    : []),
   '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
   '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
   '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
@@ -411,6 +451,7 @@ function buildAdoCiWorkflowLines(installUrl: string, postmanRegion: string): str
   '    env:',
   '      CI_ENVIRONMENT: $(CI_ENVIRONMENT)',
   '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)',
+  ...(privateMockAuth ? ['      POSTMAN_API_KEY: $(POSTMAN_API_KEY)'] : []),
   ''
   ];
 }
@@ -480,9 +521,10 @@ export function getCiWorkflowTemplate(
       : String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
     const postmanRegion = resolvePostmanRegion(options.postmanRegion);
     const installUrl = validateHttpsInstallUrl(rawUrl);
+    const privateMockAuth = options.privateMockAuth === true;
     return (runnerOs === 'windows'
-      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion)
-      : buildAdoCiWorkflowLines(installUrl, postmanRegion)
+      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
+      : buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
     ).join('\n');
   }
   return renderCiWorkflowTemplate(options);
