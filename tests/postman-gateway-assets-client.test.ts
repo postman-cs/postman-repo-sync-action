@@ -1,3 +1,5 @@
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { HttpError } from '../src/lib/http-error.js';
@@ -179,6 +181,35 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(serialized).toContain('private-mock-auth-v2');
     expect(serialized).toContain('afterResponse');
     expect(serialized).not.toContain('pmak-');
+
+    const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
+    const code = scripts.find((script) => script.type === 'beforeRequest')?.code ?? '';
+    const mockUpsert = vi.fn();
+    runInNewContext(code, {
+      pm: {
+        variables: { get: () => 'test-private-mock-key' },
+        request: {
+          url: { getHost: () => ['example', 'mock', 'pstmn', 'io'] },
+          headers: { upsert: mockUpsert }
+        }
+      }
+    });
+    expect(mockUpsert).toHaveBeenCalledWith({
+      key: 'x-api-key',
+      value: 'test-private-mock-key'
+    });
+
+    const apiUpsert = vi.fn();
+    runInNewContext(code, {
+      pm: {
+        variables: { get: () => 'test-private-mock-key' },
+        request: {
+          url: { getHost: () => ['api', 'getpostman', 'com'] },
+          headers: { upsert: apiUpsert }
+        }
+      }
+    });
+    expect(apiUpsert).not.toHaveBeenCalled();
   });
 
   it('replaces a stale private-mock hook generation instead of stacking a second copy', async () => {
@@ -191,7 +222,7 @@ describe('PostmanGatewayAssetsClient', () => {
       "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
       '}'
     ].join('\n');
-    const authorLine = "pm.environment.set('callerOwned', true);";
+    const authorLine = 'var callerOwned = true;';
 
     const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
       if (request.method === 'get' && request.path?.endsWith('/items/')) {
@@ -202,7 +233,7 @@ describe('PostmanGatewayAssetsClient', () => {
           data: {
             id: 'req-1',
             scripts: [
-              { type: 'beforeRequest', code: `${authorLine}\n${legacyBlock}`, language: 'text/javascript' }
+              { type: 'beforeRequest', code: `${legacyBlock}\n${authorLine}`, language: 'text/javascript' }
             ]
           }
         };
