@@ -3301,6 +3301,7 @@ export function createRepoSyncDependencies(
     // uid (the gateway services key access off it, exactly like the public REST
     // API); the bare model id 403s "request access from the collection editor".
     createMock: gatewayAssets.createMock.bind(gatewayAssets),
+    configurePrivateMockRuntimeAuth: gatewayAssets.configurePrivateMockRuntimeAuth.bind(gatewayAssets),
     listMocks: gatewayAssets.listMocks.bind(gatewayAssets),
     mockExists: gatewayAssets.mockExists.bind(gatewayAssets),
     findMockByCollection: gatewayAssets.findMockByCollection.bind(gatewayAssets),

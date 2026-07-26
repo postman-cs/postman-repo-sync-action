@@ -118,6 +118,7 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
       { apiKey: 'pmak-test', teamId: '10490519' },
       factory
     );
+    expect(deps.postman.configurePrivateMockRuntimeAuth).toBeTypeOf('function');
 
     const result = await deps.postman.createMock('ws-123', 'm', 'col-1', '');
     expect(result.uid).toBe('mock-uuid');
