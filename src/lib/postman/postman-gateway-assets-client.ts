@@ -45,9 +45,17 @@ export function requirePublicMock(mock: MockRecord): MockRecord {
   return requireMockVisibility(mock, 'public');
 }
 
-const PRIVATE_MOCK_AUTH_MARKER_PREFIX = 'postman-enterprise-automation: private-mock-auth';
-const PRIVATE_MOCK_AUTH_MARKER = `${PRIVATE_MOCK_AUTH_MARKER_PREFIX}-v2`;
+const LEGACY_PRIVATE_MOCK_AUTH_MARKER = 'postman-enterprise-automation: private-mock-auth';
+const PRIVATE_MOCK_AUTH_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
 export const PRIVATE_MOCK_AUTH_VARIABLE = 'postmanPrivateMockApiKey';
+const LEGACY_PRIVATE_MOCK_AUTH_SCRIPT = [
+  `// ${LEGACY_PRIVATE_MOCK_AUTH_MARKER}`,
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
+  "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
+  "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "}"
+].join('\n');
 const PRIVATE_MOCK_AUTH_SCRIPT = [
   `// ${PRIVATE_MOCK_AUTH_MARKER}`,
   `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
@@ -61,26 +69,8 @@ const PRIVATE_MOCK_AUTH_SCRIPT = [
   "}"
 ].join('\n');
 
-/**
- * Remove any previously installed generation of the managed private-mock block so an
- * upgrade replaces it instead of stacking a second copy beneath it. Author-written
- * lines around the block are preserved.
- */
-function stripPrivateMockAuthBlocks(code: string): string {
-  if (!code.includes(PRIVATE_MOCK_AUTH_MARKER_PREFIX)) return code.trim();
-  const lines = code.split('\n');
-  const kept: string[] = [];
-  let skipping = false;
-  for (const line of lines) {
-    if (line.includes(PRIVATE_MOCK_AUTH_MARKER_PREFIX)) { skipping = true; continue; }
-    if (skipping) {
-      // The managed block is a contiguous run of var/if/} lines ending at its closing brace.
-      if (/^\s*(?:(?:var|if)\s|\}\selse\sif\s|\}|pm\.request|console\.warn)/.test(line)) continue;
-      skipping = false;
-    }
-    kept.push(line);
-  }
-  return kept.join('\n').trim();
+function removeLegacyPrivateMockAuth(code: string): string {
+  return code.split(LEGACY_PRIVATE_MOCK_AUTH_SCRIPT).join('').trim();
 }
 
 const MAX_CREATE_FLIGHTS = 256;
@@ -802,7 +792,7 @@ export class PostmanGatewayAssetsClient {
       const before = scripts.find((script) => String(script.type ?? '') === 'beforeRequest');
       const existingCode = String(before?.code ?? '');
       if (existingCode.includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
-      const code = [stripPrivateMockAuthBlocks(existingCode), PRIVATE_MOCK_AUTH_SCRIPT]
+      const code = [removeLegacyPrivateMockAuth(existingCode), PRIVATE_MOCK_AUTH_SCRIPT]
         .filter(Boolean)
         .join('\n');
       const nextScripts = [
