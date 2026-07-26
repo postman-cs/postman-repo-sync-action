@@ -89,7 +89,7 @@ describe('PostmanGatewayAssetsClient', () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([]))
-      .mockResolvedValue(jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' }));
+      .mockResolvedValue(jsonResponse({ id: 'mock-uuid', name: 'm', collection: PUBLIC_UID, environment: ENV_PUBLIC_UID, url: 'https://mock-uuid.mock.pstmn.io', published: true }));
     const { assets } = buildClient(fetchImpl);
 
     await assets.createMock('ws-1', 'm', PUBLIC_UID, ENV_PUBLIC_UID);
@@ -105,7 +105,7 @@ describe('PostmanGatewayAssetsClient', () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValue(
-        jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1' })
+        jsonResponse({ id: 'mock-uuid', name: 'm', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1', published: true })
       );
     const { assets } = buildClient(fetchImpl);
 
@@ -121,6 +121,20 @@ describe('PostmanGatewayAssetsClient', () => {
     const headers = (fetchImpl.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-access-token']).toBe('tok-initial');
     expect(headers['X-Api-Key']).toBeUndefined();
+  });
+
+  it('createMock refuses a mock the service reports as private', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValue(
+        jsonResponse({ id: 'mock-private', name: 'm', collection: 'col-1', url: 'https://mock-private.mock.pstmn.io', published: false })
+      );
+    const { assets } = buildClient(fetchImpl);
+
+    await expect(assets.createMock('ws-1', 'm', 'col-1', '')).rejects.toThrow(
+      /MOCK_NOT_PUBLIC.*mock-private/
+    );
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {
@@ -140,24 +154,53 @@ describe('PostmanGatewayAssetsClient', () => {
 
   it('listMocks parses the bare-array mock service response', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse([{ id: 'm1', name: 'a', collection: 'col-1', url: 'https://m1.mock' }])
+      jsonResponse([
+        { id: 'm1', name: 'a', collection: 'col-1', environment: 'env-1', url: 'https://m1.mock', published: true },
+        { id: 'm2', name: 'b', collection: 'col-2', environment: '', url: 'https://m2.mock', published: false }
+      ])
     );
     const { assets } = buildClient(fetchImpl);
     const mocks = await assets.listMocks();
     expect(mocks).toEqual([
-      { uid: 'm1', name: 'a', collection: 'col-1', mockUrl: 'https://m1.mock', environment: '' }
+      { uid: 'm1', name: 'a', collection: 'col-1', mockUrl: 'https://m1.mock', environment: 'env-1', visibility: 'public' },
+      { uid: 'm2', name: 'b', collection: 'col-2', mockUrl: 'https://m2.mock', environment: '', visibility: 'private' }
     ]);
     expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe('/mocks?workspace=ws-1');
   });
 
+  it('listMocks preserves unknown visibility but rejects malformed envelopes and records', async () => {
+    const unknownFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse([{ id: 'm1', name: 'a', collection: 'col-1', url: 'https://m1.mock' }])
+    );
+    await expect(buildClient(unknownFetch).assets.listMocks()).resolves.toEqual([
+      { uid: 'm1', name: 'a', collection: 'col-1', mockUrl: 'https://m1.mock', environment: '', visibility: 'unknown' }
+    ]);
+
+    const envelopeFetch = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ unexpected: [] }));
+    await expect(buildClient(envelopeFetch).assets.listMocks()).rejects.toThrow(
+      /CONTRACT_MOCK_RESPONSE_INVALID.*list envelope/
+    );
+
+    const recordFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse([{ id: 'm1', name: 'a', collection: 'col-1', published: true }])
+    );
+    await expect(buildClient(recordFetch).assets.listMocks()).rejects.toThrow(
+      /CONTRACT_MOCK_RESPONSE_INVALID.*URL/
+    );
+  });
+
   it('findMockByCollection matches the public uid the mock list echoes', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse([{ id: 'm1', name: 'a', collection: PUBLIC_UID, url: 'https://m1.mock' }])
+      jsonResponse([{ id: 'm1', name: 'a', collection: PUBLIC_UID, url: 'https://m1.mock', published: true }])
     );
     const { assets } = buildClient(fetchImpl);
     await expect(assets.findMockByCollection(PUBLIC_UID, '', 'a')).resolves.toEqual({
       uid: 'm1',
-      mockUrl: 'https://m1.mock'
+      name: 'a',
+      collection: PUBLIC_UID,
+      environment: '',
+      mockUrl: 'https://m1.mock',
+      visibility: 'public'
     });
   });
 

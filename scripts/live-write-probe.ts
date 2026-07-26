@@ -15,7 +15,10 @@
  */
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
-import { PostmanGatewayAssetsClient } from '../src/lib/postman/postman-gateway-assets-client.js';
+import {
+  PostmanGatewayAssetsClient,
+  requirePublicMock
+} from '../src/lib/postman/postman-gateway-assets-client.js';
 import { POSTMAN_ENDPOINT_PROFILES } from '../src/lib/postman/base-urls.js';
 import { HttpError } from '../src/lib/http-error.js';
 
@@ -26,6 +29,38 @@ type JsonRecord = Record<string, unknown>;
 function snippet(value: unknown): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   return String(text ?? '').slice(0, 240).replace(/\s+/g, ' ');
+}
+
+function recordShape(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return typeof value;
+  const record = value as JsonRecord;
+  const fields = Object.keys(record).sort();
+  const visibility = ([
+    ['private', record.private],
+    ['isPublic', record.isPublic],
+    ['visibility', record.visibility],
+    ['active', record.active],
+    ['published', record.published]
+  ] as Array<[string, unknown]>)
+    .filter(([, field]) => field !== undefined)
+    .map(([key, field]) => `${String(key)}=${JSON.stringify(field)}`)
+    .join(',');
+  const config = record.config && typeof record.config === 'object' && !Array.isArray(record.config)
+    ? Object.entries(record.config as JsonRecord)
+        .filter(([, field]) => ['boolean', 'number', 'string'].includes(typeof field))
+        .map(([key, field]) => `${key}=${JSON.stringify(field)}`)
+        .join(',')
+    : '';
+  return `keys=${fields.join(',')}${visibility ? ` scalars=${visibility}` : ''}${config ? ` config=${config}` : ''}`;
+}
+
+function mockRecords(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  const record = value as JsonRecord;
+  if (Array.isArray(record.data)) return record.data;
+  if (Array.isArray(record.mocks)) return record.mocks;
+  return [record.data ?? record.mock ?? record];
 }
 
 /** Public uid (6 hyphen groups) → bare model id (5 groups); mirrors PostmanGatewayAssetsClient. */
@@ -111,6 +146,7 @@ async function main(): Promise<void> {
   let workspaceId: string;
   let publicCollectionUid: string;
   let mockUid = '';
+  let privateMockUid: string | undefined;
   let monitorUid = '';
   const createdWorkspaces = new Set<string>();
   let failed = false;
@@ -288,10 +324,11 @@ async function main(): Promise<void> {
     }
 
     console.log('\n== mock: PostmanGatewayAssetsClient (production path) ==');
+    const publicMockName = `probe-mock-${stamp}`;
     try {
       const mock = await assets.createMock(
         workspaceId,
-        `probe-mock-${stamp}`,
+        publicMockName,
         publicCollectionUid,
         envUid
       );
@@ -301,13 +338,69 @@ async function main(): Promise<void> {
       fail('createMock', error instanceof Error ? error.message : String(error));
     }
 
+    const privateMockName = `probe-private-mock-${stamp}`;
+    const privateCreate = await gwRaw(gateway, 'mock', 'post', `/mocks?workspace=${workspaceId}`, {
+      name: privateMockName,
+      collection: publicCollectionUid,
+      environment: envUid,
+      private: true
+    });
+    const privateRecord = privateCreate.json?.data ?? privateCreate.json;
+    privateMockUid = String((privateRecord as JsonRecord | null)?.id ?? '').trim();
+    console.log(`  [${privateCreate.status}] private mock create :: ${recordShape(privateRecord)}`);
+
+    const rawMockList = await gwRaw(gateway, 'mock', 'get', `/mocks?workspace=${workspaceId}`);
+    console.log(`  [${rawMockList.status}] raw mock list envelope :: ${recordShape(rawMockList.json)}`);
+    for (const [index, record] of mockRecords(rawMockList.json).entries()) {
+      console.log(`  [shape] mock list record ${index + 1} :: ${recordShape(record)}`);
+    }
+    for (const [label, uid] of [['public', mockUid], ['private', privateMockUid]] as const) {
+      if (!uid) continue;
+      const get = await gwRaw(gateway, 'mock', 'get', `/mocks/${uid}`);
+      console.log(`  [${get.status}] ${label} mock get envelope :: ${recordShape(get.json)}`);
+      for (const record of mockRecords(get.json)) {
+        console.log(`  [shape] ${label} mock get record :: ${recordShape(record)}`);
+      }
+    }
+
     const mocks = await assets.listMocks();
     console.log(`  [ok] listMocks count=${mocks.length}`);
-    const foundMock = await assets.findMockByCollection(publicCollectionUid);
+    const foundMock = await assets.findMockByCollection(publicCollectionUid, envUid, publicMockName);
     if (!foundMock?.uid) {
       fail('findMockByCollection', 'did not rediscover mock by public uid');
     } else {
       console.log(`  [ok] findMockByCollection uid=${foundMock.uid}`);
+    }
+    const foundPrivateMock = await assets.findMockByCollection(
+      publicCollectionUid,
+      envUid,
+      privateMockName
+    );
+    try {
+      if (foundPrivateMock) requirePublicMock(foundPrivateMock);
+      fail('private mock policy', 'private mock was accepted as public');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('MOCK_NOT_PUBLIC')) {
+        fail('private mock policy', message);
+      } else {
+        console.log('  [ok] private mock rejected with MOCK_NOT_PUBLIC');
+      }
+    }
+
+    if (mockUid && privateMockUid) {
+      const [publicCall, privateCall] = await Promise.all([
+        fetch(`https://${mockUid}.mock.pstmn.io`).catch(() => null),
+        fetch(`https://${privateMockUid}.mock.pstmn.io`).catch(() => null)
+      ]);
+      console.log(`  [anonymous] public mock status=${publicCall?.status ?? 'transport-error'}`);
+      console.log(`  [anonymous] private mock status=${privateCall?.status ?? 'transport-error'}`);
+      if (publicCall && [401, 403].includes(publicCall.status)) {
+        fail('public mock anonymous call', `unexpected status ${publicCall.status}`);
+      }
+      if (privateCall && ![401, 403, 404].includes(privateCall.status)) {
+        fail('private mock anonymous call', `unexpected status ${privateCall.status}`);
+      }
     }
 
     console.log('\n== monitor: PostmanGatewayAssetsClient (production path) ==');
@@ -326,7 +419,11 @@ async function main(): Promise<void> {
 
     const monitors = await assets.listMonitors();
     console.log(`  [ok] listMonitors count=${monitors.length}`);
-    const foundMonitor = await assets.findMonitorByCollection(publicCollectionUid);
+    const foundMonitor = await assets.findMonitorByCollection(
+      publicCollectionUid,
+      envUid,
+      `probe-mon-${stamp}`
+    );
     if (!foundMonitor?.uid) {
       fail('findMonitorByCollection', 'did not rediscover monitor by public uid');
     } else {
@@ -346,6 +443,10 @@ async function main(): Promise<void> {
     if (mockUid) {
       const del = await gwRaw(gateway, 'mock', 'delete', `/mocks/${mockUid}`);
       console.log(`  [${del.status}] DELETE mock ${mockUid}`);
+    }
+    if (privateMockUid) {
+      const del = await gwRaw(gateway, 'mock', 'delete', `/mocks/${privateMockUid}`);
+      console.log(`  [${del.status}] DELETE private mock ${privateMockUid}`);
     }
     if (monitorUid) {
       const del = await gwRaw(gateway, 'monitorsV2', 'delete', `/monitors/${monitorUid}`);

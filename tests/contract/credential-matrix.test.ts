@@ -167,7 +167,15 @@ function createPlatform(options: PlatformOptions = {}) {
         }
         if (pmethod === 'post' && ppath.startsWith('/mocks')) {
           mockCreated = true;
-          return json({ data: { uid: 'mock-123', url: 'https://mock-123.mock.pstmn.io' } });
+          const body = (proxy.body ?? {}) as Record<string, unknown>;
+          return json({ data: {
+            id: 'mock-123',
+            name: String(body.name ?? ''),
+            collection: String(body.collection ?? ''),
+            environment: String(body.environment ?? ''),
+            url: 'https://mock-123.mock.pstmn.io',
+            published: true
+          } });
         }
         return json({ data: {} });
       }

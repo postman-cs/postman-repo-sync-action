@@ -93,10 +93,18 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('createRepoSyncDependencies access-token-primary routing', () => {
   it('routes mock + monitor asset ops through the gateway when an access token is present', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       const u = String(url);
       if (u.includes('/ws/proxy')) {
-        return jsonResponse({ id: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' });
+        const request = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+        if (request.method === 'get') return jsonResponse([]);
+        return jsonResponse({
+          id: 'mock-uuid',
+          name: 'm',
+          collection: 'col-1',
+          url: 'https://mock-uuid.mock.pstmn.io',
+          published: true
+        });
       }
       return jsonResponse({}, { status: 500 });
     });

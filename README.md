@@ -113,6 +113,8 @@ with:
   monitor-id: 1e2f3a4b-monitor-id
 ```
 
+Repo-sync supports public mocks for anonymous validation. An explicit `mock-url` must match one mock in the resolved workspace and reference the expected baseline collection and environment. Discovered and newly created mocks pass the same live visibility check. Private mocks, responses without a recognized visibility field, stale URLs, and identity mismatches fail before `mock-url` is emitted; repo-sync never places a Postman API key in a collection or environment to make a private mock callable.
+
 ### mTLS certificates for Postman CLI runs
 
 The generated CI workflow can run [Postman CLI collection runs](https://learning.postman.com/docs/postman-cli/postman-cli-collections/) with client certificates. Pass the cert material as inputs; when a GitHub token and repository context are available, the action persists them as repository secrets (`POSTMAN_SSL_CLIENT_CERT_B64`, `POSTMAN_SSL_CLIENT_KEY_B64`, `POSTMAN_SSL_CLIENT_PASSPHRASE`, `POSTMAN_SSL_EXTRA_CA_CERTS_B64`) for the generated workflow:
@@ -283,7 +285,7 @@ For `commit-and-push`, the push target is resolved from `current-ref`, then `GIT
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
 
-Asset reuse priority is explicit inputs (`environment-uids-json`, `mock-url`, `monitor-id`), then live discovery by exact workspace-scoped name, collection UID, and environment UID, then create. Creates submit once and reconcile on ambiguous gateway errors; overlapping compatible creates inside one process share a single in-flight promise. Adopted environments are updated to the requested values. Mock environment assignment has no verified patch route, so a mock is reused only when its live environment already matches; mismatches are never claimed as converged. Concurrent jobs against the same workspace can still race because Postman does not expose create idempotency keys—serialize those workflows with GitHub Actions `concurrency` (or an equivalent CI lock) when duplicate mocks/monitors/environments would be harmful.
+Asset reuse priority is explicit inputs (`environment-uids-json`, `mock-url`, `monitor-id`), then live discovery by exact workspace-scoped name, collection UID, and environment UID, then create. Mock reuse is public-only: the gateway's live `published` field must confirm public visibility, and explicit URLs must match the expected workspace, collection, and environment. Private or unknown visibility fails closed without injecting credentials. Creates submit once and reconcile on ambiguous gateway errors; overlapping compatible creates inside one process share a single in-flight promise. Adopted environments are updated to the requested values. Mock environment assignment has no verified patch route, so a mock is reused only when its live environment already matches; mismatches are never claimed as converged. Concurrent jobs against the same workspace can still race because Postman does not expose create idempotency keys—serialize those workflows with GitHub Actions `concurrency` (or an equivalent CI lock) when duplicate mocks/monitors/environments would be harmful.
 
 Deeper reference:
 
