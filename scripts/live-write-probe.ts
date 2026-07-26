@@ -424,8 +424,8 @@ async function main(): Promise<void> {
       if (privateApiKeyCall && [401, 403].includes(privateApiKeyCall.status)) {
         fail('private mock x-api-key call', `unexpected auth status ${privateApiKeyCall.status}`);
       }
-      if (privateAccessTokenCall && [401, 403].includes(privateAccessTokenCall.status)) {
-        fail('private mock x-access-token call', `unexpected auth status ${privateAccessTokenCall.status}`);
+      if (privateAccessTokenCall && ![401, 403].includes(privateAccessTokenCall.status)) {
+        fail('private mock service x-access-token call', `unexpected status ${privateAccessTokenCall.status}`);
       }
     }
 
@@ -469,6 +469,39 @@ async function main(): Promise<void> {
           fail('mock environment idempotency', 'second run returned a different environment uid');
         } else {
           console.log('  [ok] second run reused the same mock environment uid');
+        }
+        if (privateMockUid) {
+          const privateInputs = resolveInputs({
+            INPUT_PROJECT_NAME: 'Write Probe',
+            INPUT_WORKSPACE_ID: workspaceId,
+            INPUT_BASELINE_COLLECTION_ID: publicCollectionUid,
+            INPUT_SMOKE_COLLECTION_ID: publicCollectionUid,
+            INPUT_CONTRACT_COLLECTION_ID: publicCollectionUid,
+            INPUT_ENVIRONMENTS_JSON: '["prod"]',
+            INPUT_ENVIRONMENT_UIDS_JSON: JSON.stringify({ prod: envUid }),
+            INPUT_ENV_RUNTIME_URLS_JSON: '{"prod":"https://example.com"}',
+            INPUT_MOCK_URL: `https://${privateMockUid}.mock.pstmn.io`,
+            INPUT_MOCK_VISIBILITY: 'private',
+            INPUT_MOCK_ENVIRONMENT_ENABLED: 'true',
+            INPUT_MONITOR_TYPE: 'cli',
+            INPUT_REPO_WRITE_MODE: 'none',
+            INPUT_GENERATE_CI_WORKFLOW: 'false',
+            INPUT_WORKSPACE_LINK_ENABLED: 'false',
+            INPUT_ENVIRONMENT_SYNC_ENABLED: 'false',
+            INPUT_POSTMAN_ACCESS_TOKEN: provider.current()
+          });
+          const privateRun = await runRepoSync(privateInputs, { core, postman: assets });
+          if (
+            privateRun['mock-visibility'] !== 'private' ||
+            privateRun['mock-auth-required'] !== 'true'
+          ) {
+            fail('private mock orchestration outputs', JSON.stringify({
+              visibility: privateRun['mock-visibility'],
+              authRequired: privateRun['mock-auth-required']
+            }));
+          } else {
+            console.log('  [ok] private mock accepted with runtime auth required');
+          }
         }
       } finally {
         process.chdir(originalCwd);
