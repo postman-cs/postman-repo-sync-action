@@ -113,7 +113,17 @@ with:
   monitor-id: 1e2f3a4b-monitor-id
 ```
 
-Repo-sync defaults to public mocks for anonymous validation. Set `mock-visibility: private` for teams that prohibit public mocks. Explicit, discovered, and newly created mocks must match the requested visibility and the expected baseline collection/environment; unknown visibility, stale URLs, and identity mismatches fail before `mock-url` is emitted. For private mocks, repo-sync emits `mock-auth-required: true` and installs a secret-free request hook in the smoke and contract collections. The runner must supply its PMAK as the transient `postmanPrivateMockApiKey` variable. Repo-sync never writes that credential to a collection, environment, output, or repository artifact.
+Repo-sync defaults to public mocks for anonymous validation. Set `mock-visibility: private` for teams that prohibit public mocks. Explicit, discovered, and newly created mocks must match the requested visibility and the expected baseline collection/environment; unknown visibility, stale URLs, and identity mismatches fail before `mock-url` is emitted.
+
+For private mocks, repo-sync emits `mock-auth-required: true` and installs a secret-free request hook in the smoke and contract collections. The hook reads the transient `postmanPrivateMockApiKey` variable and sends it as `x-api-key`, and only to `*.mock.pstmn.io` hosts, so it stays inert on runs that target a real environment. Repo-sync never writes that credential to a collection, environment, output, or repository artifact.
+
+Where that variable comes from depends on who is running the collection:
+
+- **Generated CI** supplies it automatically from the `POSTMAN_API_KEY` secret repo-sync already provisions for `postman login`. No extra secret and no workflow edit.
+- **Manual runs in the Postman app** use the `<project> - Mock` environment, which carries `postmanPrivateMockApiKey` as an empty secret-typed variable. Paste a key with access to the mock. Requires `mock-environment-enabled: true`.
+- **A runner you wire yourself** reads `mock-auth-required` and passes the variable however that system handles secrets.
+
+A request to a private mock with no key set logs a console warning naming the variable, so a `401` explains its own fix.
 
 For manual collection validation against the resolved mock, opt in to a dedicated Postman environment:
 

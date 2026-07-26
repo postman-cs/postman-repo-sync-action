@@ -415,3 +415,72 @@ describe('renderGcWorkflowTemplate', () => {
     expect(workflow).toContain('gc-summary-json');
   });
 });
+
+describe('private mock runtime credential wiring', () => {
+  const VARIABLE = 'postmanPrivateMockApiKey';
+
+  it('omits the private-mock variable from every generated workflow by default', () => {
+    const workflows = [
+      renderCiWorkflowTemplate(),
+      getCiWorkflowTemplate('azure-devops', {}),
+      getCiWorkflowTemplate('azure-devops', { runnerOs: 'windows' })
+    ];
+
+    for (const workflow of workflows) {
+      expect(workflow).not.toContain(VARIABLE);
+    }
+  });
+
+  it('forwards the CI Postman API key secret to both GitHub run steps for a private mock', () => {
+    const workflow = renderCiWorkflowTemplate({ privateMockAuth: true });
+    const injected = workflow.split('\n').filter((line) => line.includes(VARIABLE));
+
+    // Smoke and contract, and no more.
+    expect(injected).toHaveLength(2);
+    for (const line of injected) {
+      expect(line).toContain('--env-var');
+      expect(line).toContain('${{ secrets.POSTMAN_API_KEY }}');
+    }
+    expect(parse(workflow)).toBeTruthy();
+  });
+
+  it('maps the secret into the step environment for Azure DevOps bash runs', () => {
+    const workflow = getCiWorkflowTemplate('azure-devops', { privateMockAuth: true });
+    const injected = workflow.split('\n').filter((line) => line.includes(VARIABLE));
+
+    expect(injected).toHaveLength(2);
+    for (const line of injected) {
+      // ADO does not auto-map secret variables into the script environment, so the
+      // step must reference the shell variable it explicitly mapped.
+      expect(line).toContain('$POSTMAN_API_KEY');
+      expect(line).not.toContain('$(POSTMAN_API_KEY)');
+    }
+    const envMaps = workflow
+      .split('\n')
+      .filter((line) => line.trim() === 'POSTMAN_API_KEY: $(POSTMAN_API_KEY)');
+    // One per run step, plus the pre-existing login step.
+    expect(envMaps.length).toBeGreaterThanOrEqual(3);
+    expect(parse(workflow)).toBeTruthy();
+  });
+
+  it('appends the variable to the PowerShell argument array on the Windows agent', () => {
+    const workflow = getCiWorkflowTemplate('azure-devops', {
+      runnerOs: 'windows',
+      privateMockAuth: true
+    });
+    const injected = workflow.split('\n').filter((line) => line.includes(VARIABLE));
+
+    expect(injected).toHaveLength(2);
+    for (const line of injected) {
+      expect(line).toContain('$arguments += @(');
+      expect(line).toContain('$env:POSTMAN_API_KEY');
+    }
+    expect(parse(workflow)).toBeTruthy();
+  });
+
+  it('never writes a literal credential into a generated workflow', () => {
+    const workflow = renderCiWorkflowTemplate({ privateMockAuth: true });
+
+    expect(workflow).not.toContain('PMAK-');
+  });
+});

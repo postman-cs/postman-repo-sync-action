@@ -132357,6 +132357,7 @@ function resolvePostmanEndpointProfile(stack, region = "us") {
 // src/lib/ci-workflow-template.ts
 var DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
 var DEFAULT_POSTMAN_CLI_WINDOWS_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliWindowsInstallUrl;
+var PRIVATE_MOCK_AUTH_VARIABLE = "postmanPrivateMockApiKey";
 function validateHttpsInstallUrl(url) {
   const safeUrlPattern = /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~/?=&%-]+$/;
   if (!safeUrlPattern.test(url)) {
@@ -132388,9 +132389,9 @@ function renderCiWorkflowTemplate(options = {}) {
   const rawUrl = String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
   const postmanRegion = resolvePostmanRegion(options.postmanRegion);
-  return buildCiWorkflowLines(installUrl, postmanRegion).join("\n");
+  return buildCiWorkflowLines(installUrl, postmanRegion, options.privateMockAuth === true).join("\n");
 }
-function buildCiWorkflowLines(installUrl, postmanRegion) {
+function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
   return [
     "name: CI/CD Pipeline",
     "on:",
@@ -132457,6 +132458,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
     '            -e "$POSTMAN_ENVIRONMENT_UID"',
     "            --report-events",
     `            --env-var "CI_ENVIRONMENT=\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")'] : [],
     '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
     '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
     '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -132476,6 +132478,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
     '            -e "$POSTMAN_ENVIRONMENT_UID"',
     "            --report-events",
     `            --env-var "CI_ENVIRONMENT=\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
+    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")'] : [],
     '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
     '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
     '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -132491,7 +132494,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion) {
   ];
 }
 var CI_WORKFLOW_TEMPLATE = renderCiWorkflowTemplate();
-function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentName) {
+function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentName, privateMockAuth) {
   return [
     "  - pwsh: |",
     "      $ErrorActionPreference = 'Stop'",
@@ -132503,6 +132506,7 @@ function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentNam
     "      $ciEnvironment = Resolve-AdoOptional $env:CI_ENVIRONMENT",
     "      if ([string]::IsNullOrWhiteSpace($ciEnvironment)) { $ciEnvironment = 'Production' }",
     `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment")`,
+    ...privateMockAuth ? [`      $arguments += @('--env-var', "${PRIVATE_MOCK_AUTH_VARIABLE}=$env:POSTMAN_API_KEY")`] : [],
     "      $sslRoot = Join-Path $env:AGENT_TEMPDIRECTORY 'postman-ssl'",
     "      $clientCert = Join-Path $sslRoot 'client.crt'",
     "      $clientKey = Join-Path $sslRoot 'client.key'",
@@ -132524,10 +132528,11 @@ function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentNam
     `      ${collectionEnvironmentName}: $(${collectionEnvironmentName})`,
     "      POSTMAN_ENVIRONMENT_UID: $(POSTMAN_ENVIRONMENT_UID)",
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
-    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)"
+    "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    ...privateMockAuth ? ["      POSTMAN_API_KEY: $(POSTMAN_API_KEY)"] : []
   ];
 }
-function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion) {
+function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
   return [
     "trigger:",
     "  branches:",
@@ -132612,12 +132617,12 @@ function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion) {
     "      POSTMAN_SSL_CLIENT_CERT_B64: $(POSTMAN_SSL_CLIENT_CERT_B64)",
     "      POSTMAN_SSL_CLIENT_KEY_B64: $(POSTMAN_SSL_CLIENT_KEY_B64)",
     "      POSTMAN_SSL_EXTRA_CA_CERTS_B64: $(POSTMAN_SSL_EXTRA_CA_CERTS_B64)",
-    ...buildAdoWindowsCollectionRunLines("Run Smoke Tests", "POSTMAN_SMOKE_COLLECTION_UID"),
-    ...buildAdoWindowsCollectionRunLines("Run Contract Tests", "POSTMAN_CONTRACT_COLLECTION_UID"),
+    ...buildAdoWindowsCollectionRunLines("Run Smoke Tests", "POSTMAN_SMOKE_COLLECTION_UID", privateMockAuth),
+    ...buildAdoWindowsCollectionRunLines("Run Contract Tests", "POSTMAN_CONTRACT_COLLECTION_UID", privateMockAuth),
     ""
   ];
 }
-function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
+function buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
   return [
     "trigger:",
     "  branches:",
@@ -132694,6 +132699,7 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     '        -e "$POSTMAN_ENVIRONMENT_UID"',
     "        --report-events",
     '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    ...privateMockAuth ? ['        CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")'] : [],
     '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
     '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
     '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
@@ -132709,6 +132715,7 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     "    env:",
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
     "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    ...privateMockAuth ? ["      POSTMAN_API_KEY: $(POSTMAN_API_KEY)"] : [],
     "  - script: |",
     "      normalize_azure_optional_var() {",
     '        local name="$1"',
@@ -132725,6 +132732,7 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     '        -e "$POSTMAN_ENVIRONMENT_UID"',
     "        --report-events",
     '        --env-var "CI_ENVIRONMENT=${CI_ENVIRONMENT:-Production}")',
+    ...privateMockAuth ? ['        CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")'] : [],
     '      if [ -f "$(Agent.TempDirectory)/postman-ssl/client.crt" ]; then',
     '        CMD+=(--ssl-client-cert "$(Agent.TempDirectory)/postman-ssl/client.crt"',
     '          --ssl-client-key "$(Agent.TempDirectory)/postman-ssl/client.key")',
@@ -132740,6 +132748,7 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion) {
     "    env:",
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
     "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
+    ...privateMockAuth ? ["      POSTMAN_API_KEY: $(POSTMAN_API_KEY)"] : [],
     ""
   ];
 }
@@ -132801,7 +132810,8 @@ function getCiWorkflowTemplate(provider, options = {}) {
     const rawUrl = runnerOs === "windows" ? String(options.postmanCliWindowsInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_WINDOWS_INSTALL_URL : String(options.postmanCliInstallUrl || "").trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
     const postmanRegion = resolvePostmanRegion(options.postmanRegion);
     const installUrl = validateHttpsInstallUrl(rawUrl);
-    return (runnerOs === "windows" ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion) : buildAdoCiWorkflowLines(installUrl, postmanRegion)).join("\n");
+    const privateMockAuth = options.privateMockAuth === true;
+    return (runnerOs === "windows" ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) : buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)).join("\n");
   }
   return renderCiWorkflowTemplate(options);
 }
@@ -135089,16 +135099,39 @@ function requireMockVisibility(mock, requested) {
   }
   return mock;
 }
-var PRIVATE_MOCK_AUTH_MARKER = "postman-enterprise-automation: private-mock-auth";
-var PRIVATE_MOCK_AUTH_VARIABLE = "postmanPrivateMockApiKey";
+var PRIVATE_MOCK_AUTH_MARKER_PREFIX = "postman-enterprise-automation: private-mock-auth";
+var PRIVATE_MOCK_AUTH_MARKER = `${PRIVATE_MOCK_AUTH_MARKER_PREFIX}-v2`;
+var PRIVATE_MOCK_AUTH_VARIABLE2 = "postmanPrivateMockApiKey";
 var PRIVATE_MOCK_AUTH_SCRIPT = [
   `// ${PRIVATE_MOCK_AUTH_MARKER}`,
-  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
-  "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
-  "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
+  "var privateMockHostValue = pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '';",
+  "var privateMockHost = Array.isArray(privateMockHostValue) ? privateMockHostValue.join('.') : String(privateMockHostValue);",
+  "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
+  "if (isPrivateMockHost && privateMockApiKey) {",
   "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "} else if (isPrivateMockHost) {",
+  `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
   "}"
 ].join("\n");
+function stripPrivateMockAuthBlocks(code) {
+  if (!code.includes(PRIVATE_MOCK_AUTH_MARKER_PREFIX)) return code.trim();
+  const lines = code.split("\n");
+  const kept = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (line.includes(PRIVATE_MOCK_AUTH_MARKER_PREFIX)) {
+      skipping = true;
+      continue;
+    }
+    if (skipping) {
+      if (/^\s*(?:(?:var|if)\s|\}\selse\sif\s|\}|pm\.request|console\.warn)/.test(line)) continue;
+      skipping = false;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
+}
 var MAX_CREATE_FLIGHTS = 256;
 var createFlights = /* @__PURE__ */ new Map();
 var PostmanGatewayAssetsClient = class {
@@ -135696,8 +135729,9 @@ var PostmanGatewayAssetsClient = class {
       const item = this.asRecord(response?.data) ?? listedItem;
       const scripts = Array.isArray(item.scripts) ? item.scripts.filter((entry) => Boolean(this.asRecord(entry))) : [];
       const before = scripts.find((script) => String(script.type ?? "") === "beforeRequest");
-      if (String(before?.code ?? "").includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
-      const code = [String(before?.code ?? "").trim(), PRIVATE_MOCK_AUTH_SCRIPT].filter(Boolean).join("\n");
+      const existingCode = String(before?.code ?? "");
+      if (existingCode.includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
+      const code = [stripPrivateMockAuthBlocks(existingCode), PRIVATE_MOCK_AUTH_SCRIPT].filter(Boolean).join("\n");
       const nextScripts = [
         ...scripts.filter((script) => String(script.type ?? "") !== "beforeRequest"),
         { type: "beforeRequest", code, language: "text/javascript" }
@@ -136978,9 +137012,13 @@ function assertBranchAssetIds(inputs, decision, branchOwnedIds = process.env.POS
     );
   }
 }
-function buildEnvironmentValues(envName, baseUrl) {
+function buildEnvironmentValues(envName, baseUrl, options = {}) {
   return [
     { key: "baseUrl", value: baseUrl, type: "default" },
+    // A private mock refuses anonymous calls, so the manual-validation environment
+    // carries a named, empty, secret-typed slot for the caller's own key. Repo-sync
+    // never writes a value here; the developer pastes one in the Postman app.
+    ...options.privateMockAuth ? [{ key: PRIVATE_MOCK_AUTH_VARIABLE2, value: "", type: "secret" }] : [],
     { key: "CI", value: "false", type: "default" },
     { key: "RESPONSE_TIME_THRESHOLD", value: "2000", type: "default" },
     { key: "AWS_ACCESS_KEY_ID", value: "", type: "secret" },
@@ -137285,12 +137323,12 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
   }
   return envUids;
 }
-async function upsertMockEnvironment(inputs, dependencies, assetProjectName, mockUrl) {
+async function upsertMockEnvironment(inputs, dependencies, assetProjectName, mockUrl, privateMockAuth) {
   if (!inputs.mockEnvironmentEnabled || !inputs.workspaceId || !mockUrl) {
     return "";
   }
   const displayName = `${assetProjectName} - Mock`;
-  const values = buildEnvironmentValues("mock", mockUrl);
+  const values = buildEnvironmentValues("mock", mockUrl, { privateMockAuth });
   const mask = resolveRepoSyncMasker(dependencies);
   try {
     const discovered = await dependencies.postman.findEnvironmentByName(
@@ -138019,14 +138057,16 @@ function renderCiWorkflow(inputs) {
       postmanCliInstallUrl: inputs.postmanCliInstallUrl,
       postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
       runnerOs: inputs.ciRunnerOs,
-      postmanRegion: inputs.postmanRegion
+      postmanRegion: inputs.postmanRegion,
+      privateMockAuth: inputs.mockVisibility === "private"
     });
   }
   return renderCiWorkflowTemplate({
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
     postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
     runnerOs: inputs.ciRunnerOs,
-    postmanRegion: inputs.postmanRegion
+    postmanRegion: inputs.postmanRegion,
+    privateMockAuth: inputs.mockVisibility === "private"
   });
 }
 function createRepoSummary(outputs, envUids, pushed) {
@@ -138381,10 +138421,17 @@ async function runRepoSyncInner(inputs, dependencies) {
             "PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection."
           );
         }
+        const configured = [];
         for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
           if (collectionUid) {
             await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            configured.push(collectionUid);
           }
+        }
+        if (configured.length > 0) {
+          (dependencies.core.notice ?? dependencies.core.info)(
+            `Private mock: installed a request hook on ${configured.length} collection(s) that sends the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable as x-api-key, and only to *.mock.pstmn.io hosts. The generated CI workflow supplies it from the POSTMAN_API_KEY secret. For manual runs in the Postman app, set that variable to a key with access to the mock. No key is stored in the collection, environment, outputs, or repository.`
+          );
         }
       }
       if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
@@ -138392,7 +138439,8 @@ async function runRepoSyncInner(inputs, dependencies) {
           inputs,
           dependencies,
           assetProjectName,
-          resolvedMockUrl
+          resolvedMockUrl,
+          resolvedMockVisibility === "private"
         );
         outputs["mock-environment-uid"] = mockEnvironmentUid;
         outputs["mock-environment-status"] = mockEnvironmentUid ? "success" : "failed";
@@ -139400,6 +139448,9 @@ var ConsoleReporter = class {
   onOutput;
   info(message) {
     console.error(message);
+  }
+  notice(message) {
+    console.error(`notice: ${message}`);
   }
   warning(message) {
     console.error(`warning: ${message}`);
