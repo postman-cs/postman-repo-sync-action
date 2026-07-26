@@ -67,7 +67,7 @@ describe('release workflow publishing contract', () => {
     expect(releaseWorkflow).toMatch(/verify-package:[\s\S]*?permissions:\n\s+contents: read/);
     const publish = job('publish');
     expect(publish).toMatch(/permissions:\n\s+contents: write\n\s+id-token: write/);
-    expect(publish).toContain('actions/download-artifact@v7');
+    expect(publish).toContain('actions/download-artifact@v8');
     expect(publish).not.toContain('actions/checkout');
     expect(publish).not.toContain('npm ci');
     expect(publish).not.toMatch(/\bnpm pack\b/);
