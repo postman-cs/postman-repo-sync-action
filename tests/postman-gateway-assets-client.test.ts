@@ -110,7 +110,7 @@ describe('PostmanGatewayAssetsClient', () => {
     const { assets } = buildClient(fetchImpl);
 
     const result = await assets.createMock('ws-1', 'm', 'col-1', '');
-    expect(result).toEqual({ uid: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io' });
+    expect(result).toEqual({ uid: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', visibility: 'public' });
 
     const env = parseEnvelope(fetchImpl.mock.calls[1]);
     expect(env.service).toBe('mock');
@@ -135,6 +135,48 @@ describe('PostmanGatewayAssetsClient', () => {
     await expect(assets.createMock('ws-1', 'm', 'col-1', '')).rejects.toThrow(
       /MOCK_NOT_PUBLIC.*mock-private/
     );
+  });
+
+  it('createMock requests and accepts a private mock only when explicitly configured', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValue(
+        jsonResponse({ id: 'mock-private', name: 'm', collection: 'col-1', url: 'https://mock-private.mock.pstmn.io', published: false })
+      );
+    const { assets } = buildClient(fetchImpl);
+
+    await expect(assets.createMock('ws-1', 'm', 'col-1', '', 'private')).resolves.toEqual({
+      uid: 'mock-private',
+      url: 'https://mock-private.mock.pstmn.io',
+      visibility: 'private'
+    });
+    expect(parseEnvelope(fetchImpl.mock.calls[1]).body).toEqual({
+      name: 'm',
+      collection: 'col-1',
+      private: true
+    });
+  });
+
+  it('adds an idempotent private-mock runtime hook without persisting a credential', async () => {
+    const requestJson = vi.fn(async (request: { method: string; path: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path.endsWith('/items/')) {
+        return { data: [{ id: 'req-1', $kind: 'http-request' }, { id: 'folder', $kind: 'folder' }] };
+      }
+      if (request.method === 'get') {
+        return { data: { id: 'req-1', scripts: [{ type: 'afterResponse', code: 'pm.test("ok")', language: 'text/javascript' }] } };
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const serialized = JSON.stringify(patch?.body);
+    expect(serialized).toContain('postmanPrivateMockApiKey');
+    expect(serialized).toContain('x-api-key');
+    expect(serialized).toContain('afterResponse');
+    expect(serialized).not.toContain('pmak-');
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {

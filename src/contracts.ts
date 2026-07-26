@@ -158,8 +158,14 @@ export const postmanRepoSyncActionContract: {
       description: 'Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one.',
       required: false
     },
+    'mock-visibility': {
+      description: 'Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync.',
+      required: false,
+      default: 'public',
+      allowedValues: ['public', 'private']
+    },
     'mock-environment-enabled': {
-      description: 'Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection.',
+      description: 'Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential.',
       required: false,
       default: 'false'
     },
@@ -363,6 +369,12 @@ export const postmanRepoSyncActionContract: {
     'mock-url': {
       description: 'Created or reused mock server URL.'
     },
+    'mock-visibility': {
+      description: 'Authoritatively observed mock visibility: public or private.'
+    },
+    'mock-auth-required': {
+      description: 'Whether the collection runner must supply postmanPrivateMockApiKey at runtime.'
+    },
     'mock-environment-uid': {
       description: 'Dedicated manual-validation environment UID when mock-environment-enabled succeeds.'
     },
@@ -455,6 +467,8 @@ export function createExecutionPlan(
     outputs: {
       'environment-uids-json': '{}',
       'mock-url': '',
+      'mock-visibility': '',
+      'mock-auth-required': 'false',
       'mock-environment-uid': '',
       'mock-environment-status': 'skipped',
       'monitor-id': '',

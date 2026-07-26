@@ -395,17 +395,37 @@ async function main(): Promise<void> {
     }
 
     if (mockUid && privateMockUid) {
-      const [publicCall, privateCall] = await Promise.all([
+      const runtimeApiKey = process.env.POSTMAN_API_KEY;
+      const runtimeAccessToken = provider.current();
+      const [publicCall, privateCall, privateApiKeyCall, privateAccessTokenCall] = await Promise.all([
         fetch(`https://${mockUid}.mock.pstmn.io`).catch(() => null),
-        fetch(`https://${privateMockUid}.mock.pstmn.io`).catch(() => null)
+        fetch(`https://${privateMockUid}.mock.pstmn.io`).catch(() => null),
+        runtimeApiKey
+          ? fetch(`https://${privateMockUid}.mock.pstmn.io`, {
+              headers: { 'x-api-key': runtimeApiKey }
+            }).catch(() => null)
+          : null,
+        runtimeAccessToken
+          ? fetch(`https://${privateMockUid}.mock.pstmn.io`, {
+              headers: { 'x-access-token': runtimeAccessToken }
+            }).catch(() => null)
+          : null
       ]);
       console.log(`  [anonymous] public mock status=${publicCall?.status ?? 'transport-error'}`);
       console.log(`  [anonymous] private mock status=${privateCall?.status ?? 'transport-error'}`);
+      console.log(`  [x-api-key] private mock status=${privateApiKeyCall?.status ?? 'not-configured'}`);
+      console.log(`  [x-access-token] private mock status=${privateAccessTokenCall?.status ?? 'not-configured'}`);
       if (publicCall && [401, 403].includes(publicCall.status)) {
         fail('public mock anonymous call', `unexpected status ${publicCall.status}`);
       }
       if (privateCall && ![401, 403, 404].includes(privateCall.status)) {
         fail('private mock anonymous call', `unexpected status ${privateCall.status}`);
+      }
+      if (privateApiKeyCall && [401, 403].includes(privateApiKeyCall.status)) {
+        fail('private mock x-api-key call', `unexpected auth status ${privateApiKeyCall.status}`);
+      }
+      if (privateAccessTokenCall && ![401, 403].includes(privateAccessTokenCall.status)) {
+        fail('private mock service x-access-token call', `unexpected status ${privateAccessTokenCall.status}`);
       }
     }
 
@@ -449,6 +469,39 @@ async function main(): Promise<void> {
           fail('mock environment idempotency', 'second run returned a different environment uid');
         } else {
           console.log('  [ok] second run reused the same mock environment uid');
+        }
+        if (privateMockUid) {
+          const privateInputs = resolveInputs({
+            INPUT_PROJECT_NAME: 'Write Probe',
+            INPUT_WORKSPACE_ID: workspaceId,
+            INPUT_BASELINE_COLLECTION_ID: publicCollectionUid,
+            INPUT_SMOKE_COLLECTION_ID: publicCollectionUid,
+            INPUT_CONTRACT_COLLECTION_ID: publicCollectionUid,
+            INPUT_ENVIRONMENTS_JSON: '["prod"]',
+            INPUT_ENVIRONMENT_UIDS_JSON: JSON.stringify({ prod: envUid }),
+            INPUT_ENV_RUNTIME_URLS_JSON: '{"prod":"https://example.com"}',
+            INPUT_MOCK_URL: `https://${privateMockUid}.mock.pstmn.io`,
+            INPUT_MOCK_VISIBILITY: 'private',
+            INPUT_MOCK_ENVIRONMENT_ENABLED: 'true',
+            INPUT_MONITOR_TYPE: 'cli',
+            INPUT_REPO_WRITE_MODE: 'none',
+            INPUT_GENERATE_CI_WORKFLOW: 'false',
+            INPUT_WORKSPACE_LINK_ENABLED: 'false',
+            INPUT_ENVIRONMENT_SYNC_ENABLED: 'false',
+            INPUT_POSTMAN_ACCESS_TOKEN: provider.current()
+          });
+          const privateRun = await runRepoSync(privateInputs, { core, postman: assets });
+          if (
+            privateRun['mock-visibility'] !== 'private' ||
+            privateRun['mock-auth-required'] !== 'true'
+          ) {
+            fail('private mock orchestration outputs', JSON.stringify({
+              visibility: privateRun['mock-visibility'],
+              authRequired: privateRun['mock-auth-required']
+            }));
+          } else {
+            console.log('  [ok] private mock accepted with runtime auth required');
+          }
         }
       } finally {
         process.chdir(originalCwd);

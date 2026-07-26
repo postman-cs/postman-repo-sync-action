@@ -136660,8 +136660,14 @@ var postmanRepoSyncActionContract = {
       description: "Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one.",
       required: false
     },
+    "mock-visibility": {
+      description: "Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync.",
+      required: false,
+      default: "public",
+      allowedValues: ["public", "private"]
+    },
     "mock-environment-enabled": {
-      description: "Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection.",
+      description: "Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential.",
       required: false,
       default: "false"
     },
@@ -136858,6 +136864,12 @@ var postmanRepoSyncActionContract = {
     "mock-url": {
       description: "Created or reused mock server URL."
     },
+    "mock-visibility": {
+      description: "Authoritatively observed mock visibility: public or private."
+    },
+    "mock-auth-required": {
+      description: "Whether the collection runner must supply postmanPrivateMockApiKey at runtime."
+    },
     "mock-environment-uid": {
       description: "Dedicated manual-validation environment UID when mock-environment-enabled succeeds."
     },
@@ -136958,19 +136970,30 @@ var MockContractError = class extends Error {
     this.name = "MockContractError";
   }
 };
-function requirePublicMock(mock) {
-  if (mock.visibility === "private") {
+function requireMockVisibility(mock, requested) {
+  if (mock.visibility === "unknown") {
     throw new MockContractError(
-      `MOCK_NOT_PUBLIC: Mock ${mock.uid} is private. Make it public in Postman or remove/rename it so repo-sync can create the canonical public mock.`
+      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is callable.`
     );
   }
-  if (mock.visibility !== "public") {
+  if (mock.visibility !== requested) {
+    const code = requested === "public" ? "MOCK_NOT_PUBLIC" : "MOCK_NOT_PRIVATE";
     throw new MockContractError(
-      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is publicly callable.`
+      `${code}: Mock ${mock.uid} is ${mock.visibility}, but mock-visibility requires ${requested}. Change the mock visibility in Postman or set mock-visibility to ${mock.visibility}.`
     );
   }
   return mock;
 }
+var PRIVATE_MOCK_AUTH_MARKER = "postman-enterprise-automation: private-mock-auth";
+var PRIVATE_MOCK_AUTH_VARIABLE = "postmanPrivateMockApiKey";
+var PRIVATE_MOCK_AUTH_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
+  "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
+  "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "}"
+].join("\n");
 var MAX_CREATE_FLIGHTS = 256;
 var createFlights = /* @__PURE__ */ new Map();
 var PostmanGatewayAssetsClient = class {
@@ -137478,22 +137501,22 @@ var PostmanGatewayAssetsClient = class {
     return data?.collection ?? null;
   }
   // --- mocks (service: mock) ---
-  async createMock(workspaceId, name, collectionUid, environmentUid) {
+  async createMock(workspaceId, name, collectionUid, environmentUid, requestedVisibility = "public") {
     const ws = workspaceId || this.workspaceId;
     const mockName = String(name ?? "").trim();
     const collection = String(collectionUid ?? "").trim();
     const environment = String(environmentUid ?? "").trim();
-    const flightKey = `mock:${ws}:${collection}:${environment}:${mockName}`;
+    const flightKey = `mock:${ws}:${collection}:${environment}:${requestedVisibility}:${mockName}`;
     return this.singleFlight(flightKey, flightKey, "mock", async () => {
       const existing = await this.findMockByCollection(collection, environment, mockName);
       if (existing) {
-        const reusable = requirePublicMock(existing);
-        return { uid: reusable.uid, url: reusable.mockUrl };
+        const reusable = requireMockVisibility(existing, requestedVisibility);
+        return { uid: reusable.uid, url: reusable.mockUrl, visibility: requestedVisibility };
       }
       const body = {
         name: mockName,
         collection,
-        private: false,
+        private: requestedVisibility === "private",
         ...environment ? { environment } : {}
       };
       const send2 = (fallback) => this.gateway.requestJson(
@@ -137511,12 +137534,14 @@ var PostmanGatewayAssetsClient = class {
       );
       const parseMock = (response) => {
         const record = this.dataOf(response);
-        const created = requirePublicMock(
-          this.decodeMockRecord(record, "Mock create")
+        const created = requireMockVisibility(
+          this.decodeMockRecord(record, "Mock create"),
+          requestedVisibility
         );
         return {
           uid: created.uid,
-          url: created.mockUrl
+          url: created.mockUrl,
+          visibility: requestedVisibility
         };
       };
       try {
@@ -137527,8 +137552,8 @@ var PostmanGatewayAssetsClient = class {
           error2
         );
         if (adopted) {
-          const reusable = requirePublicMock(adopted);
-          return { uid: reusable.uid, url: reusable.mockUrl };
+          const reusable = requireMockVisibility(adopted, requestedVisibility);
+          return { uid: reusable.uid, url: reusable.mockUrl, visibility: requestedVisibility };
         }
         if (adopted === void 0) {
           const retried = await this.resendAbsentCreate(async () => parseMock(await send2("auto")));
@@ -137537,6 +137562,51 @@ var PostmanGatewayAssetsClient = class {
         throw error2;
       }
     });
+  }
+  /**
+   * Add a secret-free runtime hook to every HTTP request in a collection. The
+   * PMAK value is supplied only by the runner as a transient variable; this
+   * method persists the variable name and header wiring, never the credential.
+   */
+  async configurePrivateMockRuntimeAuth(collectionUid) {
+    const cid = String(collectionUid ?? "").trim();
+    if (!cid) return 0;
+    const listed = await this.gateway.requestJson({
+      service: "collection",
+      method: "get",
+      path: `/v3/collections/${cid}/items/`
+    });
+    const items = Array.isArray(listed?.data) ? listed.data : [];
+    let patched = 0;
+    for (const listedItem of items) {
+      if (String(listedItem.$kind ?? "") !== "http-request") continue;
+      const itemId = String(listedItem.id ?? "").trim();
+      if (!itemId) continue;
+      const response = await this.gateway.requestJson({
+        service: "collection",
+        method: "get",
+        path: `/v3/collections/${cid}/items/${itemId}`,
+        headers: { "X-Entity-Type": "http-request" }
+      });
+      const item = this.asRecord(response?.data) ?? listedItem;
+      const scripts = Array.isArray(item.scripts) ? item.scripts.filter((entry) => Boolean(this.asRecord(entry))) : [];
+      const before = scripts.find((script) => String(script.type ?? "") === "beforeRequest");
+      if (String(before?.code ?? "").includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
+      const code = [String(before?.code ?? "").trim(), PRIVATE_MOCK_AUTH_SCRIPT].filter(Boolean).join("\n");
+      const nextScripts = [
+        ...scripts.filter((script) => String(script.type ?? "") !== "beforeRequest"),
+        { type: "beforeRequest", code, language: "text/javascript" }
+      ];
+      await this.gateway.requestJson({
+        service: "collection",
+        method: "patch",
+        path: `/v3/collections/${cid}/items/${itemId}`,
+        headers: { "X-Entity-Type": "http-request" },
+        body: [{ op: "add", path: "/scripts", value: nextScripts }]
+      });
+      patched += 1;
+    }
+    return patched;
   }
   async listMocks() {
     const response = await this.gateway.requestJson({
@@ -138552,7 +138622,7 @@ function normalizeMockUrl(value, source) {
   url.pathname = url.pathname.replace(/\/+$/g, "") || "/";
   return url.toString();
 }
-function resolveExplicitPublicMock(mocks, explicitUrl, collectionUid, environmentUid) {
+function resolveExplicitMock(mocks, explicitUrl, collectionUid, environmentUid, requestedVisibility) {
   const normalized = normalizeMockUrl(explicitUrl, "mock-url");
   const matches = mocks.filter(
     (mock) => normalizeMockUrl(mock.mockUrl, `mock ${mock.uid} URL`) === normalized
@@ -138578,7 +138648,7 @@ function resolveExplicitPublicMock(mocks, explicitUrl, collectionUid, environmen
       `EXPLICIT_MOCK_IDENTITY_MISMATCH: Mock ${match.uid} references environment ${match.environment || "(none)"}, expected ${environmentUid}`
     );
   }
-  return requirePublicMock(match);
+  return requireMockVisibility(match, requestedVisibility);
 }
 function shouldRetryMockCreate(error2) {
   if (error2 instanceof MockContractError) return false;
@@ -138690,6 +138760,15 @@ function parseCredentialPreflight(value) {
     `Unsupported credential-preflight "${normalized}". Supported values: ${allowed.join(", ")}`
   );
 }
+function parseMockVisibility(value) {
+  const definition = postmanRepoSyncActionContract.inputs["mock-visibility"];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || "").trim() || (definition.default ?? "public");
+  if (allowed.includes(normalized)) return normalized;
+  throw new Error(
+    `Unsupported mock-visibility "${normalized}". Supported values: ${allowed.join(", ")}`
+  );
+}
 function parseBranchStrategy(value) {
   const definition = postmanRepoSyncActionContract.inputs["branch-strategy"];
   const allowed = definition.allowedValues ?? [];
@@ -138796,6 +138875,7 @@ function resolveInputs(env = process.env) {
     orgMode: parseBooleanInput(getInput2("org-mode", env), false),
     monitorId: getInput2("monitor-id", env),
     mockUrl: getInput2("mock-url", env),
+    mockVisibility: parseMockVisibility(getInput2("mock-visibility", env)),
     mockEnvironmentEnabled: parseBooleanInput(getInput2("mock-environment-enabled", env), false),
     monitorCron: getInput2("monitor-cron", env),
     sslClientCert: getInput2("ssl-client-cert", env),
@@ -139023,6 +139103,8 @@ function createOutputs(inputs) {
     "environment-sync-status": "skipped",
     "environment-uids-json": JSON.stringify(inputs.environmentUids),
     "mock-url": "",
+    "mock-visibility": "",
+    "mock-auth-required": "false",
     "mock-environment-uid": "",
     "mock-environment-status": "skipped",
     "monitor-id": "",
@@ -139092,6 +139174,7 @@ function readActionInputs(actionCore) {
     INPUT_ORG_MODE: readInput(actionCore, "org-mode"),
     INPUT_MONITOR_ID: readInput(actionCore, "monitor-id"),
     INPUT_MOCK_URL: readInput(actionCore, "mock-url"),
+    INPUT_MOCK_VISIBILITY: readInput(actionCore, "mock-visibility"),
     INPUT_MOCK_ENVIRONMENT_ENABLED: readInput(actionCore, "mock-environment-enabled"),
     INPUT_MONITOR_CRON: readInput(actionCore, "monitor-cron"),
     INPUT_SSL_CLIENT_CERT: sslClientCert,
@@ -140045,7 +140128,9 @@ function createRepoSummary(outputs, envUids, pushed) {
     environmentSyncStatus: outputs["environment-sync-status"],
     mockEnvironmentStatus: outputs["mock-environment-status"],
     mockEnvironmentUid: outputs["mock-environment-uid"],
+    mockAuthRequired: outputs["mock-auth-required"] === "true",
     mockUrl: outputs["mock-url"],
+    mockVisibility: outputs["mock-visibility"],
     monitorId: outputs["monitor-id"],
     pushed,
     resolvedCurrentRef: outputs["resolved-current-ref"],
@@ -140273,6 +140358,7 @@ async function runRepoSyncInner(inputs, dependencies) {
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
       let resolvedMockUrl = "";
+      let resolvedMockVisibility = "";
       const mockName = `${assetProjectName} Mock`;
       if (inputs.mockUrl) {
         let mocks;
@@ -140290,12 +140376,15 @@ async function runRepoSyncInner(inputs, dependencies) {
             { cause: error2 }
           );
         }
-        resolvedMockUrl = resolveExplicitPublicMock(
+        const resolved = resolveExplicitMock(
           mocks,
           inputs.mockUrl,
           inputs.baselineCollectionId,
-          mockEnvUid
-        ).mockUrl;
+          mockEnvUid,
+          inputs.mockVisibility
+        );
+        resolvedMockUrl = resolved.mockUrl;
+        resolvedMockVisibility = resolved.visibility;
         dependencies.core.info(`Reusing mock from explicit input: ${resolvedMockUrl}`);
       }
       if (!resolvedMockUrl && inputs.baselineCollectionId) {
@@ -140319,7 +140408,9 @@ async function runRepoSyncInner(inputs, dependencies) {
           );
         }
         if (discovered) {
-          resolvedMockUrl = requirePublicMock(discovered).mockUrl;
+          const resolved = requireMockVisibility(discovered, inputs.mockVisibility);
+          resolvedMockUrl = resolved.mockUrl;
+          resolvedMockVisibility = resolved.visibility;
           dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
         }
       }
@@ -140332,7 +140423,8 @@ async function runRepoSyncInner(inputs, dependencies) {
               inputs.workspaceId,
               mockName,
               inputs.baselineCollectionId,
-              mockEnvUid
+              mockEnvUid,
+              inputs.mockVisibility
             ),
             {
               maxAttempts: 3,
@@ -140354,6 +140446,7 @@ async function runRepoSyncInner(inputs, dependencies) {
             }
           );
           resolvedMockUrl = mock.url;
+          resolvedMockVisibility = mock.visibility ?? inputs.mockVisibility;
           dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
         } catch (error2) {
           throw new Error(
@@ -140369,7 +140462,23 @@ async function runRepoSyncInner(inputs, dependencies) {
         }
       }
       outputs["mock-url"] = resolvedMockUrl;
+      outputs["mock-visibility"] = resolvedMockVisibility;
+      outputs["mock-auth-required"] = String(resolvedMockVisibility === "private");
       dependencies.core.setOutput("mock-url", resolvedMockUrl);
+      dependencies.core.setOutput("mock-visibility", resolvedMockVisibility);
+      dependencies.core.setOutput("mock-auth-required", outputs["mock-auth-required"]);
+      if (resolvedMockVisibility === "private") {
+        if (!dependencies.postman.configurePrivateMockRuntimeAuth) {
+          throw new Error(
+            "PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection."
+          );
+        }
+        for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
+          if (collectionUid) {
+            await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+          }
+        }
+      }
       if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
         const mockEnvironmentUid = await upsertMockEnvironment(
           inputs,

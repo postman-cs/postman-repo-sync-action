@@ -142,6 +142,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     orgMode: false,
     monitorId: '',
     mockUrl: '',
+    mockVisibility: 'public',
     mockEnvironmentEnabled: false,
     monitorCron: '',
     sslClientCert: '',
@@ -506,6 +507,7 @@ describe('repo sync action', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0),
       runMonitor: vi.fn().mockResolvedValue(undefined),
       listEnvironments: vi.fn().mockResolvedValue([]),
       deleteEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -3113,6 +3115,37 @@ describe('mock resolution paths', () => {
     }
   });
 
+  it('reuses a private mock only under explicit private policy and emits runtime auth metadata', async () => {
+    const configurePrivateMockRuntimeAuth = vi.fn().mockResolvedValue(3);
+    const postman = makePostman({
+      configurePrivateMockRuntimeAuth,
+      listMocks: vi.fn().mockResolvedValue([{
+        uid: 'explicit-private',
+        name: 'Existing Mock',
+        collection: 'col-baseline',
+        environment: 'env-prod',
+        mockUrl: 'https://explicit-private.mock.pstmn.io',
+        visibility: 'private'
+      }])
+    });
+
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockUrl: 'https://explicit-private.mock.pstmn.io',
+        mockVisibility: 'private'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    expect(result['mock-visibility']).toBe('private');
+    expect(result['mock-auth-required']).toBe('true');
+    expect(configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
+    expect(configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+    expect(postman.createMock).not.toHaveBeenCalled();
+  });
+
   it('discovers existing mock by baseline collection ID', async () => {
     const postman = makePostman({
       findMockByCollection: vi.fn().mockResolvedValue({
@@ -3169,7 +3202,8 @@ describe('mock resolution paths', () => {
       'ws-123',
       'core-payments Mock',
       'col-baseline',
-      'env-prod'
+      'env-prod',
+      'public'
     );
   });
 

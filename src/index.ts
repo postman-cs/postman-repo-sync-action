@@ -48,8 +48,9 @@ import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {
   MockContractError,
   PostmanGatewayAssetsClient,
-  requirePublicMock,
-  type MockRecord
+  requireMockVisibility,
+  type MockRecord,
+  type RequestedMockVisibility
 } from './lib/postman/postman-gateway-assets-client.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
@@ -129,6 +130,7 @@ export interface ResolvedInputs {
   orgMode: boolean;
   monitorId: string;
   mockUrl: string;
+  mockVisibility: RequestedMockVisibility;
   mockEnvironmentEnabled: boolean;
   monitorCron: string;
   sslClientCert: string;
@@ -157,6 +159,8 @@ interface RepoSyncOutputs {
   'environment-sync-status': Status;
   'environment-uids-json': string;
   'mock-url': string;
+  'mock-visibility': string;
+  'mock-auth-required': string;
   'mock-environment-uid': string;
   'mock-environment-status': Status;
   'monitor-id': string;
@@ -208,7 +212,7 @@ export interface RepoSyncDependencies {
     | 'deleteEnvironment'
     | 'deleteMock'
     | 'deleteMonitor'
-  > & Partial<Pick<PostmanGatewayAssetsClient, 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -252,11 +256,12 @@ function normalizeMockUrl(value: string, source: string): string {
   return url.toString();
 }
 
-function resolveExplicitPublicMock(
+function resolveExplicitMock(
   mocks: MockRecord[],
   explicitUrl: string,
   collectionUid: string,
-  environmentUid: string
+  environmentUid: string,
+  requestedVisibility: RequestedMockVisibility
 ): MockRecord {
   const normalized = normalizeMockUrl(explicitUrl, 'mock-url');
   const matches = mocks.filter(
@@ -283,7 +288,7 @@ function resolveExplicitPublicMock(
       `EXPLICIT_MOCK_IDENTITY_MISMATCH: Mock ${match.uid} references environment ${match.environment || '(none)'}, expected ${environmentUid}`
     );
   }
-  return requirePublicMock(match);
+  return requireMockVisibility(match, requestedVisibility);
 }
 
 function shouldRetryMockCreate(error: unknown): boolean {
@@ -446,6 +451,16 @@ function parseCredentialPreflight(value: string | undefined): PreflightMode {
   );
 }
 
+function parseMockVisibility(value: string | undefined): RequestedMockVisibility {
+  const definition = postmanRepoSyncActionContract.inputs['mock-visibility'];
+  const allowed = definition.allowedValues ?? [];
+  const normalized = String(value || '').trim() || (definition.default ?? 'public');
+  if (allowed.includes(normalized)) return normalized as RequestedMockVisibility;
+  throw new Error(
+    `Unsupported mock-visibility "${normalized}". Supported values: ${allowed.join(', ')}`
+  );
+}
+
 function parseBranchStrategy(value: string | undefined): BranchStrategy {
   const definition = postmanRepoSyncActionContract.inputs['branch-strategy'];
   const allowed = definition.allowedValues ?? [];
@@ -587,6 +602,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     orgMode: parseBooleanInput(getInput('org-mode', env), false),
     monitorId: getInput('monitor-id', env),
     mockUrl: getInput('mock-url', env),
+    mockVisibility: parseMockVisibility(getInput('mock-visibility', env)),
     mockEnvironmentEnabled: parseBooleanInput(getInput('mock-environment-enabled', env), false),
     monitorCron: getInput('monitor-cron', env),
     sslClientCert: getInput('ssl-client-cert', env),
@@ -915,6 +931,8 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'environment-sync-status': 'skipped',
     'environment-uids-json': JSON.stringify(inputs.environmentUids),
     'mock-url': '',
+    'mock-visibility': '',
+    'mock-auth-required': 'false',
     'mock-environment-uid': '',
     'mock-environment-status': 'skipped',
     'monitor-id': '',
@@ -986,6 +1004,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_ORG_MODE: readInput(actionCore, 'org-mode'),
     INPUT_MONITOR_ID: readInput(actionCore, 'monitor-id'),
     INPUT_MOCK_URL: readInput(actionCore, 'mock-url'),
+    INPUT_MOCK_VISIBILITY: readInput(actionCore, 'mock-visibility'),
     INPUT_MOCK_ENVIRONMENT_ENABLED: readInput(actionCore, 'mock-environment-enabled'),
     INPUT_MONITOR_CRON: readInput(actionCore, 'monitor-cron'),
     INPUT_SSL_CLIENT_CERT: sslClientCert,
@@ -2245,7 +2264,9 @@ function createRepoSummary(
     environmentSyncStatus: outputs['environment-sync-status'],
     mockEnvironmentStatus: outputs['mock-environment-status'],
     mockEnvironmentUid: outputs['mock-environment-uid'],
+    mockAuthRequired: outputs['mock-auth-required'] === 'true',
     mockUrl: outputs['mock-url'],
+    mockVisibility: outputs['mock-visibility'],
     monitorId: outputs['monitor-id'],
     pushed,
     resolvedCurrentRef: outputs['resolved-current-ref'],
@@ -2553,6 +2574,7 @@ async function runRepoSyncInner(
     const mockEnvUid = envUids.dev || envUids.prod || Object.values(envUids)[0];
     if (mockEnvUid) {
       let resolvedMockUrl = '';
+      let resolvedMockVisibility: RequestedMockVisibility | '' = '';
       const mockName = `${assetProjectName} Mock`;
 
       if (inputs.mockUrl) {
@@ -2571,12 +2593,15 @@ async function runRepoSyncInner(
             { cause: error }
           );
         }
-        resolvedMockUrl = resolveExplicitPublicMock(
+        const resolved = resolveExplicitMock(
           mocks,
           inputs.mockUrl,
           inputs.baselineCollectionId,
-          mockEnvUid
-        ).mockUrl;
+          mockEnvUid,
+          inputs.mockVisibility
+        );
+        resolvedMockUrl = resolved.mockUrl;
+        resolvedMockVisibility = resolved.visibility as RequestedMockVisibility;
         dependencies.core.info(`Reusing mock from explicit input: ${resolvedMockUrl}`);
       }
 
@@ -2601,7 +2626,9 @@ async function runRepoSyncInner(
           );
         }
         if (discovered) {
-          resolvedMockUrl = requirePublicMock(discovered).mockUrl;
+          const resolved = requireMockVisibility(discovered, inputs.mockVisibility);
+          resolvedMockUrl = resolved.mockUrl;
+          resolvedMockVisibility = resolved.visibility as RequestedMockVisibility;
           dependencies.core.info(`Discovered existing mock for collection ${inputs.baselineCollectionId}: ${resolvedMockUrl}`);
         }
       }
@@ -2619,7 +2646,8 @@ async function runRepoSyncInner(
               inputs.workspaceId,
               mockName,
               inputs.baselineCollectionId,
-              mockEnvUid
+              mockEnvUid,
+              inputs.mockVisibility
             ),
             {
               maxAttempts: 3,
@@ -2641,6 +2669,7 @@ async function runRepoSyncInner(
             }
           );
           resolvedMockUrl = mock.url;
+          resolvedMockVisibility = mock.visibility ?? inputs.mockVisibility;
           dependencies.core.info(`Created new mock: ${resolvedMockUrl}`);
         } catch (error) {
           throw new Error(
@@ -2657,7 +2686,23 @@ async function runRepoSyncInner(
       }
 
       outputs['mock-url'] = resolvedMockUrl;
+      outputs['mock-visibility'] = resolvedMockVisibility;
+      outputs['mock-auth-required'] = String(resolvedMockVisibility === 'private');
       dependencies.core.setOutput('mock-url', resolvedMockUrl);
+      dependencies.core.setOutput('mock-visibility', resolvedMockVisibility);
+      dependencies.core.setOutput('mock-auth-required', outputs['mock-auth-required']);
+      if (resolvedMockVisibility === 'private') {
+        if (!dependencies.postman.configurePrivateMockRuntimeAuth) {
+          throw new Error(
+            'PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection.'
+          );
+        }
+        for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
+          if (collectionUid) {
+            await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+          }
+        }
+      }
       if (inputs.mockEnvironmentEnabled && isCanonicalWriter) {
         const mockEnvironmentUid = await upsertMockEnvironment(
           inputs,

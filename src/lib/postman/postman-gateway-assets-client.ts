@@ -5,6 +5,7 @@ import { retry, sleep as defaultSleep } from '../retry.js';
 type JsonRecord = Record<string, unknown>;
 
 export type MockVisibility = 'public' | 'private' | 'unknown';
+export type RequestedMockVisibility = Exclude<MockVisibility, 'unknown'>;
 
 export interface MockRecord {
   uid: string;
@@ -22,19 +23,38 @@ export class MockContractError extends Error {
   }
 }
 
-export function requirePublicMock(mock: MockRecord): MockRecord {
-  if (mock.visibility === 'private') {
+export function requireMockVisibility(
+  mock: MockRecord,
+  requested: RequestedMockVisibility
+): MockRecord {
+  if (mock.visibility === 'unknown') {
     throw new MockContractError(
-      `MOCK_NOT_PUBLIC: Mock ${mock.uid} is private. Make it public in Postman or remove/rename it so repo-sync can create the canonical public mock.`
+      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is callable.`
     );
   }
-  if (mock.visibility !== 'public') {
+  if (mock.visibility !== requested) {
+    const code = requested === 'public' ? 'MOCK_NOT_PUBLIC' : 'MOCK_NOT_PRIVATE';
     throw new MockContractError(
-      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is publicly callable.`
+      `${code}: Mock ${mock.uid} is ${mock.visibility}, but mock-visibility requires ${requested}. Change the mock visibility in Postman or set mock-visibility to ${mock.visibility}.`
     );
   }
   return mock;
 }
+
+export function requirePublicMock(mock: MockRecord): MockRecord {
+  return requireMockVisibility(mock, 'public');
+}
+
+const PRIVATE_MOCK_AUTH_MARKER = 'postman-enterprise-automation: private-mock-auth';
+const PRIVATE_MOCK_AUTH_VARIABLE = 'postmanPrivateMockApiKey';
+const PRIVATE_MOCK_AUTH_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
+  "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
+  "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "}"
+].join('\n');
 
 const MAX_CREATE_FLIGHTS = 256;
 interface CreateFlight {
@@ -655,24 +675,25 @@ export class PostmanGatewayAssetsClient {
     workspaceId: string,
     name: string,
     collectionUid: string,
-    environmentUid: string
-  ): Promise<{ uid: string; url: string }> {
+    environmentUid: string,
+    requestedVisibility: RequestedMockVisibility = 'public'
+  ): Promise<{ uid: string; url: string; visibility: RequestedMockVisibility }> {
     const ws = workspaceId || this.workspaceId;
     const mockName = String(name ?? '').trim();
     const collection = String(collectionUid ?? '').trim();
     const environment = String(environmentUid ?? '').trim();
-    const flightKey = `mock:${ws}:${collection}:${environment}:${mockName}`;
+    const flightKey = `mock:${ws}:${collection}:${environment}:${requestedVisibility}:${mockName}`;
     return this.singleFlight(flightKey, flightKey, 'mock', async () => {
       const existing = await this.findMockByCollection(collection, environment, mockName);
       if (existing) {
-        const reusable = requirePublicMock(existing);
-        return { uid: reusable.uid, url: reusable.mockUrl };
+        const reusable = requireMockVisibility(existing, requestedVisibility);
+        return { uid: reusable.uid, url: reusable.mockUrl, visibility: requestedVisibility };
       }
 
       const body: JsonRecord = {
         name: mockName,
         collection,
-        private: false,
+        private: requestedVisibility === 'private',
         ...(environment ? { environment } : {})
       };
 
@@ -692,12 +713,14 @@ export class PostmanGatewayAssetsClient {
         );
       const parseMock = (response: JsonRecord | null) => {
         const record = this.dataOf(response);
-        const created = requirePublicMock(
+        const created = requireMockVisibility(
           this.decodeMockRecord(record, 'Mock create')
+          , requestedVisibility
         );
         return {
           uid: created.uid,
-          url: created.mockUrl
+          url: created.mockUrl,
+          visibility: requestedVisibility
         };
       };
       try {
@@ -708,8 +731,8 @@ export class PostmanGatewayAssetsClient {
           error
         );
         if (adopted) {
-          const reusable = requirePublicMock(adopted);
-          return { uid: reusable.uid, url: reusable.mockUrl };
+          const reusable = requireMockVisibility(adopted, requestedVisibility);
+          return { uid: reusable.uid, url: reusable.mockUrl, visibility: requestedVisibility };
         }
         if (adopted === undefined) {
           const retried = await this.resendAbsentCreate(async () => parseMock(await send('auto')));
@@ -718,6 +741,57 @@ export class PostmanGatewayAssetsClient {
         throw error;
       }
     });
+  }
+
+  /**
+   * Add a secret-free runtime hook to every HTTP request in a collection. The
+   * PMAK value is supplied only by the runner as a transient variable; this
+   * method persists the variable name and header wiring, never the credential.
+   */
+  async configurePrivateMockRuntimeAuth(collectionUid: string): Promise<number> {
+    const cid = String(collectionUid ?? '').trim();
+    if (!cid) return 0;
+    const listed = await this.gateway.requestJson<JsonRecord>({
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${cid}/items/`
+    });
+    const items = Array.isArray(listed?.data) ? listed.data as JsonRecord[] : [];
+    let patched = 0;
+    for (const listedItem of items) {
+      if (String(listedItem.$kind ?? '') !== 'http-request') continue;
+      const itemId = String(listedItem.id ?? '').trim();
+      if (!itemId) continue;
+      const response = await this.gateway.requestJson<JsonRecord>({
+        service: 'collection',
+        method: 'get',
+        path: `/v3/collections/${cid}/items/${itemId}`,
+        headers: { 'X-Entity-Type': 'http-request' }
+      });
+      const item = this.asRecord(response?.data) ?? listedItem;
+      const scripts = Array.isArray(item.scripts)
+        ? item.scripts.filter((entry): entry is JsonRecord => Boolean(this.asRecord(entry)))
+        : [];
+      const before = scripts.find((script) => String(script.type ?? '') === 'beforeRequest');
+      if (String(before?.code ?? '').includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
+      const code = [String(before?.code ?? '').trim(), PRIVATE_MOCK_AUTH_SCRIPT]
+        .filter(Boolean)
+        .join('\n');
+      const nextScripts = [
+        ...scripts.filter((script) => String(script.type ?? '') !== 'beforeRequest'),
+        { type: 'beforeRequest', code, language: 'text/javascript' }
+      ];
+      await this.gateway.requestJson<JsonRecord>({
+        service: 'collection',
+        method: 'patch',
+        path: `/v3/collections/${cid}/items/${itemId}`,
+
+        headers: { 'X-Entity-Type': 'http-request' },
+        body: [{ op: 'add', path: '/scripts', value: nextScripts }]
+      });
+      patched += 1;
+    }
+    return patched;
   }
 
   async listMocks(): Promise<MockRecord[]> {

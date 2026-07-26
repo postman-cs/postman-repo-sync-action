@@ -113,9 +113,9 @@ with:
   monitor-id: 1e2f3a4b-monitor-id
 ```
 
-Repo-sync supports public mocks for anonymous validation. An explicit `mock-url` must match one mock in the resolved workspace and reference the expected baseline collection and environment. Discovered and newly created mocks pass the same live visibility check. Private mocks, responses without a recognized visibility field, stale URLs, and identity mismatches fail before `mock-url` is emitted; repo-sync never places a Postman API key in a collection or environment to make a private mock callable.
+Repo-sync defaults to public mocks for anonymous validation. Set `mock-visibility: private` for teams that prohibit public mocks. Explicit, discovered, and newly created mocks must match the requested visibility and the expected baseline collection/environment; unknown visibility, stale URLs, and identity mismatches fail before `mock-url` is emitted. For private mocks, repo-sync emits `mock-auth-required: true` and installs a secret-free request hook in the smoke and contract collections. The runner must supply its PMAK as the transient `postmanPrivateMockApiKey` variable. Repo-sync never writes that credential to a collection, environment, output, or repository artifact.
 
-For manual collection validation against that public mock, opt in to a dedicated Postman environment:
+For manual collection validation against the resolved mock, opt in to a dedicated Postman environment:
 
 ```yaml
 with:
@@ -155,7 +155,8 @@ with:
 | `release-label` | Optional release label used for versioned naming. | no |  |
 | `monitor-id` | Existing smoke monitor ID. When set, the action validates and reuses this monitor instead of creating a new one. | no |  |
 | `mock-url` | Existing mock server URL. When set, the action validates and reuses this mock instead of creating a new one. | no |  |
-| `mock-environment-enabled` | Create or update a dedicated manual-validation environment whose baseUrl is the validated public mock URL. This environment is excluded from runtime CI selection. | no | `false` |
+| `mock-visibility` | Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync. | no | `public` |
+| `mock-environment-enabled` | Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential. | no | `false` |
 | `monitor-cron` | Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run). | no | `""` |
 | `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
@@ -203,6 +204,8 @@ with:
 | `environment-sync-status` | Whether environment sync succeeded, was skipped, or failed. |
 | `environment-uids-json` | JSON map of environment slug to Postman environment uid. |
 | `mock-url` | Created or reused mock server URL. |
+| `mock-visibility` | Authoritatively observed mock visibility: public or private. |
+| `mock-auth-required` | Whether the collection runner must supply postmanPrivateMockApiKey at runtime. |
 | `mock-environment-uid` | Dedicated manual-validation environment UID when mock-environment-enabled succeeds. |
 | `mock-environment-status` | Whether the optional manual-validation mock environment succeeded, was skipped, or failed. |
 | `monitor-id` | Created or reused smoke monitor ID. |
