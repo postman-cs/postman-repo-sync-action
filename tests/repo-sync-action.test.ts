@@ -142,6 +142,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     orgMode: false,
     monitorId: '',
     mockUrl: '',
+    mockEnvironmentEnabled: false,
     monitorCron: '',
     sslClientCert: '',
     sslClientKey: '',
@@ -3170,6 +3171,129 @@ describe('mock resolution paths', () => {
       'col-baseline',
       'env-prod'
     );
+  });
+
+  it('creates an opt-in mock environment without adding it to runtime environment state', async () => {
+    const createEnvironment = vi.fn().mockImplementation(
+      (_workspaceId: string, name: string) => Promise.resolve(
+        name.endsWith(' - Mock') ? 'env-mock' : 'env-prod'
+      )
+    );
+    const postman = makePostman({
+      createEnvironment,
+      getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
+        id: uid,
+        values: uid === 'env-mock' ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io' }] : []
+      }))
+    });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    expect(createEnvironment.mock.calls).toContainEqual([
+      'ws-123',
+      'core-payments - Mock',
+      expect.arrayContaining([{ key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' }])
+    ]);
+    expect(result['mock-environment-uid']).toBe('env-mock');
+    expect(JSON.parse(result['environment-uids-json'])).toEqual({ prod: 'env-prod' });
+    expect(JSON.parse(result['repo-sync-summary-json'])).toMatchObject({
+      mockEnvironmentUid: 'env-mock',
+      mockEnvironmentStatus: 'success'
+    });
+    expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(true);
+    expect(readFileSync('.postman/resources.yaml', 'utf8')).not.toContain('env-mock');
+  });
+
+  it('reuses an unchanged mock environment without mutating runtime selection', async () => {
+    const updateEnvironment = vi.fn().mockResolvedValue(undefined);
+    const postman = makePostman({
+      updateEnvironment,
+      findEnvironmentByName: vi.fn().mockImplementation((_workspaceId: string, name: string) =>
+        Promise.resolve(name.endsWith(' - Mock') ? { uid: 'env-mock', name } : null)
+      ),
+      getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
+        id: uid,
+        values: uid === 'env-mock' ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io' }] : []
+      }))
+    });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        environmentUids: { prod: 'env-prod' },
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    expect(result['mock-environment-uid']).toBe('env-mock');
+    expect(updateEnvironment.mock.calls.some(([, name]) => name === 'core-payments - Mock')).toBe(false);
+    expect(JSON.parse(result['environment-uids-json'])).toEqual({ prod: 'env-prod' });
+  });
+
+  it('reports an observable non-fatal mock environment failure', async () => {
+    const createEnvironment = vi.fn().mockImplementation(
+      (_workspaceId: string, name: string) => name.endsWith(' - Mock')
+        ? Promise.reject(new Error('mock environment denied'))
+        : Promise.resolve('env-prod')
+    );
+    const { core, warnings } = createCoreStub();
+    const postman = makePostman({ createEnvironment });
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }),
+      { ...makeDeps(postman, makeGithub()), core }
+    );
+
+    expect(result['mock-environment-uid']).toBe('');
+    expect(JSON.parse(result['repo-sync-summary-json'])).toMatchObject({
+      mockEnvironmentUid: '',
+      mockEnvironmentStatus: 'failed'
+    });
+    expect(warnings).toContainEqual(expect.stringMatching(/Mock environment upsert failed.*mock environment denied/));
+  });
+
+  it('skips mock environments for preview runs so retention cleanup owns every branch asset', async () => {
+    const originalCwd = process.cwd();
+    const isolatedDir = mkdtempSync(join(tmpdir(), 'repo-sync-preview-mock-env-'));
+    try {
+      process.chdir(isolatedDir);
+      vi.stubEnv('POSTMAN_BRANCH_ASSET_IDS', 'owned');
+      const createEnvironment = vi.fn().mockResolvedValue('env-preview');
+      const { core, warnings } = createCoreStub();
+      const postman = makePostman({ createEnvironment });
+      const result = await runRepoSync(
+        createInputs({
+          branchStrategy: 'preview',
+          canonicalBranch: 'main',
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockEnvironmentEnabled: true,
+          repoWriteMode: 'none'
+        }),
+        { ...makeDeps(postman, makeGithub()), core }
+      );
+
+      expect(result['mock-environment-status']).toBe('skipped');
+      expect(createEnvironment.mock.calls.some(([, name]) => String(name).endsWith(' - Mock'))).toBe(false);
+      expect(warnings).toContainEqual(expect.stringMatching(/skipped for preview and channel runs/));
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(isolatedDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
   });
 
   it('warns with mock retry context and preserves 3-attempt final failure semantics', async () => {

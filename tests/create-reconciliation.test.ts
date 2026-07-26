@@ -614,6 +614,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       monitorType: 'cloud',
       monitorId: '',
       mockUrl: '',
+      mockEnvironmentEnabled: false,
       monitorCron: '',
       provider: 'github',
       githubToken: '',

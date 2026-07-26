@@ -79,6 +79,7 @@ const CLI_INPUT_NAMES = [
   'org-mode',
   'monitor-id',
   'mock-url',
+  'mock-environment-enabled',
   'monitor-cron',
   'ssl-client-cert',
   'ssl-client-key',

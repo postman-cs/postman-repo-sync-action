@@ -11,7 +11,7 @@
  * Sandbox-only (team 10490519, wipeable). Run:
  *   set -a && source ../../.env && set +a
  *   POSTMAN_API_KEY="$POSTMAN_E2E_API_KEY_NON_ORG_MODE" \
- *     node --experimental-strip-types scripts/live-write-probe.ts
+ *     npx --yes tsx scripts/live-write-probe.ts
  */
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
@@ -20,6 +20,11 @@ import {
   requirePublicMock
 } from '../src/lib/postman/postman-gateway-assets-client.js';
 import { POSTMAN_ENDPOINT_PROFILES } from '../src/lib/postman/base-urls.js';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { resolveInputs, runRepoSync } from '../src/index.js';
 import { HttpError } from '../src/lib/http-error.js';
 
 const API = POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl;
@@ -147,6 +152,7 @@ async function main(): Promise<void> {
   let publicCollectionUid: string;
   let mockUid = '';
   let privateMockUid: string | undefined;
+  let mockEnvironmentUid = '';
   let monitorUid = '';
   const createdWorkspaces = new Set<string>();
   let failed = false;
@@ -403,6 +409,53 @@ async function main(): Promise<void> {
       }
     }
 
+    console.log('\n== repo-sync manual-validation environment (production orchestration) ==');
+    if (mockUid) {
+      const originalCwd = process.cwd();
+      const runDir = mkdtempSync(join(tmpdir(), 'repo-sync-mock-environment-'));
+      try {
+        process.chdir(runDir);
+        const inputs = resolveInputs({
+          INPUT_PROJECT_NAME: 'Write Probe',
+          INPUT_WORKSPACE_ID: workspaceId,
+          INPUT_BASELINE_COLLECTION_ID: publicCollectionUid,
+          INPUT_ENVIRONMENTS_JSON: '["prod"]',
+          INPUT_ENVIRONMENT_UIDS_JSON: JSON.stringify({ prod: envUid }),
+          INPUT_ENV_RUNTIME_URLS_JSON: '{"prod":"https://example.com"}',
+          INPUT_MOCK_URL: `https://${mockUid}.mock.pstmn.io`,
+          INPUT_MOCK_ENVIRONMENT_ENABLED: 'true',
+          INPUT_MONITOR_TYPE: 'cli',
+          INPUT_REPO_WRITE_MODE: 'none',
+          INPUT_GENERATE_CI_WORKFLOW: 'false',
+          INPUT_WORKSPACE_LINK_ENABLED: 'false',
+          INPUT_ENVIRONMENT_SYNC_ENABLED: 'false',
+          INPUT_POSTMAN_ACCESS_TOKEN: provider.current()
+        });
+        const core = { info: () => undefined, warning: console.warn, setOutput: () => undefined };
+        const first = await runRepoSync(inputs, { core, postman: assets });
+        mockEnvironmentUid = first['mock-environment-uid'];
+        const runtimeUids = JSON.parse(first['environment-uids-json']) as Record<string, string>;
+        const resources = readFileSync('.postman/resources.yaml', 'utf8');
+        const artifactExists = existsSync('postman/mocks/manual-validation.postman_environment.json');
+        if (!mockEnvironmentUid || runtimeUids.prod !== envUid || Object.keys(runtimeUids).length !== 1) {
+          fail('mock environment output', JSON.stringify({ mockEnvironmentUid, runtimeUids }));
+        } else if (resources.includes(mockEnvironmentUid) || !artifactExists) {
+          fail('mock environment isolation', `stateContainsUid=${resources.includes(mockEnvironmentUid)} artifactExists=${artifactExists}`);
+        } else {
+          console.log(`  [ok] mock environment uid emitted outside runtime map; artifact=${artifactExists}`);
+        }
+        const second = await runRepoSync(inputs, { core, postman: assets });
+        if (second['mock-environment-uid'] !== mockEnvironmentUid) {
+          fail('mock environment idempotency', 'second run returned a different environment uid');
+        } else {
+          console.log('  [ok] second run reused the same mock environment uid');
+        }
+      } finally {
+        process.chdir(originalCwd);
+        rmSync(runDir, { recursive: true, force: true });
+      }
+    }
+
     console.log('\n== monitor: PostmanGatewayAssetsClient (production path) ==');
     try {
       monitorUid = await assets.createMonitor(
@@ -447,6 +500,10 @@ async function main(): Promise<void> {
     if (privateMockUid) {
       const del = await gwRaw(gateway, 'mock', 'delete', `/mocks/${privateMockUid}`);
       console.log(`  [${del.status}] DELETE private mock ${privateMockUid}`);
+    }
+    if (mockEnvironmentUid) {
+      await assets.deleteEnvironment(mockEnvironmentUid);
+      console.log(`  [ok] DELETE mock environment ${mockEnvironmentUid}`);
     }
     if (monitorUid) {
       const del = await gwRaw(gateway, 'monitorsV2', 'delete', `/monitors/${monitorUid}`);
