@@ -231,7 +231,7 @@ export interface RepoSyncDependencies {
     | 'deleteEnvironment'
     | 'deleteMock'
     | 'deleteMonitor'
-  > & Partial<Pick<PostmanGatewayAssetsClient, 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'rebindMonitorByName' | 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -3084,6 +3084,39 @@ async function runRepoSyncInner(
           throw new Error(
             formatOrchestrationIssue({
               operation: 'Monitor discovery',
+              entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: error,
+              remediation: monitorRemediation,
+              mask
+            }),
+            { cause: error }
+          );
+        }
+      }
+
+      // The canonical Smoke collection can change UID between runs (bootstrap
+      // re-import after a marker/stranger miss, or an operator rebuild). The
+      // monitor is still bound to the previous UID, so the collection-triple
+      // discovery above misses. Rebind the stable (name, environment) monitor
+      // onto the current collection instead of creating a duplicate and
+      // orphaning the old one.
+      if (!resolvedMonitorId && inputs.smokeCollectionId && dependencies.postman.rebindMonitorByName) {
+        try {
+          const rebound = await dependencies.postman.rebindMonitorByName(
+            monitorName,
+            inputs.smokeCollectionId,
+            monitorEnvUid
+          );
+          if (rebound) {
+            resolvedMonitorId = rebound.uid;
+            dependencies.core.info(
+              `Rebound existing monitor ${rebound.uid} ("${monitorName}") from collection ${rebound.previousCollectionUid} to ${inputs.smokeCollectionId}`
+            );
+          }
+        } catch (error) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: 'Monitor rebind',
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error,
               remediation: monitorRemediation,
