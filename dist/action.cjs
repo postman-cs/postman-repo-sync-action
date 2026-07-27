@@ -138355,6 +138355,55 @@ var PostmanGatewayAssetsClient = class {
     );
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
+  /**
+   * Rebind the sole same-name monitor in this workspace onto the current
+   * collection UID.
+   *
+   * The canonical Smoke collection can legitimately change UID (a bootstrap
+   * re-import after a marker/stranger miss, or an operator rebuild). The
+   * monitor still points at the previous UID, so `findMonitorByCollection`
+   * (which requires the full collection+environment+name triple) misses and a
+   * second monitor with the same name would be created on every run, orphaning
+   * the old one. Name plus environment is the stable identity across a
+   * collection re-import, so recover it here instead.
+   *
+   * Returns null when nothing needs rebinding (no same-name monitor, or it is
+   * already bound to this collection). Refuses to guess when several same-name
+   * monitors match, matching `selectExactMatch` semantics elsewhere.
+   */
+  async rebindMonitorByName(name, collectionUid, environmentUid) {
+    const monitorName = String(name ?? "").trim();
+    const collection = String(collectionUid ?? "").trim();
+    const environment = String(environmentUid ?? "").trim();
+    if (!monitorName || !collection) {
+      return null;
+    }
+    const monitors = await this.listMonitors();
+    const sameName = monitors.filter(
+      (monitor) => monitor.name === monitorName && monitor.environmentUid === environment
+    );
+    const match = this.selectExactMatch(
+      "monitor",
+      `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || "(none)"}`,
+      sameName
+    );
+    if (!match?.uid) {
+      return null;
+    }
+    if (match.collectionUid === collection) {
+      return null;
+    }
+    await this.gateway.requestJson(
+      {
+        service: "monitors",
+        method: "put",
+        path: `/jobTemplates/${this.toModelId(match.uid)}`,
+        body: { collection }
+      },
+      { retryTransient: false }
+    );
+    return { uid: match.uid, previousCollectionUid: match.collectionUid };
+  }
   async runMonitor(uid) {
     await this.gateway.requestJson(
       {
@@ -141454,6 +141503,32 @@ async function runRepoSyncInner(inputs, dependencies) {
           throw new Error(
             formatOrchestrationIssue({
               operation: "Monitor discovery",
+              entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+              cause: error2,
+              remediation: monitorRemediation,
+              mask
+            }),
+            { cause: error2 }
+          );
+        }
+      }
+      if (!resolvedMonitorId && inputs.smokeCollectionId && dependencies.postman.rebindMonitorByName) {
+        try {
+          const rebound = await dependencies.postman.rebindMonitorByName(
+            monitorName,
+            inputs.smokeCollectionId,
+            monitorEnvUid
+          );
+          if (rebound) {
+            resolvedMonitorId = rebound.uid;
+            dependencies.core.info(
+              `Rebound existing monitor ${rebound.uid} ("${monitorName}") from collection ${rebound.previousCollectionUid} to ${inputs.smokeCollectionId}`
+            );
+          }
+        } catch (error2) {
+          throw new Error(
+            formatOrchestrationIssue({
+              operation: "Monitor rebind",
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error2,
               remediation: monitorRemediation,

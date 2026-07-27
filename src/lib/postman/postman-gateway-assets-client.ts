@@ -1059,6 +1059,63 @@ export class PostmanGatewayAssetsClient {
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
+  /**
+   * Rebind the sole same-name monitor in this workspace onto the current
+   * collection UID.
+   *
+   * The canonical Smoke collection can legitimately change UID (a bootstrap
+   * re-import after a marker/stranger miss, or an operator rebuild). The
+   * monitor still points at the previous UID, so `findMonitorByCollection`
+   * (which requires the full collection+environment+name triple) misses and a
+   * second monitor with the same name would be created on every run, orphaning
+   * the old one. Name plus environment is the stable identity across a
+   * collection re-import, so recover it here instead.
+   *
+   * Returns null when nothing needs rebinding (no same-name monitor, or it is
+   * already bound to this collection). Refuses to guess when several same-name
+   * monitors match, matching `selectExactMatch` semantics elsewhere.
+   */
+  async rebindMonitorByName(
+    name: string,
+    collectionUid: string,
+    environmentUid: string
+  ): Promise<{ uid: string; previousCollectionUid: string } | null> {
+    const monitorName = String(name ?? '').trim();
+    const collection = String(collectionUid ?? '').trim();
+    const environment = String(environmentUid ?? '').trim();
+    if (!monitorName || !collection) {
+      return null;
+    }
+
+    const monitors = await this.listMonitors();
+    const sameName = monitors.filter(
+      (monitor) => monitor.name === monitorName && monitor.environmentUid === environment
+    );
+    const match = this.selectExactMatch(
+      'monitor',
+      `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || '(none)'}`,
+      sameName
+    );
+    if (!match?.uid) {
+      return null;
+    }
+    if (match.collectionUid === collection) {
+      return null;
+    }
+
+    await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'monitors',
+        method: 'put',
+        path: `/jobTemplates/${this.toModelId(match.uid)}`,
+        body: { collection }
+      },
+      { retryTransient: false }
+    );
+
+    return { uid: match.uid, previousCollectionUid: match.collectionUid };
+  }
+
   async runMonitor(uid: string): Promise<void> {
     await this.gateway.requestJson<JsonRecord>(
       {
