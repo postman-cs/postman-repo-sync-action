@@ -133864,6 +133864,49 @@ function createLogger(options) {
   return root;
 }
 
+// node_modules/@postman-cse/automation-core/dist/secrets-resolver.js
+var SECRETS_RESOLVER_PROVIDERS = ["none", "aws", "azure", "gcp"];
+var DEFAULT_SECRETS_RESOLVER_PROVIDER = "none";
+function parseSecretsResolverProvider(value, fallback = DEFAULT_SECRETS_RESOLVER_PROVIDER) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw)
+    return fallback;
+  if (raw === "true")
+    return "aws";
+  if (raw === "false" || raw === "off")
+    return "none";
+  if (SECRETS_RESOLVER_PROVIDERS.includes(raw)) {
+    return raw;
+  }
+  throw new Error(`SECRETS_RESOLVER_PROVIDER_INVALID: expected one of ${SECRETS_RESOLVER_PROVIDERS.join(", ")} (or legacy true/false), received "${value}"`);
+}
+function secretsResolverEnvironmentKeys(provider) {
+  switch (provider) {
+    case "aws":
+      return [
+        { key: "AWS_ACCESS_KEY_ID", secret: true },
+        { key: "AWS_SECRET_ACCESS_KEY", secret: true },
+        { key: "AWS_REGION", secret: false },
+        { key: "AWS_SECRET_NAME", secret: false }
+      ];
+    case "azure":
+      return [
+        { key: "AZURE_KEY_VAULT_NAME", secret: false },
+        { key: "AZURE_SECRET_NAME", secret: false },
+        { key: "AZURE_ACCESS_TOKEN", secret: true }
+      ];
+    case "gcp":
+      return [
+        { key: "GCP_PROJECT_ID", secret: false },
+        { key: "GCP_SECRET_NAME", secret: false },
+        { key: "GCP_ACCESS_TOKEN", secret: true }
+      ];
+    case "none":
+    default:
+      return [];
+  }
+}
+
 // src/action-version.ts
 var import_node_fs3 = require("node:fs");
 var import_node_path2 = require("node:path");
@@ -135067,6 +135110,12 @@ var postmanRepoSyncActionContract = {
       required: false,
       default: ""
     },
+    "secrets-resolver": {
+      description: "Cloud secret store the generated environments seed credential slots for (none, aws, azure, gcp). Must match the value passed to bootstrap and smoke-flow.",
+      required: false,
+      default: "none",
+      allowedValues: ["none", "aws", "azure", "gcp"]
+    },
     "credential-preflight": {
       description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.",
       required: false,
@@ -135622,6 +135671,12 @@ var MockContractError = class extends Error {
   constructor(message) {
     super(message);
     this.name = "MockContractError";
+  }
+};
+var AmbiguousMonitorRebindError = class extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "AmbiguousMonitorRebindError";
   }
 };
 function requireMockVisibility(mock, requested) {
@@ -136460,6 +136515,14 @@ var PostmanGatewayAssetsClient = class {
     );
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
+  pickRebindMonitorCandidates(monitors, monitorName, environment) {
+    const nameOnly = monitors.filter((monitor) => monitor.name === monitorName);
+    const nameOnlyEnvironments = [
+      ...new Set(nameOnly.map((monitor) => monitor.environmentUid || "(none)"))
+    ];
+    const candidates = nameOnly.filter((monitor) => monitor.environmentUid === environment);
+    return { candidates, nameOnlyMatchCount: nameOnly.length, nameOnlyEnvironments };
+  }
   /**
    * Rebind the sole same-name monitor in this workspace onto the current
    * collection UID.
@@ -136484,15 +136547,25 @@ var PostmanGatewayAssetsClient = class {
       return null;
     }
     const monitors = await this.listMonitors();
-    const sameName = monitors.filter(
-      (monitor) => monitor.name === monitorName && monitor.environmentUid === environment
+    const { candidates, nameOnlyMatchCount, nameOnlyEnvironments } = this.pickRebindMonitorCandidates(
+      monitors,
+      monitorName,
+      environment
     );
-    const match = this.selectExactMatch(
-      "monitor",
-      `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || "(none)"}`,
-      sameName
-    );
+    let match;
+    try {
+      match = this.selectExactMatch(
+        "monitor",
+        `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || "(none)"}`,
+        candidates
+      );
+    } catch (error) {
+      const message = error instanceof Error && nameOnlyMatchCount > 0 ? `${error.message} Same-name monitor(s) also exist on environment(s): ${nameOnlyEnvironments.join(", ")}.` : error instanceof Error ? error.message : String(error);
+      throw new AmbiguousMonitorRebindError(message, { cause: error });
+    }
     if (!match?.uid) {
+      if (nameOnlyMatchCount > 0) {
+      }
       return null;
     }
     if (match.collectionUid === collection) {
@@ -136502,7 +136575,7 @@ var PostmanGatewayAssetsClient = class {
       {
         service: "monitors",
         method: "put",
-        path: `/jobTemplates/${this.toModelId(match.uid)}`,
+        path: `/jobTemplates/${this.toModelId(match.uid)}?_etc=true`,
         body: { collection }
       },
       { retryTransient: false }
@@ -137626,6 +137699,7 @@ function resolveInputs(env = process.env) {
     env
   );
   const environments = parseJsonArray(getInput("environments-json", env) || '["prod"]');
+  const secretsResolverProvider = parseSecretsResolverProvider(getInput("secrets-resolver", env));
   const systemEnvMap = parseJsonMap(getInput("system-env-map-json", env) || "{}");
   const environmentUids = parseJsonMap(getInput("environment-uids-json", env) || "{}");
   const envRuntimeUrls = parseJsonMap(getInput("env-runtime-urls-json", env) || "{}");
@@ -137643,6 +137717,7 @@ function resolveInputs(env = process.env) {
     specContentChanged: parseBooleanInput(getInput("spec-content-changed", env), true),
     specPath: getInput("spec-path", env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput("collection-sync-mode", env) || "refresh"),
+    secretsResolverProvider,
     specSyncMode: normalizeSpecSyncMode(getInput("spec-sync-mode", env) || "update"),
     releaseLabel: normalizeReleaseLabel(getInput("release-label", env)) || void 0,
     environments: environments.length > 0 ? environments : ["prod"],
@@ -137741,10 +137816,14 @@ function buildEnvironmentValues(envName, baseUrl, options = {}) {
     ...options.privateMockAuth ? [{ key: PRIVATE_MOCK_AUTH_VARIABLE2, value: "", type: "secret" }] : [],
     { key: "CI", value: "false", type: "default" },
     { key: "RESPONSE_TIME_THRESHOLD", value: "2000", type: "default" },
-    { key: "AWS_ACCESS_KEY_ID", value: "", type: "secret" },
-    { key: "AWS_SECRET_ACCESS_KEY", value: "", type: "secret" },
-    { key: "AWS_REGION", value: "eu-west-2", type: "default" },
-    { key: "AWS_SECRET_NAME", value: `api-credentials-${envName}`, type: "default" }
+    // Provider-scoped credential slots. `none` (the default) seeds nothing, so a
+    // consumer that does not use a cloud secret store gets a clean environment
+    // instead of four dead AWS variables.
+    ...secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? "none").map((entry) => ({
+      key: entry.key,
+      value: entry.key.endsWith("_SECRET_NAME") && !entry.secret ? `api-credentials-${envName}` : entry.defaultValue ?? "",
+      type: entry.secret ? "secret" : "default"
+    }))
   ];
 }
 var LEGACY_BASELINE_COLLECTION_PREFIX = "[Baseline]";
@@ -138100,7 +138179,9 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
         } catch {
         }
       }
-      const values2 = buildEnvironmentValues(envName, runtimeUrl);
+      const values2 = buildEnvironmentValues(envName, runtimeUrl, {
+        secretsResolverProvider: inputs.secretsResolverProvider
+      });
       if (marker) values2.push({ key: "x-pm-onboarding", value: JSON.stringify(marker), type: "default" });
       try {
         await dependencies.postman.updateEnvironment(existingUid, displayName, values2);
@@ -138120,7 +138201,9 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
       dependencies.core.setOutput("environment-uids-json", JSON.stringify(envUids));
       continue;
     }
-    const values = buildEnvironmentValues(envName, runtimeUrl);
+    const values = buildEnvironmentValues(envName, runtimeUrl, {
+      secretsResolverProvider: inputs.secretsResolverProvider
+    });
     if (assetMarker) values.push({ key: "x-pm-onboarding", value: JSON.stringify(assetMarker), type: "default" });
     try {
       envUids[envName] = await dependencies.postman.createEnvironment(
@@ -138149,7 +138232,10 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
     return "";
   }
   const displayName = `${assetProjectName} - Mock`;
-  const values = buildEnvironmentValues("mock", mockUrl, { privateMockAuth });
+  const values = buildEnvironmentValues("mock", mockUrl, {
+    privateMockAuth,
+    secretsResolverProvider: inputs.secretsResolverProvider
+  });
   const mask = resolveRepoSyncMasker(dependencies);
   try {
     const discovered = await dependencies.postman.findEnvironmentByName(
@@ -139434,15 +139520,26 @@ async function runRepoSyncInner(inputs, dependencies) {
             );
           }
         } catch (error) {
-          throw new Error(
+          if (error instanceof AmbiguousMonitorRebindError) {
+            throw new Error(
+              formatOrchestrationIssue({
+                operation: "Monitor rebind",
+                entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+                cause: error,
+                remediation: monitorRemediation,
+                mask
+              }),
+              { cause: error }
+            );
+          }
+          dependencies.core.warning(
             formatOrchestrationIssue({
               operation: "Monitor rebind",
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error,
               remediation: monitorRemediation,
               mask
-            }),
-            { cause: error }
+            })
           );
         }
       }
@@ -139867,6 +139964,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
     monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
     findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
+    rebindMonitorByName: gatewayAssets.rebindMonitorByName.bind(gatewayAssets),
     runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets),
     listEnvironments: gatewayAssets.listEnvironments.bind(gatewayAssets),
     // GC path (preview/channel retention machine — lib/repo/preview-gc.ts).
@@ -140367,6 +140465,7 @@ var CLI_INPUT_NAMES = [
   "spec-content-changed",
   "spec-path",
   "team-id",
+  "secrets-resolver",
   "postman-region",
   "postman-stack",
   "branch-strategy",

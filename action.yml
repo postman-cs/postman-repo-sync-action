@@ -134,6 +134,10 @@ inputs:
     description: Postman team ID resolved by postman-resolve-service-token-action. Primary team scope for all downstream actions; included as x-entity-team-id in org-mode Bifrost calls. Falls back to POSTMAN_TEAM_ID when omitted. Set explicitly for org-mode teams.
     required: false
     default: ""
+  secrets-resolver:
+    description: 'Cloud secret store the generated environments seed credential slots for: none (default, no secret-store variables are added), aws (AWS Secrets Manager), azure (Azure Key Vault), or gcp (Google Secret Manager). Must match the secrets-resolver value passed to the bootstrap and smoke-flow actions.'
+    required: false
+    default: "none"
   credential-preflight:
     description: 'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.'
     required: false

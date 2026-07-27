@@ -159,6 +159,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     specContentChanged: true,
     specPath: '',
     teamId: '',
+    secretsResolverProvider: 'none',
     repository: 'postman-cs/repo-sync-demo',
     postmanRegion: 'us',
     postmanStack: 'prod',
@@ -573,6 +574,7 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0),
       runMonitor: vi.fn().mockResolvedValue(undefined),
@@ -2145,6 +2147,7 @@ describe('repo sync action', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       runMonitor: vi.fn().mockResolvedValue(undefined),
       listEnvironments: vi.fn().mockResolvedValue([]),
@@ -3510,6 +3513,7 @@ describe('monitor resolution paths', () => {
       monitorExists: vi.fn().mockResolvedValue(false),
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
       configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0),
       runMonitor: vi.fn().mockResolvedValue(undefined),
@@ -3590,6 +3594,93 @@ describe('monitor resolution paths', () => {
       'env-prod',
       'core-payments - Smoke Monitor'
     );
+  });
+
+  it('rebinds a name-matched monitor after collection discovery misses', async () => {
+    const postman = makePostman({
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockResolvedValue({
+        uid: 'mon-existing',
+        previousCollectionUid: 'col-old'
+      })
+    });
+    const github = makeGithub();
+    const { core, outputs } = createCoreStub();
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        monitorType: 'cloud',
+        monitorCron: ''
+      }),
+      { ...makeDeps(postman, github), core }
+    );
+
+    expect(postman.findMonitorByCollection).toHaveBeenCalledWith(
+      'col-smoke',
+      'env-prod',
+      'core-payments - Smoke Monitor'
+    );
+    expect(postman.rebindMonitorByName).toHaveBeenCalledTimes(1);
+    expect(postman.rebindMonitorByName).toHaveBeenCalledWith(
+      'core-payments - Smoke Monitor',
+      'col-smoke',
+      'env-prod'
+    );
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(outputs['monitor-id']).toBe('mon-existing');
+    expect(postman.runMonitor).toHaveBeenCalledTimes(1);
+    expect(postman.runMonitor).toHaveBeenCalledWith('mon-existing');
+  });
+
+  it('falls back to creating a monitor when the rebind attempt fails', async () => {
+    const postman = makePostman({
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockRejectedValue(new Error('parameterNotAllowedError'))
+    });
+    const github = makeGithub();
+    const { core, outputs, warnings } = createCoreStub();
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        monitorType: 'cloud',
+        monitorCron: ''
+      }),
+      { ...makeDeps(postman, github), core }
+    );
+
+    expect(postman.rebindMonitorByName).toHaveBeenCalledTimes(1);
+    expect(postman.createMonitor).toHaveBeenCalled();
+    expect(outputs['monitor-id']).toBe('mon-new');
+    const rebindWarning = warnings.find((line) => line.includes('Monitor rebind failed'));
+    expect(rebindWarning).toBeDefined();
+    expect(rebindWarning).toContain('parameterNotAllowedError');
+  });
+
+  it('fails closed when the monitor rebind attempt is ambiguous', async () => {
+    const { AmbiguousMonitorRebindError } = await import('../src/lib/postman/postman-gateway-assets-client.js');
+    const postman = makePostman({
+      findMonitorByCollection: vi.fn().mockResolvedValue(null),
+      rebindMonitorByName: vi.fn().mockRejectedValue(new AmbiguousMonitorRebindError('ambiguous monitor rebind')),
+      createMonitor: vi.fn()
+    });
+    const github = makeGithub();
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          monitorType: 'cloud',
+          monitorCron: ''
+        }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toThrow(
+      /Monitor rebind failed for monitor "core-payments - Smoke Monitor" workspace ws-123 collection col-smoke environment env-prod: ambiguous monitor rebind\. verify monitor IDs\/access or set monitor-cron then rerun/
+    );
+    expect(postman.rebindMonitorByName).toHaveBeenCalledTimes(1);
+    expect(postman.createMonitor).not.toHaveBeenCalled();
   });
 
   it('creates a new monitor when no existing asset is found', async () => {

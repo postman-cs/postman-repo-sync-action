@@ -89,7 +89,8 @@ function createInputs(): ResolvedInputs {
     postmanBifrostBase: 'https://bifrost-premium-https-v4.gw.postman.com',
     postmanFallbackBase: 'https://go.postman.co/_api',
     postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
-    postmanIapubBase: 'https://iapub.postman.co'
+    postmanIapubBase: 'https://iapub.postman.co',
+    secretsResolverProvider: 'none'
   };
 }
 
