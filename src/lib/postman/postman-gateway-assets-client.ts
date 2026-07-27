@@ -1084,8 +1084,8 @@ export class PostmanGatewayAssetsClient {
   }
 
   /**
-   * Rebind the sole same-name monitor in this workspace onto the current
-   * collection UID.
+   * Replace the sole same-name monitor in this workspace when its collection
+   * UID changed.
    *
    * The canonical Smoke collection can legitimately change UID (a bootstrap
    * re-import after a marker/stranger miss, or an operator rebuild). The
@@ -1093,7 +1093,12 @@ export class PostmanGatewayAssetsClient {
    * (which requires the full collection+environment+name triple) misses and a
    * second monitor with the same name would be created on every run, orphaning
    * the old one. Name plus environment is the stable identity across a
-   * collection re-import, so recover it here instead.
+   * collection re-import, so recover it here instead. Monitoring API does not
+   * allow `collection` in a jobTemplate update body, so replacement is the
+   * supported mutation: create or adopt the desired monitor first, then delete
+   * the stale monitor. This order preserves the existing monitor if creation
+   * fails and never deletes the only usable monitor before its replacement
+   * exists.
    *
    * Returns null when nothing needs rebinding (no same-name monitor, or it is
    * already bound to this collection). Refuses to guess when several same-name
@@ -1102,8 +1107,9 @@ export class PostmanGatewayAssetsClient {
   async rebindMonitorByName(
     name: string,
     collectionUid: string,
-    environmentUid: string
-  ): Promise<{ uid: string; previousCollectionUid: string } | null> {
+    environmentUid: string,
+    cronSchedule?: string
+  ): Promise<{ uid: string; previousUid: string; previousCollectionUid: string } | null> {
     const monitorName = String(name ?? '').trim();
     const collection = String(collectionUid ?? '').trim();
     const environment = String(environmentUid ?? '').trim();
@@ -1147,17 +1153,20 @@ export class PostmanGatewayAssetsClient {
       return null;
     }
 
-    await this.gateway.requestJson<JsonRecord>(
-      {
-        service: 'monitors',
-        method: 'put',
-        path: `/jobTemplates/${this.toModelId(match.uid)}?_etc=true`,
-        body: { collection }
-      },
-      { retryTransient: false }
+    const replacementUid = await this.createMonitor(
+      this.workspaceId,
+      monitorName,
+      collection,
+      environment,
+      cronSchedule
     );
+    await this.deleteMonitor(match.uid);
 
-    return { uid: match.uid, previousCollectionUid: match.collectionUid };
+    return {
+      uid: replacementUid,
+      previousUid: match.uid,
+      previousCollectionUid: match.collectionUid
+    };
   }
 
   async runMonitor(uid: string): Promise<void> {
