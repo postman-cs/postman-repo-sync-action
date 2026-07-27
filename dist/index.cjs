@@ -138442,8 +138442,8 @@ var PostmanGatewayAssetsClient = class {
     return { candidates, nameOnlyMatchCount: nameOnly.length, nameOnlyEnvironments };
   }
   /**
-   * Rebind the sole same-name monitor in this workspace onto the current
-   * collection UID.
+   * Replace the sole same-name monitor in this workspace when its collection
+   * UID changed.
    *
    * The canonical Smoke collection can legitimately change UID (a bootstrap
    * re-import after a marker/stranger miss, or an operator rebuild). The
@@ -138451,13 +138451,18 @@ var PostmanGatewayAssetsClient = class {
    * (which requires the full collection+environment+name triple) misses and a
    * second monitor with the same name would be created on every run, orphaning
    * the old one. Name plus environment is the stable identity across a
-   * collection re-import, so recover it here instead.
+   * collection re-import, so recover it here instead. Monitoring API does not
+   * allow `collection` in a jobTemplate update body, so replacement is the
+   * supported mutation: create or adopt the desired monitor first, then delete
+   * the stale monitor. This order preserves the existing monitor if creation
+   * fails and never deletes the only usable monitor before its replacement
+   * exists.
    *
    * Returns null when nothing needs rebinding (no same-name monitor, or it is
    * already bound to this collection). Refuses to guess when several same-name
    * monitors match, matching `selectExactMatch` semantics elsewhere.
    */
-  async rebindMonitorByName(name, collectionUid, environmentUid) {
+  async rebindMonitorByName(name, collectionUid, environmentUid, cronSchedule) {
     const monitorName = String(name ?? "").trim();
     const collection = String(collectionUid ?? "").trim();
     const environment = String(environmentUid ?? "").trim();
@@ -138489,16 +138494,19 @@ var PostmanGatewayAssetsClient = class {
     if (match.collectionUid === collection) {
       return null;
     }
-    await this.gateway.requestJson(
-      {
-        service: "monitors",
-        method: "put",
-        path: `/jobTemplates/${this.toModelId(match.uid)}?_etc=true`,
-        body: { collection }
-      },
-      { retryTransient: false }
+    const replacementUid = await this.createMonitor(
+      this.workspaceId,
+      monitorName,
+      collection,
+      environment,
+      cronSchedule
     );
-    return { uid: match.uid, previousCollectionUid: match.collectionUid };
+    await this.deleteMonitor(match.uid);
+    return {
+      uid: replacementUid,
+      previousUid: match.uid,
+      previousCollectionUid: match.collectionUid
+    };
   }
   async runMonitor(uid) {
     await this.gateway.requestJson(
@@ -141643,35 +141651,25 @@ async function runRepoSyncInner(inputs, dependencies) {
           const rebound = await dependencies.postman.rebindMonitorByName(
             monitorName,
             inputs.smokeCollectionId,
-            monitorEnvUid
+            monitorEnvUid,
+            effectiveCron || void 0
           );
           if (rebound) {
             resolvedMonitorId = rebound.uid;
             dependencies.core.info(
-              `Rebound existing monitor ${rebound.uid} ("${monitorName}") from collection ${rebound.previousCollectionUid} to ${inputs.smokeCollectionId}`
+              `Replaced stale monitor ${rebound.previousUid} ("${monitorName}") from collection ${rebound.previousCollectionUid} with ${rebound.uid} on ${inputs.smokeCollectionId}`
             );
           }
         } catch (error2) {
-          if (error2 instanceof AmbiguousMonitorRebindError) {
-            throw new Error(
-              formatOrchestrationIssue({
-                operation: "Monitor rebind",
-                entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
-                cause: error2,
-                remediation: monitorRemediation,
-                mask
-              }),
-              { cause: error2 }
-            );
-          }
-          dependencies.core.warning(
+          throw new Error(
             formatOrchestrationIssue({
               operation: "Monitor rebind",
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error2,
               remediation: monitorRemediation,
               mask
-            })
+            }),
+            { cause: error2 }
           );
         }
       }

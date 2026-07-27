@@ -54,7 +54,6 @@ import { retry } from './lib/retry.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {
-  AmbiguousMonitorRebindError,
   MockContractError,
   PostmanGatewayAssetsClient,
   requireMockVisibility,
@@ -3159,43 +3158,34 @@ async function runRepoSyncInner(
         }
       }
 
-      // Rebind stable (name, environment) monitors when collection UID changed. Ambiguity fails closed
-      // because createMonitor would add another duplicate; other failures warn and fall through to
-      // createMonitor because the jobTemplates PUT contract is not yet live-proven.
+      // Replace stable (name, environment) monitors when collection UID changed.
+      // Replacement creates or adopts the desired monitor before deleting the
+      // stale one. Every failure is fatal because falling through would recreate
+      // the duplicate that this path exists to prevent.
       if (!resolvedMonitorId && inputs.smokeCollectionId && dependencies.postman.rebindMonitorByName) {
         try {
           const rebound = await dependencies.postman.rebindMonitorByName(
             monitorName,
             inputs.smokeCollectionId,
-            monitorEnvUid
+            monitorEnvUid,
+            effectiveCron || undefined
           );
           if (rebound) {
             resolvedMonitorId = rebound.uid;
             dependencies.core.info(
-              `Rebound existing monitor ${rebound.uid} ("${monitorName}") from collection ${rebound.previousCollectionUid} to ${inputs.smokeCollectionId}`
+              `Replaced stale monitor ${rebound.previousUid} ("${monitorName}") from collection ${rebound.previousCollectionUid} with ${rebound.uid} on ${inputs.smokeCollectionId}`
             );
           }
         } catch (error) {
-          if (error instanceof AmbiguousMonitorRebindError) {
-            throw new Error(
-              formatOrchestrationIssue({
-                operation: 'Monitor rebind',
-                entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
-                cause: error,
-                remediation: monitorRemediation,
-                mask
-              }),
-              { cause: error }
-            );
-          }
-          dependencies.core.warning(
+          throw new Error(
             formatOrchestrationIssue({
               operation: 'Monitor rebind',
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error,
               remediation: monitorRemediation,
               mask
-            })
+            }),
+            { cause: error }
           );
         }
       }

@@ -50,8 +50,8 @@ function buildClient(fetchImpl: typeof fetch) {
   return { assets };
 }
 
-describe('monitor rebind on canonical collection UID change', () => {
-  it('rebinds an existing same-name monitor to the current collection instead of creating a duplicate', async () => {
+describe('monitor replacement on canonical collection UID change', () => {
+  it('creates the replacement before deleting the stale same-name monitor', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       const envelope = JSON.parse(String((init as RequestInit).body)) as Envelope;
       if (envelope.method === 'get' && envelope.path.startsWith('/jobTemplates?workspace=')) {
@@ -79,30 +79,53 @@ describe('monitor rebind on canonical collection UID change', () => {
           ]
         });
       }
+      if (envelope.method === 'post' && envelope.path === '/jobTemplates?workspace=ws-1') {
+        return jsonResponse({ data: { id: 'mon-replacement' } });
+      }
       return jsonResponse({});
     });
 
     const { assets } = buildClient(fetchImpl);
 
-    const rebound = await assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID);
+    const rebound = await assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID, '0 */6 * * *');
 
-    expect(rebound).toEqual({ uid: 'mon-existing', previousCollectionUid: STALE_UID });
-
-    const writes = fetchImpl.mock.calls
-      .map((call) => parseEnvelope(call as unknown[]))
-      .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
-    expect(writes).toHaveLength(1);
-    expect(writes[0]!.path).toBe('/jobTemplates/mon-existing?_etc=true');
-    expect(writes[0]!.body).toEqual({ collection: PUBLIC_UID });
+    expect(rebound).toEqual({
+      uid: 'mon-replacement',
+      previousUid: 'mon-existing',
+      previousCollectionUid: STALE_UID
+    });
 
     const creates = fetchImpl.mock.calls
       .map((call) => parseEnvelope(call as unknown[]))
       .filter((envelope) => envelope.method === 'post' && envelope.path.startsWith('/jobTemplates?'));
-    expect(creates).toHaveLength(0);
+    expect(creates).toHaveLength(1);
+    expect(creates[0]!.body).toMatchObject({
+      name: MONITOR_NAME,
+      collection: PUBLIC_UID,
+      environment: ENV_UID,
+      active: true,
+      schedule: { cronPattern: '0 */6 * * *', timeZone: 'UTC' }
+    });
+
+    const deletes = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'delete');
+    expect(deletes).toEqual([
+      expect.objectContaining({ path: '/jobTemplates/mon-existing' })
+    ]);
+    const unsupportedUpdates = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
+    expect(unsupportedUpdates).toHaveLength(0);
+
+    const mutations = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'post' || envelope.method === 'delete');
+    expect(mutations.map((envelope) => envelope.method)).toEqual(['post', 'delete']);
   });
 
-  it('propagates a rebind update failure without creating a replacement monitor', async () => {
-    const updateError = new Error('Monitoring API rejected the collection rebind');
+  it('leaves the stale monitor intact when replacement creation fails', async () => {
+    const createError = new Error('Monitoring API rejected replacement creation');
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       const envelope = JSON.parse(String((init as RequestInit).body)) as Envelope;
       if (envelope.method === 'get' && envelope.path.startsWith('/jobTemplates?workspace=')) {
@@ -118,26 +141,58 @@ describe('monitor rebind on canonical collection UID change', () => {
           ]
         });
       }
-      if (envelope.method === 'put' && envelope.path === '/jobTemplates/mon-existing?_etc=true') {
-        throw updateError;
+      if (envelope.method === 'post' && envelope.path === '/jobTemplates?workspace=ws-1') {
+        throw createError;
       }
       return jsonResponse({});
     });
     const { assets } = buildClient(fetchImpl);
 
-    await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).rejects.toBe(updateError);
+    await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).rejects.toBe(createError);
 
-    const writes = fetchImpl.mock.calls
+    const deletes = fetchImpl.mock.calls
       .map((call) => parseEnvelope(call as unknown[]))
-      .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
-    expect(writes).toHaveLength(1);
-    expect(writes[0]!.path).toBe('/jobTemplates/mon-existing?_etc=true');
-    expect(writes[0]!.body).toEqual({ collection: PUBLIC_UID });
+      .filter((envelope) => envelope.method === 'delete');
+    expect(deletes).toHaveLength(0);
+  });
+
+  it('surfaces stale-monitor deletion failure after creating one replacement', async () => {
+    const deleteError = new Error('Monitoring API rejected stale monitor deletion');
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const envelope = JSON.parse(String((init as RequestInit).body)) as Envelope;
+      if (envelope.method === 'get' && envelope.path.startsWith('/jobTemplates?workspace=')) {
+        return jsonResponse({
+          data: [
+            {
+              id: 'mon-existing',
+              name: MONITOR_NAME,
+              active: true,
+              collection: STALE_UID,
+              environment: ENV_UID
+            }
+          ]
+        });
+      }
+      if (envelope.method === 'post' && envelope.path === '/jobTemplates?workspace=ws-1') {
+        return jsonResponse({ data: { id: 'mon-replacement' } });
+      }
+      if (envelope.method === 'delete' && envelope.path === '/jobTemplates/mon-existing') {
+        throw deleteError;
+      }
+      return jsonResponse({});
+    });
+    const { assets } = buildClient(fetchImpl);
+
+    await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).rejects.toBe(deleteError);
 
     const creates = fetchImpl.mock.calls
       .map((call) => parseEnvelope(call as unknown[]))
       .filter((envelope) => envelope.method === 'post' && envelope.path.startsWith('/jobTemplates?'));
-    expect(creates).toHaveLength(0);
+    expect(creates).toHaveLength(1);
+    const deletes = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'delete');
+    expect(deletes).toHaveLength(1);
   });
 
   it('returns null when the monitor is already bound to the current collection', async () => {

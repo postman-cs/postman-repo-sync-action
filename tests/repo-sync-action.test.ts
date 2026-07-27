@@ -3600,7 +3600,8 @@ describe('monitor resolution paths', () => {
     const postman = makePostman({
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       rebindMonitorByName: vi.fn().mockResolvedValue({
-        uid: 'mon-existing',
+        uid: 'mon-replacement',
+        previousUid: 'mon-existing',
         previousCollectionUid: 'col-old'
       })
     });
@@ -3625,37 +3626,35 @@ describe('monitor resolution paths', () => {
     expect(postman.rebindMonitorByName).toHaveBeenCalledWith(
       'core-payments - Smoke Monitor',
       'col-smoke',
-      'env-prod'
+      'env-prod',
+      undefined
     );
     expect(postman.createMonitor).not.toHaveBeenCalled();
-    expect(outputs['monitor-id']).toBe('mon-existing');
+    expect(outputs['monitor-id']).toBe('mon-replacement');
     expect(postman.runMonitor).toHaveBeenCalledTimes(1);
-    expect(postman.runMonitor).toHaveBeenCalledWith('mon-existing');
+    expect(postman.runMonitor).toHaveBeenCalledWith('mon-replacement');
   });
 
-  it('falls back to creating a monitor when the rebind attempt fails', async () => {
+  it('fails closed when replacement rebind fails', async () => {
     const postman = makePostman({
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       rebindMonitorByName: vi.fn().mockRejectedValue(new Error('parameterNotAllowedError'))
     });
     const github = makeGithub();
-    const { core, outputs, warnings } = createCoreStub();
-    await runRepoSync(
-      createInputs({
-        environments: ['prod'],
-        generateCiWorkflow: false,
-        monitorType: 'cloud',
-        monitorCron: ''
-      }),
-      { ...makeDeps(postman, github), core }
-    );
+    await expect(
+      runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          monitorType: 'cloud',
+          monitorCron: ''
+        }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toThrow(/Monitor rebind failed.*parameterNotAllowedError/);
 
     expect(postman.rebindMonitorByName).toHaveBeenCalledTimes(1);
-    expect(postman.createMonitor).toHaveBeenCalled();
-    expect(outputs['monitor-id']).toBe('mon-new');
-    const rebindWarning = warnings.find((line) => line.includes('Monitor rebind failed'));
-    expect(rebindWarning).toBeDefined();
-    expect(rebindWarning).toContain('parameterNotAllowedError');
+    expect(postman.createMonitor).not.toHaveBeenCalled();
   });
 
   it('fails closed when the monitor rebind attempt is ambiguous', async () => {
