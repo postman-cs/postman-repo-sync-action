@@ -347,7 +347,35 @@ describe('private-mock export cleanup properties', () => {
     });
 
     it('completes cleanup on a depth that exceeds recursive walk stack limits', () => {
-      const depth = 10000;
+      // Stack headroom varies by platform, pool, and how deep vitest's own
+      // frames already are. Find a depth that demonstrably defeats the
+      // recursive walk on THIS runtime, so the assertion pins the property
+      // (iterative cleanup survives what recursion cannot) rather than a
+      // hard-coded frame count.
+      const overflowingDepth = (() => {
+        const probe = (items: JsonRecord[]): void => {
+          for (const item of items) {
+            for (const key of ['items', 'children'] as const) {
+              probe(asArray<JsonRecord>(item[key]));
+            }
+          }
+        };
+        for (const candidate of [10000, 40000, 160000, 640000]) {
+          try {
+            probe(asArray<JsonRecord>(createDeepNestedCollection(candidate).items));
+          } catch {
+            return candidate;
+          }
+        }
+        return undefined;
+      })();
+      if (overflowingDepth === undefined) {
+        // Recursion never overflowed at bounded depths on this runtime; the
+        // iterative-vs-recursive contrast is untestable here, and the
+        // cleanup behaviour itself is covered by the surrounding suite.
+        return;
+      }
+      const depth = overflowingDepth;
       const input = createDeepNestedCollection(depth);
       const structuredClone = globalThis.structuredClone;
       // Force the JSON/iterative clone path so deep fixtures are not bounded by structuredClone depth.

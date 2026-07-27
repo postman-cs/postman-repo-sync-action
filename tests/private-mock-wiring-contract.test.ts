@@ -55,7 +55,13 @@ describe('private-mock export cleanup wiring contract', () => {
       readFileSync(resolve(packageRoot, 'package.json'), 'utf8')
     ) as { scripts: Record<string, string> };
     const eslintConfig = readFileSync(resolve(packageRoot, 'eslint.config.js'), 'utf8');
-    const workspaceCi = readFileSync(resolve(packageRoot, '../../docs/CI.md'), 'utf8');
+    // The workspace CI doc only exists in the coordinating workspace checkout;
+    // a standalone clone of this repository (CI, action consumers) has no
+    // ../../docs and the workspace-level assertion is vacuous there.
+    const workspaceCiPath = resolve(packageRoot, '../../docs/CI.md');
+    const workspaceCi = existsSync(workspaceCiPath)
+      ? readFileSync(workspaceCiPath, 'utf8')
+      : '';
 
     expect(packageJson.scripts.lint).toBe('eslint .');
     expect(packageJson.scripts).not.toHaveProperty('knip');

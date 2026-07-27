@@ -6,7 +6,9 @@ const windowsCwdSensitiveTests = [
   'tests/cli.test.ts',
   'tests/path-sandboxing.test.ts',
   'tests/create-reconciliation.test.ts',
-  'tests/branch-aware-sync.test.ts'
+  'tests/branch-aware-sync.test.ts',
+  'tests/logging.test.ts',
+  'tests/private-mock-wiring-contract.test.ts'
 ];
 
 const testEnvironment = {
