@@ -9,7 +9,8 @@ const windowsCwdSensitiveTests = [
   'tests/branch-aware-sync.test.ts',
   'tests/logging.test.ts',
   'tests/private-mock-wiring-contract.test.ts',
-  'tests/secrets-resolver-provider.test.ts'
+  'tests/secrets-resolver-provider.test.ts',
+  'tests/credential-slot-preservation.test.ts'
 ];
 
 const testEnvironment = {
