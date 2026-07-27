@@ -177,8 +177,8 @@ describe('PostmanGatewayAssetsClient', () => {
     const serialized = JSON.stringify(patch?.body);
     expect(serialized).toContain('postmanPrivateMockApiKey');
     expect(serialized).toContain('x-api-key');
-    expect(serialized).toContain("join('.')");
-    expect(serialized).toContain('private-mock-auth-v2');
+    expect(serialized).toContain('replaceIn');
+    expect(serialized).toContain('private-mock-auth-v3');
     expect(serialized).toContain('afterResponse');
     expect(serialized).not.toContain('pmak-');
 
@@ -186,10 +186,17 @@ describe('PostmanGatewayAssetsClient', () => {
     const code = scripts.find((script) => script.type === 'beforeRequest')?.code ?? '';
     const mockUpsert = vi.fn();
     runInNewContext(code, {
+      URL,
       pm: {
-        variables: { get: () => 'test-private-mock-key' },
+        variables: {
+          get: () => 'test-private-mock-key',
+          replaceIn: (value: string) => value.replace('{{baseUrl}}', 'https://example.mock.pstmn.io')
+        },
         request: {
-          url: { getHost: () => ['example', 'mock', 'pstmn', 'io'] },
+          url: {
+            getHost: () => ['{{baseUrl}}'],
+            toString: () => '{{baseUrl}}/orders'
+          },
           headers: { upsert: mockUpsert }
         }
       }
@@ -201,10 +208,17 @@ describe('PostmanGatewayAssetsClient', () => {
 
     const apiUpsert = vi.fn();
     runInNewContext(code, {
+      URL,
       pm: {
-        variables: { get: () => 'test-private-mock-key' },
+        variables: {
+          get: () => 'test-private-mock-key',
+          replaceIn: (value: string) => value.replace('{{baseUrl}}', 'https://api.getpostman.com')
+        },
         request: {
-          url: { getHost: () => ['api', 'getpostman', 'com'] },
+          url: {
+            getHost: () => ['{{baseUrl}}'],
+            toString: () => '{{baseUrl}}/collections'
+          },
           headers: { upsert: apiUpsert }
         }
       }
@@ -212,16 +226,35 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(apiUpsert).not.toHaveBeenCalled();
   });
 
-  it('replaces a stale private-mock hook generation instead of stacking a second copy', async () => {
+  it.each([
+    [
+      'v1',
+      [
+        '// postman-enterprise-automation: private-mock-auth',
+        "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
+        "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
+        "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
+        "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+        '}'
+      ].join('\n')
+    ],
+    [
+      'v2',
+      [
+        '// postman-enterprise-automation: private-mock-auth-v2',
+        "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
+        "var privateMockHostValue = pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '';",
+        "var privateMockHost = Array.isArray(privateMockHostValue) ? privateMockHostValue.join('.') : String(privateMockHostValue);",
+        "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
+        'if (isPrivateMockHost && privateMockApiKey) {',
+        "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+        '} else if (isPrivateMockHost) {',
+        "  console.warn('This mock server is private. Set the postmanPrivateMockApiKey variable to a Postman API key with access to it, or the request returns 401.');",
+        '}'
+      ].join('\n')
+    ]
+  ])('replaces a stale %s private-mock hook instead of stacking a second copy', async (_version, legacyBlock) => {
     const legacyMarker = 'postman-enterprise-automation: private-mock-auth';
-    const legacyBlock = [
-      `// ${legacyMarker}`,
-      "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
-      "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
-      "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
-      "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-      '}'
-    ].join('\n');
     const authorLine = 'var callerOwned = true;';
 
     const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
@@ -250,7 +283,7 @@ describe('PostmanGatewayAssetsClient', () => {
 
     // Exactly one managed block survives, and it is the current generation.
     expect(code.split(legacyMarker).length - 1).toBe(1);
-    expect(code).toContain('private-mock-auth-v2');
+    expect(code).toContain('private-mock-auth-v3');
     // The caller's own script is never discarded.
     expect(code).toContain(authorLine);
     // The broken String(array) form must not survive the upgrade.
@@ -269,7 +302,7 @@ describe('PostmanGatewayAssetsClient', () => {
             scripts: [
               {
                 type: 'beforeRequest',
-                code: '// postman-enterprise-automation: private-mock-auth-v2\nvar privateMockApiKey = 1;',
+                code: '// postman-enterprise-automation: private-mock-auth-v3\nvar privateMockApiKey = 1;',
                 language: 'text/javascript'
               }
             ]
@@ -300,8 +333,7 @@ describe('PostmanGatewayAssetsClient', () => {
 
     expect(code).toContain('console.warn');
     expect(code).toContain('postmanPrivateMockApiKey');
-    // Host detection must survive getHost() returning an array of labels.
-    expect(code).toContain("join('.')");
+    expect(code).toContain('replaceIn');
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {

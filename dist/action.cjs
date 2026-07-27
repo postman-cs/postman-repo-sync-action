@@ -136995,7 +136995,8 @@ function requireMockVisibility(mock, requested) {
   return mock;
 }
 var LEGACY_PRIVATE_MOCK_AUTH_MARKER = "postman-enterprise-automation: private-mock-auth";
-var PRIVATE_MOCK_AUTH_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
+var PRIVATE_MOCK_AUTH_V2_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
+var PRIVATE_MOCK_AUTH_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v3`;
 var PRIVATE_MOCK_AUTH_VARIABLE2 = "postmanPrivateMockApiKey";
 var LEGACY_PRIVATE_MOCK_AUTH_SCRIPT = [
   `// ${LEGACY_PRIVATE_MOCK_AUTH_MARKER}`,
@@ -137005,8 +137006,8 @@ var LEGACY_PRIVATE_MOCK_AUTH_SCRIPT = [
   "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
   "}"
 ].join("\n");
-var PRIVATE_MOCK_AUTH_SCRIPT = [
-  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
+var PRIVATE_MOCK_AUTH_V2_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_V2_MARKER}`,
   `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
   "var privateMockHostValue = pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '';",
   "var privateMockHost = Array.isArray(privateMockHostValue) ? privateMockHostValue.join('.') : String(privateMockHostValue);",
@@ -137017,8 +137018,25 @@ var PRIVATE_MOCK_AUTH_SCRIPT = [
   `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
   "}"
 ].join("\n");
+var PRIVATE_MOCK_AUTH_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
+  "var privateMockHost = '';",
+  "try {",
+  "  var privateMockUrl = pm.variables.replaceIn(pm.request.url.toString());",
+  "  privateMockHost = new URL(privateMockUrl).hostname;",
+  "} catch (error) {",
+  "  console.warn('Could not resolve the request URL for private mock authentication; x-api-key was not added.');",
+  "}",
+  "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
+  "if (isPrivateMockHost && privateMockApiKey) {",
+  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "} else if (isPrivateMockHost) {",
+  `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
+  "}"
+].join("\n");
 function removeLegacyPrivateMockAuth(code) {
-  return code.split(LEGACY_PRIVATE_MOCK_AUTH_SCRIPT).join("").trim();
+  return [LEGACY_PRIVATE_MOCK_AUTH_SCRIPT, PRIVATE_MOCK_AUTH_V2_SCRIPT].reduce((next, script) => next.split(script).join(""), code).trim();
 }
 var MAX_CREATE_FLIGHTS = 256;
 var createFlights = /* @__PURE__ */ new Map();
