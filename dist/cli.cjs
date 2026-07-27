@@ -137807,7 +137807,20 @@ function assertBranchAssetIds(inputs, decision, branchOwnedIds = process.env.POS
     );
   }
 }
+var CREDENTIAL_SLOT_PREFIXES = ["AWS_", "AZURE_", "GCP_"];
+function isCredentialSlotKey(key) {
+  return typeof key === "string" && CREDENTIAL_SLOT_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
 function buildEnvironmentValues(envName, baseUrl, options = {}) {
+  const seeded = secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? "none").map((entry) => ({
+    key: entry.key,
+    value: entry.key.endsWith("_SECRET_NAME") && !entry.secret ? `api-credentials-${envName}` : entry.defaultValue ?? "",
+    type: entry.secret ? "secret" : "default"
+  }));
+  const seededKeys = new Set(seeded.map((entry) => entry.key));
+  const preserved = (options.preservedCredentialValues ?? []).filter(
+    (entry) => isCredentialSlotKey(entry.key) && !seededKeys.has(entry.key)
+  );
   return [
     { key: "baseUrl", value: baseUrl, type: "default" },
     // A private mock refuses anonymous calls, so the manual-validation environment
@@ -137819,11 +137832,8 @@ function buildEnvironmentValues(envName, baseUrl, options = {}) {
     // Provider-scoped credential slots. `none` (the default) seeds nothing, so a
     // consumer that does not use a cloud secret store gets a clean environment
     // instead of four dead AWS variables.
-    ...secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? "none").map((entry) => ({
-      key: entry.key,
-      value: entry.key.endsWith("_SECRET_NAME") && !entry.secret ? `api-credentials-${envName}` : entry.defaultValue ?? "",
-      type: entry.secret ? "secret" : "default"
-    }))
+    ...seeded,
+    ...preserved
   ];
 }
 var LEGACY_BASELINE_COLLECTION_PREFIX = "[Baseline]";
@@ -138167,20 +138177,27 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
     }
     if (existingUid) {
       let marker = assetMarker;
-      if (marker) {
-        try {
-          const existing = await dependencies.postman.getEnvironment(existingUid);
-          const values3 = existing.data?.values ?? existing.values ?? [];
-          const prior = values3.find((value) => value.key === "x-pm-onboarding")?.value;
+      let priorValues = [];
+      try {
+        const existing = await dependencies.postman.getEnvironment(existingUid);
+        const values3 = existing?.data?.values ?? existing?.values ?? [];
+        priorValues = values3.filter((value) => typeof value?.key === "string").map((value) => ({
+          key: value.key,
+          value: typeof value.value === "string" ? value.value : "",
+          type: value.type === "secret" ? "secret" : "default"
+        }));
+        if (marker) {
+          const prior = priorValues.find((value) => value.key === "x-pm-onboarding")?.value;
           const priorMarker = parseAssetMarker(prior ? `x-pm-onboarding: ${prior}` : void 0);
           if (priorMarker?.repo === marker.repo && priorMarker.rawBranch === marker.rawBranch) {
             marker = { ...marker, createdAt: priorMarker.createdAt };
           }
-        } catch {
         }
+      } catch {
       }
       const values2 = buildEnvironmentValues(envName, runtimeUrl, {
-        secretsResolverProvider: inputs.secretsResolverProvider
+        secretsResolverProvider: inputs.secretsResolverProvider,
+        preservedCredentialValues: priorValues
       });
       if (marker) values2.push({ key: "x-pm-onboarding", value: JSON.stringify(marker), type: "default" });
       try {
