@@ -30,6 +30,13 @@ export class MockContractError extends Error {
   }
 }
 
+export class AmbiguousMonitorRebindError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'AmbiguousMonitorRebindError';
+  }
+}
+
 export function requireMockVisibility(
   mock: MockRecord,
   requested: RequestedMockVisibility
@@ -1059,6 +1066,23 @@ export class PostmanGatewayAssetsClient {
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
+  private pickRebindMonitorCandidates(
+    monitors: Array<{ uid: string; name: string; collectionUid: string; environmentUid: string }>,
+    monitorName: string,
+    environment: string
+  ): {
+    candidates: Array<{ uid: string; name: string; collectionUid: string; environmentUid: string }>;
+    nameOnlyMatchCount: number;
+    nameOnlyEnvironments: string[];
+  } {
+    const nameOnly = monitors.filter((monitor) => monitor.name === monitorName);
+    const nameOnlyEnvironments = [
+      ...new Set(nameOnly.map((monitor) => monitor.environmentUid || '(none)'))
+    ];
+    const candidates = nameOnly.filter((monitor) => monitor.environmentUid === environment);
+    return { candidates, nameOnlyMatchCount: nameOnly.length, nameOnlyEnvironments };
+  }
+
   /**
    * Rebind the sole same-name monitor in this workspace onto the current
    * collection UID.
@@ -1088,15 +1112,35 @@ export class PostmanGatewayAssetsClient {
     }
 
     const monitors = await this.listMonitors();
-    const sameName = monitors.filter(
-      (monitor) => monitor.name === monitorName && monitor.environmentUid === environment
+    const { candidates, nameOnlyMatchCount, nameOnlyEnvironments } = this.pickRebindMonitorCandidates(
+      monitors,
+      monitorName,
+      environment
     );
-    const match = this.selectExactMatch(
-      'monitor',
-      `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || '(none)'}`,
-      sameName
-    );
+    let match: (typeof candidates)[number] | null;
+    try {
+      match = this.selectExactMatch(
+        'monitor',
+        `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || '(none)'}`,
+        candidates
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error && nameOnlyMatchCount > 0
+          ? `${error.message} Same-name monitor(s) also exist on environment(s): ${nameOnlyEnvironments.join(', ')}.`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      throw new AmbiguousMonitorRebindError(message, { cause: error });
+    }
     if (!match?.uid) {
+      if (nameOnlyMatchCount > 0) {
+        // A same-name monitor exists on a different environment than requested,
+        // so rebinding is skipped (no cross-environment rebinding). This null is
+        // indistinguishable in logs from "no monitor exists"; if a live probe
+        // still creates duplicate monitors, verify the jobTemplates list includes
+        // the expected environment UID for that monitor name.
+      }
       return null;
     }
     if (match.collectionUid === collection) {
@@ -1107,7 +1151,7 @@ export class PostmanGatewayAssetsClient {
       {
         service: 'monitors',
         method: 'put',
-        path: `/jobTemplates/${this.toModelId(match.uid)}`,
+        path: `/jobTemplates/${this.toModelId(match.uid)}?_etc=true`,
         body: { collection }
       },
       { retryTransient: false }

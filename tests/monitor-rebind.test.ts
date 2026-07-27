@@ -17,6 +17,7 @@ type Envelope = { service: string; method: string; path: string; body?: unknown 
 const PUBLIC_UID = '56459175-2ee592aa-4e81-4df4-991b-b9f52d557354';
 const STALE_UID = '56459175-b4d955a9-6b45-4fbb-98ed-90b19539786c';
 const ENV_UID = '56459175-9bea9e67-6a75-4d9f-bfe1-d7a5a7215d97';
+const OTHER_ENV_UID = '56459175-1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f';
 const MONITOR_NAME = '[PROJECT] Clean Harbors Drum API - Smoke Monitor';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -61,7 +62,19 @@ describe('monitor rebind on canonical collection UID change', () => {
               name: MONITOR_NAME,
               active: true,
               collection: STALE_UID,
-              environment: ENV_UID
+              environment: ENV_UID,
+              schedule: {
+                cronPattern: '0 */6 * * *',
+                timeZone: 'America/Chicago'
+              },
+              notifications: {
+                onFailure: true,
+                onSuccess: false
+              },
+              options: {
+                followRedirects: true,
+                timeout: 30000
+              }
             }
           ]
         });
@@ -79,8 +92,47 @@ describe('monitor rebind on canonical collection UID change', () => {
       .map((call) => parseEnvelope(call as unknown[]))
       .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
     expect(writes).toHaveLength(1);
-    expect(writes[0]!.path).toBe('/jobTemplates/mon-existing');
-    expect(writes[0]!.body).toMatchObject({ collection: PUBLIC_UID });
+    expect(writes[0]!.path).toBe('/jobTemplates/mon-existing?_etc=true');
+    expect(writes[0]!.body).toEqual({ collection: PUBLIC_UID });
+
+    const creates = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'post' && envelope.path.startsWith('/jobTemplates?'));
+    expect(creates).toHaveLength(0);
+  });
+
+  it('propagates a rebind update failure without creating a replacement monitor', async () => {
+    const updateError = new Error('Monitoring API rejected the collection rebind');
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const envelope = JSON.parse(String((init as RequestInit).body)) as Envelope;
+      if (envelope.method === 'get' && envelope.path.startsWith('/jobTemplates?workspace=')) {
+        return jsonResponse({
+          data: [
+            {
+              id: 'mon-existing',
+              name: MONITOR_NAME,
+              active: true,
+              collection: STALE_UID,
+              environment: ENV_UID
+            }
+          ]
+        });
+      }
+      if (envelope.method === 'put' && envelope.path === '/jobTemplates/mon-existing?_etc=true') {
+        throw updateError;
+      }
+      return jsonResponse({});
+    });
+    const { assets } = buildClient(fetchImpl);
+
+    await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).rejects.toBe(updateError);
+
+    const writes = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.path).toBe('/jobTemplates/mon-existing?_etc=true');
+    expect(writes[0]!.body).toEqual({ collection: PUBLIC_UID });
 
     const creates = fetchImpl.mock.calls
       .map((call) => parseEnvelope(call as unknown[]))
@@ -128,5 +180,34 @@ describe('monitor rebind on canonical collection UID change', () => {
     const { assets } = buildClient(fetchImpl);
 
     await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).resolves.toBeNull();
+  });
+
+  it('returns null without writing when the same-name monitor is bound to a different environment', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: [
+          {
+            id: 'mon-existing',
+            name: MONITOR_NAME,
+            active: true,
+            collection: STALE_UID,
+            environment: OTHER_ENV_UID
+          }
+        ]
+      })
+    );
+    const { assets } = buildClient(fetchImpl);
+
+    await expect(assets.rebindMonitorByName(MONITOR_NAME, PUBLIC_UID, ENV_UID)).resolves.toBeNull();
+
+    const writes = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'put' || envelope.method === 'patch');
+    expect(writes).toHaveLength(0);
+
+    const creates = fetchImpl.mock.calls
+      .map((call) => parseEnvelope(call as unknown[]))
+      .filter((envelope) => envelope.method === 'post' && envelope.path.startsWith('/jobTemplates?'));
+    expect(creates).toHaveLength(0);
   });
 });
