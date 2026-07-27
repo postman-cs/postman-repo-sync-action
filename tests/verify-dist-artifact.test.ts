@@ -20,6 +20,9 @@ const CONFIG: RepoConfig = {"pkgName":"@postman-cse/onboarding-repo-sync","binNa
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const verifyScript = path.join(repoRoot, 'scripts', 'verify-dist-artifact.mjs');
+/** Read-only git must not block on concurrent index.lock under multi-agent host load. */
+const gitReadEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', PATH: process.env.PATH ?? '' };
+const COMMITTED_DIST_PATHS = ['dist', 'package.json', 'action.yml'] as const;
 
 type OnTestFinished = (fn: () => void | Promise<void>) => void;
 
@@ -112,6 +115,37 @@ process.exit(1);
   }
 }
 
+async function materializeCommittedDistSnapshot(targetRoot: string): Promise<void> {
+  const tracked = (
+    await execFileAsync('git', ['ls-files', '--', ...COMMITTED_DIST_PATHS], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: gitReadEnv,
+      maxBuffer: 1024 * 1024
+    })
+  ).stdout
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (tracked.length === 0) {
+    throw new Error('verify-dist-artifact: no committed dist/manifest paths in git index');
+  }
+
+  for (const rel of tracked) {
+    const dest = path.join(targetRoot, rel);
+    await mkdir(path.dirname(dest), { recursive: true });
+    const { stdout } = await execFileAsync('git', ['show', `HEAD:${rel}`], {
+      cwd: repoRoot,
+      encoding: 'buffer',
+      env: gitReadEnv,
+      maxBuffer: 64 * 1024 * 1024
+    });
+    await writeFile(dest, stdout);
+    if (rel === 'dist/cli.cjs' && process.platform !== 'win32') {
+      await chmod(dest, 0o755);
+    }
+  }
+}
+
 async function runVerify(root: string): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const result = await execFileAsync(process.execPath, [verifyScript, root], {
@@ -135,8 +169,10 @@ async function runVerify(root: string): Promise<{ code: number; stdout: string; 
 }
 
 describe('verify-dist-artifact canonical contract', () => {
-  it('passes against the committed dist artifact', async () => {
-    const result = await runVerify(repoRoot);
+  it('passes against the committed dist artifact', async ({ onTestFinished }) => {
+    const snapshotRoot = await makeTempDir('verify-dist-committed-', onTestFinished);
+    await materializeCommittedDistSnapshot(snapshotRoot);
+    const result = await runVerify(snapshotRoot);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('verify-dist-artifact: ok');

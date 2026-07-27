@@ -115,7 +115,7 @@ with:
 
 Repo-sync defaults to public mocks for anonymous validation. Set `mock-visibility: private` for teams that prohibit public mocks. Explicit, discovered, and newly created mocks must match the requested visibility and the expected baseline collection/environment; unknown visibility, stale URLs, and identity mismatches fail before `mock-url` is emitted.
 
-For private mocks, repo-sync emits `mock-auth-required: true` and installs a secret-free request hook in the smoke and contract collections. The hook reads the transient `postmanPrivateMockApiKey` variable and sends it as `x-api-key`, and only to `*.mock.pstmn.io` hosts, so it stays inert on runs that target a real environment. Repo-sync never writes that credential to a collection, environment, output, or repository artifact.
+For private mocks, repo-sync emits `mock-auth-required: true` and installs a secret-free collection-root request hook in the exported smoke and contract collections. The hook reads the transient `postmanPrivateMockApiKey` variable and sends it as `x-api-key`, and only to `*.mock.pstmn.io` hosts, so it stays inert on runs that target a real environment. Repo-sync never writes that credential to a collection, environment, output, or repository artifact.
 
 Where that variable comes from depends on who is running the collection:
 
@@ -304,7 +304,7 @@ When CI workflow generation is enabled, the committed GitHub Actions workflow ru
 4. Decodes optional mTLS client certificates from the `POSTMAN_SSL_*` secrets and passes them to the runs.
 5. Runs the `[Smoke]` collection and then the `[Contract]` collection with `postman collection run` against the resolved environment, with `--report-events` so results land in the Postman cloud run history, and with `CI_ENVIRONMENT` (the `CI_ENVIRONMENT` repository variable, default `Production`) available to scripts.
 
-A matching Azure DevOps Pipelines template is generated for Azure DevOps repositories. The assertions those collections execute are generated upstream: the per-check reference is in [postman-bootstrap-action's Generated Assertions](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/generated-assertions.md), and the curated Smoke journey scripts are in [postman-smoke-flow-action's Generated Test Scripts](https://github.com/postman-cs/postman-smoke-flow-action/blob/main/docs/generated-tests.md).
+A matching Azure DevOps Pipelines template is generated for Azure DevOps repositories. With `ci-runner-os: windows`, each Smoke and Contract CLI invocation forwards `RESPONSE_TIME_THRESHOLD` with `--env-var`; the Azure variable is used when set and otherwise defaults to `10000` milliseconds. GitHub Actions/Linux generation keeps its seeded `2000` millisecond threshold. The assertions those collections execute are generated upstream: the per-check reference is in [postman-bootstrap-action's Generated Assertions](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/generated-assertions.md), and the curated Smoke journey scripts are in [postman-smoke-flow-action's Generated Test Scripts](https://github.com/postman-cs/postman-smoke-flow-action/blob/main/docs/generated-tests.md).
 
 For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch.
 

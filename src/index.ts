@@ -22,7 +22,12 @@ import {
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
-import { createTelemetryContext } from '@postman-cse/automation-telemetry-core';
+import {
+  actionSink,
+  createLogger,
+  createTelemetryContext,
+  type Logger
+} from '@postman-cse/automation-core';
 import { resolveActionVersion } from './action-version.js';
 import {
   createInternalIntegrationAdapter,
@@ -53,6 +58,11 @@ import {
   type RequestedMockVisibility,
   PRIVATE_MOCK_AUTH_VARIABLE
 } from './lib/postman/postman-gateway-assets-client.js';
+import {
+  applyPrivateMockExportCleanup,
+  isPrivateMockLegacyExportCleanupEnabled,
+  verifyPrivateMockRootHook
+} from './lib/postman/private-mock-export-cleanup.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
 import {
@@ -195,6 +205,12 @@ export interface ExecLike {
 export interface RepoSyncDependencies {
   teamId?: string;
   core: Pick<CoreLike, 'info' | 'setOutput' | 'warning' | 'notice'>;
+  /**
+   * Structured diagnostics. Injected by tests; otherwise built over `core` when
+   * the run starts. Each long-running stage runs inside a phase on this logger,
+   * so a failed run names the operation that was in flight.
+   */
+  logger?: Logger;
   postman: Pick<
     PostmanGatewayAssetsClient,
     | 'createEnvironment'
@@ -235,6 +251,24 @@ const identitySecretMasker: SecretMasker = (input) => input;
 
 function resolveRepoSyncMasker(dependencies: RepoSyncDependencies): SecretMasker {
   return dependencies.secretMasker ?? identitySecretMasker;
+}
+
+/**
+ * The run's logger: the injected one when a caller supplied it, otherwise one
+ * built over the core facade this run already holds. Building it in one place
+ * keeps a single scrubbing scope for the whole run.
+ */
+function resolveRepoSyncLogger(dependencies: RepoSyncDependencies): Logger {
+  return (
+    dependencies.logger ??
+    createLogger({
+      sink: actionSink(dependencies.core),
+      fields: {
+        action: 'postman-repo-sync-action',
+        action_version: resolveActionVersion()
+      }
+    })
+  );
 }
 
 function causeText(cause: unknown): string {
@@ -835,14 +869,64 @@ function canonicalizeRelativePath(value: string): string {
     .replace(/\/+$/g, '');
 }
 
-function isOpenApiSpecFile(filePath: string): boolean {
-  if (!(filePath.endsWith('.json') || filePath.endsWith('.yaml') || filePath.endsWith('.yml'))) {
-    return false;
-  }
+// Candidate file, depth, and byte budgets align with
+// postman-azure-spec-discovery-action/src/lib/repo/scan.ts (DEFAULT_MAX_FILES,
+// DEFAULT_MAX_DEPTH, DEFAULT_MAX_FILE_BYTES). Traversal-entry cap is an
+// additional liveness bound for very large trees, not the sibling file cap.
+const LOCAL_SPEC_DISCOVERY_MAX_DEPTH = 6;
+const LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES = 10_000;
+const LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES = 200;
+const LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES = 512 * 1024;
 
+const LOCAL_SPEC_DISCOVERY_IGNORED_DIRS = new Set([
+  '.git',
+  '.nyc_output',
+  '.omc',
+  '.omx',
+  '.llm-plans',
+  '.pulumi',
+  '.terraform',
+  '.venv',
+  '__pycache__',
+  'bin',
+  'build',
+  'coverage',
+  'discovered-specs',
+  'node_modules',
+  'dist',
+  'obj',
+  'out',
+  'target',
+  'vendor',
+  'venv'
+]);
+
+export class LocalSpecDiscoveryLimitError extends Error {
+  readonly code = 'CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT';
+  constructor(message: string) {
+    super(`CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT: ${message}`);
+    this.name = 'LocalSpecDiscoveryLimitError';
+  }
+}
+
+function failLocalSpecDiscoveryLimit(detail: string): never {
+  throw new LocalSpecDiscoveryLimitError(
+    `${detail} Set spec-path to the OpenAPI file explicitly and keep generated trees (for example dist/, node_modules/) out of the repository layout.`
+  );
+}
+
+function isSpecCandidateExtension(filePath: string): boolean {
+  return (
+    filePath.endsWith('.json') ||
+    filePath.endsWith('.yaml') ||
+    filePath.endsWith('.yml')
+  );
+}
+
+function readOpenApiSpecFile(fullPath: string): boolean {
   try {
-    const raw = readFileSync(filePath, 'utf8');
-    const parsed = filePath.endsWith('.json')
+    const raw = readFileSync(fullPath, 'utf8');
+    const parsed = fullPath.endsWith('.json')
       ? JSON.parse(raw)
       : loadYaml(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -867,29 +951,97 @@ function isOpenApiSpecFile(filePath: string): boolean {
   return false;
 }
 
-function scanLocalSpecReferences(baseDir = '.'): SpecReference[] {
-  const ignoredDirs = new Set([
-    '.git',
-    '.omc',
-    '.omx',
-    '.llm-plans',
-    'node_modules',
-    'dist'
-  ]);
+type LocalSpecDiscoveryOptions = {
+  ignoredPrefixes?: string[];
+};
+
+function shouldIgnoreSpecDiscoveryEntry(
+  entryName: string,
+  currentDir: string,
+  baseDir: string,
+  ignoredPrefixes: string[]
+): boolean {
+  if (LOCAL_SPEC_DISCOVERY_IGNORED_DIRS.has(entryName)) {
+    return true;
+  }
+  const relative = normalizeToPosix(path.relative(baseDir, path.join(currentDir, entryName)));
+  return ignoredPrefixes.some(
+    (prefix) => relative === prefix || relative.startsWith(`${prefix}/`)
+  );
+}
+
+function scanLocalSpecReferences(
+  baseDir = '.',
+  options: LocalSpecDiscoveryOptions = {}
+): SpecReference[] {
+  const ignoredPrefixes = (options.ignoredPrefixes ?? [])
+    .map((value) => canonicalizeRelativePath(value))
+    .filter(Boolean);
   const found = new Set<string>();
   const refs: SpecReference[] = [];
+  let traversalEntries = 0;
+  let candidateFiles = 0;
+  const pendingDirs: Array<{ dir: string; depth: number }> = [{ dir: baseDir, depth: 0 }];
 
-  const visit = (currentDir: string): void => {
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      if (ignoredDirs.has(entry.name)) {
+  while (pendingDirs.length > 0) {
+    const { dir: currentDir, depth: currentDepth } = pendingDirs.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(currentDir, { withFileTypes: true }).sort((left, right) =>
+        left.name.localeCompare(right.name)
+      );
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      traversalEntries += 1;
+      if (traversalEntries > LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES) {
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES} traversal-entry liveness budget.`
+        );
+      }
+
+      if (shouldIgnoreSpecDiscoveryEntry(entry.name, currentDir, baseDir, ignoredPrefixes)) {
         continue;
       }
+
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        visit(fullPath);
+        const nextDepth = currentDepth + 1;
+        if (nextDepth > LOCAL_SPEC_DISCOVERY_MAX_DEPTH) {
+          failLocalSpecDiscoveryLimit(
+            `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_DEPTH} directory-depth budget.`
+          );
+        }
+        pendingDirs.push({ dir: fullPath, depth: nextDepth });
         continue;
       }
-      if (!entry.isFile() || !isOpenApiSpecFile(fullPath)) {
+      if (!entry.isFile() || !isSpecCandidateExtension(fullPath)) {
+        continue;
+      }
+
+      candidateFiles += 1;
+      if (candidateFiles > LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES) {
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES} candidate-file budget.`
+        );
+      }
+
+      let sizeBytes: number;
+      try {
+        sizeBytes = statSync(fullPath).size;
+      } catch {
+        continue;
+      }
+      if (sizeBytes > LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES) {
+        const repoRelativePath = normalizeToPosix(path.relative(baseDir, fullPath));
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery candidate ${repoRelativePath} exceeds ${LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES} bytes.`
+        );
+      }
+
+      if (!readOpenApiSpecFile(fullPath)) {
         continue;
       }
 
@@ -903,25 +1055,47 @@ function scanLocalSpecReferences(baseDir = '.'): SpecReference[] {
         configRelativePath: normalizeToPosix(path.join('..', repoRelativePath))
       });
     }
-  };
+  }
 
-  visit(baseDir);
   return refs.sort((left, right) => left.repoRelativePath.localeCompare(right.repoRelativePath));
+}
+
+function tryResolveExplicitSpecReference(explicitSpecPath: string): SpecReference | undefined {
+  const normalizedExplicitPath = normalizeToPosix(explicitSpecPath.trim());
+  if (!normalizedExplicitPath) {
+    return undefined;
+  }
+  const explicitFullPath = path.resolve(normalizedExplicitPath);
+  if (existsSync(explicitFullPath) && statSync(explicitFullPath).isFile()) {
+    return {
+      repoRelativePath: normalizedExplicitPath,
+      configRelativePath: normalizeToPosix(path.join('..', normalizedExplicitPath))
+    };
+  }
+  return undefined;
+}
+
+function resolveLocalSpecReferences(
+  explicitSpecPath: string,
+  baseDir = '.',
+  options: LocalSpecDiscoveryOptions = {}
+): { discoveredSpecs: SpecReference[]; mappedSpec: SpecReference | undefined } {
+  const explicit = tryResolveExplicitSpecReference(explicitSpecPath);
+  if (explicit) {
+    return { discoveredSpecs: [], mappedSpec: explicit };
+  }
+  const discoveredSpecs = scanLocalSpecReferences(baseDir, options);
+  const mappedSpec = resolveMappedSpecReference(explicitSpecPath, discoveredSpecs);
+  return { discoveredSpecs, mappedSpec };
 }
 
 function resolveMappedSpecReference(
   explicitSpecPath: string,
   discoveredSpecs: SpecReference[]
 ): SpecReference | undefined {
-  const normalizedExplicitPath = normalizeToPosix(explicitSpecPath.trim());
-  if (normalizedExplicitPath) {
-    const explicitFullPath = path.resolve(normalizedExplicitPath);
-    if (existsSync(explicitFullPath) && statSync(explicitFullPath).isFile()) {
-      return {
-        repoRelativePath: normalizedExplicitPath,
-        configRelativePath: normalizeToPosix(path.join('..', normalizedExplicitPath))
-      };
-    }
+  const explicit = tryResolveExplicitSpecReference(explicitSpecPath);
+  if (explicit) {
+    return explicit;
   }
 
   if (discoveredSpecs.length === 1) {
@@ -1993,6 +2167,23 @@ function tryReusePrebuiltCollection(options: {
   return prepared.artifactDigest === entry.artifactDigest;
 }
 
+async function preparePrivateMockCloudCollection(
+  role: PrebuiltCollectionRole,
+  collectionId: string,
+  postman: RepoSyncDependencies['postman']
+): Promise<Record<string, unknown>> {
+  const col = await postman.getCollection(collectionId);
+  const { collection } = applyPrivateMockExportCleanup(col as Record<string, unknown>, {
+    stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
+  });
+  if (!verifyPrivateMockRootHook(collection)) {
+    throw new Error(
+      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+    );
+  }
+  return collection;
+}
+
 async function exportCollectionArtifact(options: {
   role: PrebuiltCollectionRole;
   collectionId: string;
@@ -2001,6 +2192,8 @@ async function exportCollectionArtifact(options: {
   prebuiltByRole: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
   postman: RepoSyncDependencies['postman'];
   core: RepoSyncDependencies['core'];
+  privateMockAuth?: boolean;
+  preparedCloudCollection?: Record<string, unknown>;
 }): Promise<string | undefined> {
   const {
     role,
@@ -2009,15 +2202,19 @@ async function exportCollectionArtifact(options: {
     collectionsDir,
     prebuiltByRole,
     postman,
-    core
+    core,
+    privateMockAuth = false,
+    preparedCloudCollection
   } = options;
   if (!collectionId) {
     return undefined;
   }
 
   const expectedPath = `${collectionsDir}/${dirName}`;
+  const forceCloudExport =
+    privateMockAuth && (role === 'smoke' || role === 'contract');
   const entry = prebuiltByRole.get(role);
-  if (entry) {
+  if (entry && !forceCloudExport) {
     const reused = tryReusePrebuiltCollection({
       prepared: entry,
       expectedPath,
@@ -2032,13 +2229,34 @@ async function exportCollectionArtifact(options: {
     core.info(
       `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`
     );
+  } else if (entry && forceCloudExport) {
+    core.info(
+      `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
+    );
   }
 
-  const col = await postman.getCollection(collectionId);
-  await convertAndSplitAnyCollection(
-    col as Parameters<typeof convertAndSplitAnyCollection>[0],
-    expectedPath
-  );
+  let collectionForExport: Parameters<typeof convertAndSplitAnyCollection>[0];
+  if (forceCloudExport && preparedCloudCollection) {
+    collectionForExport = preparedCloudCollection as Parameters<
+      typeof convertAndSplitAnyCollection
+    >[0];
+  } else if (forceCloudExport) {
+    const col = await postman.getCollection(collectionId);
+    const { collection } = applyPrivateMockExportCleanup(col as Record<string, unknown>, {
+      stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
+    });
+    if (!verifyPrivateMockRootHook(collection)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+      );
+    }
+    collectionForExport = collection as Parameters<typeof convertAndSplitAnyCollection>[0];
+  } else {
+    const col = await postman.getCollection(collectionId);
+    collectionForExport = col as Parameters<typeof convertAndSplitAnyCollection>[0];
+  }
+
+  await convertAndSplitAnyCollection(collectionForExport, expectedPath);
   return `../${expectedPath}`;
 }
 
@@ -2105,6 +2323,7 @@ async function exportArtifacts(
     releaseLabel?: string;
     priorState?: PostmanResourcesState | null;
     preparedPrebuiltCollections: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
+    privateMockAuth?: boolean;
   }
 ): Promise<void> {
   if (!inputs.workspaceId) {
@@ -2122,6 +2341,88 @@ async function exportArtifacts(
   const globalsDir = `${inputs.artifactDir}/globals`;
   const mocksDir = `${inputs.artifactDir}/mocks`;
   const specsDir = `${inputs.artifactDir}/specs`;
+
+  const manifestCollections: Record<string, string> = {};
+  const artifactDirPrefix = canonicalizeRelativePath(inputs.artifactDir);
+  const { discoveredSpecs, mappedSpec } = resolveLocalSpecReferences(inputs.specPath, '.', {
+    ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, '.postman'] : ['.postman']
+  });
+  const mappedSpecCloudKey =
+    mappedSpec && inputs.specId
+      ? buildMappedSpecCloudKey(
+          mappedSpec.configRelativePath,
+          inputs.specSyncMode,
+          options.releaseLabel
+        )
+      : undefined;
+
+  const prebuiltByRole = options.preparedPrebuiltCollections;
+  const privateMockAuth = options.privateMockAuth === true;
+
+  const preparedPrivateMockCollections = new Map<PrebuiltCollectionRole, Record<string, unknown>>();
+  if (privateMockAuth) {
+    for (const spec of [
+      { role: 'smoke' as const, collectionId: inputs.smokeCollectionId },
+      { role: 'contract' as const, collectionId: inputs.contractCollectionId }
+    ]) {
+      if (!spec.collectionId) {
+        continue;
+      }
+      preparedPrivateMockCollections.set(
+        spec.role,
+        await preparePrivateMockCloudCollection(
+          spec.role,
+          spec.collectionId,
+          dependencies.postman
+        )
+      );
+    }
+  }
+
+  const baselineRef = await exportCollectionArtifact({
+    role: 'baseline',
+    collectionId: inputs.baselineCollectionId,
+    dirName: getCollectionDirectoryName('Baseline', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth
+  });
+  if (baselineRef) {
+    manifestCollections[baselineRef] = inputs.baselineCollectionId;
+  }
+
+  const smokeRef = await exportCollectionArtifact({
+    role: 'smoke',
+    collectionId: inputs.smokeCollectionId,
+    dirName: getCollectionDirectoryName('Smoke', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth,
+    preparedCloudCollection: preparedPrivateMockCollections.get('smoke')
+  });
+  if (smokeRef) {
+    manifestCollections[smokeRef] = inputs.smokeCollectionId;
+  }
+
+  const contractRef = await exportCollectionArtifact({
+    role: 'contract',
+    collectionId: inputs.contractCollectionId,
+    dirName: getCollectionDirectoryName('Contract', assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth,
+    preparedCloudCollection: preparedPrivateMockCollections.get('contract')
+  });
+  if (contractRef) {
+    manifestCollections[contractRef] = inputs.contractCollectionId;
+  }
+
   ensureDir(collectionsDir);
   ensureDir(environmentsDir);
   ensureDir(flowsDir);
@@ -2138,59 +2439,6 @@ async function exportArtifacts(
     if (ciDir) {
       ensureDir(ciDir);
     }
-  }
-
-  const manifestCollections: Record<string, string> = {};
-  const discoveredSpecs = scanLocalSpecReferences();
-  const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
-  const mappedSpecCloudKey =
-    mappedSpec && inputs.specId
-      ? buildMappedSpecCloudKey(
-          mappedSpec.configRelativePath,
-          inputs.specSyncMode,
-          options.releaseLabel
-        )
-      : undefined;
-
-  const prebuiltByRole = options.preparedPrebuiltCollections;
-
-  const baselineRef = await exportCollectionArtifact({
-    role: 'baseline',
-    collectionId: inputs.baselineCollectionId,
-    dirName: getCollectionDirectoryName('Baseline', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (baselineRef) {
-    manifestCollections[baselineRef] = inputs.baselineCollectionId;
-  }
-
-  const smokeRef = await exportCollectionArtifact({
-    role: 'smoke',
-    collectionId: inputs.smokeCollectionId,
-    dirName: getCollectionDirectoryName('Smoke', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (smokeRef) {
-    manifestCollections[smokeRef] = inputs.smokeCollectionId;
-  }
-
-  const contractRef = await exportCollectionArtifact({
-    role: 'contract',
-    collectionId: inputs.contractCollectionId,
-    dirName: getCollectionDirectoryName('Contract', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (contractRef) {
-    manifestCollections[contractRef] = inputs.contractCollectionId;
   }
 
   for (const [envName, envUid] of Object.entries(envUids)) {
@@ -2379,14 +2627,39 @@ export async function runRepoSync(
 ): Promise<RepoSyncOutputs> {
   const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', actionVersion: resolveActionVersion(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
+  const logger = resolveRepoSyncLogger(dependencies);
+  // Register before the first stage can run: a credential that reaches the
+  // logger after the first line is a credential that already leaked once.
+  for (const secret of [
+    inputs.postmanApiKey,
+    inputs.postmanAccessToken,
+    inputs.adoToken,
+    inputs.githubToken,
+    inputs.ghFallbackToken,
+    inputs.sslClientCert,
+    inputs.sslClientKey,
+    inputs.sslClientPassphrase,
+    inputs.sslExtraCaCerts
+  ]) {
+    logger.addSecret(secret);
+  }
+  logger.debug('resolved inputs', {
+    project: inputs.projectName,
+    collection_sync_mode: inputs.collectionSyncMode,
+    spec_sync_mode: inputs.specSyncMode,
+    team_id: dependencies.teamId || undefined
+  });
   try {
-    const result = await runRepoSyncInner(inputs, dependencies);
+    const result = await runRepoSyncInner(inputs, { ...dependencies, logger });
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion('success');
     return result;
   } catch (error) {
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion('failure');
+    // The rethrow reaches setFailed, which names that the run died but not
+    // where. The phase line already named the stage; this carries the cause chain.
+    logger.failure('repo sync failed', error);
     throw error;
   }
 }
@@ -2396,6 +2669,9 @@ async function runRepoSyncInner(
   dependencies: RepoSyncDependencies
 ): Promise<RepoSyncOutputs> {
   const mask = resolveRepoSyncMasker(dependencies);
+  // Normally the instance runRepoSync built and registered secrets on; the
+  // fallback only matters for tests that call this path directly.
+  const logger = resolveRepoSyncLogger(dependencies);
 
   // Branch-aware sync: the effective BranchDecision (inherited from bootstrap
   // via POSTMAN_BRANCH_DECISION, or resolved locally; legacy under default
@@ -2477,7 +2753,9 @@ async function runRepoSyncInner(
     }
   }
 
-  const preparedPrebuiltCollections = await preparePrebuiltCollections(inputs);
+  const preparedPrebuiltCollections = await logger.phase('prepare-collections', async () =>
+    preparePrebuiltCollections(inputs)
+  );
 
   // Repo-link admission guard: Bifrost enforces global uniqueness of
   // (repository URL, path) -> workspace. Probe before any asset writes so a
@@ -2524,7 +2802,9 @@ async function runRepoSyncInner(
   }
 
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
+  const envUids = await logger.phase('sync-environments', async () =>
+    upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
+  );
   outputs['environment-uids-json'] = JSON.stringify(envUids);
   dependencies.core.setOutput('environment-uids-json', outputs['environment-uids-json']);
 
@@ -2714,10 +2994,21 @@ async function runRepoSyncInner(
           );
         }
         const configured: string[] = [];
-        for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
-          if (collectionUid) {
+        for (const { role, collectionUid } of [
+          { role: 'smoke' as const, collectionUid: inputs.smokeCollectionId },
+          { role: 'contract' as const, collectionUid: inputs.contractCollectionId }
+        ]) {
+          if (!collectionUid) {
+            continue;
+          }
+          try {
             await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
             configured.push(collectionUid);
+          } catch (error) {
+            throw new Error(
+              `PRIVATE_MOCK_AUTH_ROOT_PATCH: Failed to install managed root hook on ${role} collection ${collectionUid}: ${mask(causeText(error))}`,
+              { cause: error }
+            );
           }
         }
         if (configured.length > 0) {
@@ -2897,17 +3188,22 @@ async function runRepoSyncInner(
     }
   }
 
-  await exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
-    workspaceLinkStatus: outputs['workspace-link-status'],
-    priorWorkspaceId: resourcesState?.workspace?.id,
-    existingSpecs: resourcesState?.cloudResources?.specs,
-    mockEnvironmentUid: outputs['mock-environment-uid'] || undefined,
-    releaseLabel,
-    priorState: resourcesState,
-    preparedPrebuiltCollections
-  });
+  await logger.phase('export-artifacts', async () =>
+    exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
+      workspaceLinkStatus: outputs['workspace-link-status'],
+      priorWorkspaceId: resourcesState?.workspace?.id,
+      existingSpecs: resourcesState?.cloudResources?.specs,
+      mockEnvironmentUid: outputs['mock-environment-uid'] || undefined,
+      releaseLabel,
+      priorState: resourcesState,
+      preparedPrebuiltCollections,
+      privateMockAuth: inputs.mockVisibility === 'private'
+    })
+  );
 
-  const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
+  const commit = await logger.phase('commit-and-push', async () =>
+    commitAndPushGeneratedFiles(inputs, dependencies)
+  );
   outputs['commit-sha'] = commit.commitSha;
   if (commit.resolvedCurrentRef) {
     outputs['resolved-current-ref'] = commit.resolvedCurrentRef;

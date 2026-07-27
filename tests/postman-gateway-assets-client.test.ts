@@ -6,6 +6,11 @@ import { HttpError } from '../src/lib/http-error.js';
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
 import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
 import { PostmanGatewayAssetsClient } from '../src/lib/postman/postman-gateway-assets-client.js';
+import {
+  PRIVATE_MOCK_AUTH_ROOT_MARKER,
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from '../src/lib/postman/private-mock-auth-script.js';
 import { createMutableSecretMasker } from '../src/lib/secrets.js';
 
 function bifrostDeleteHttpError(status: number, responseBody: string): HttpError {
@@ -16,6 +21,27 @@ function bifrostDeleteHttpError(status: number, responseBody: string): HttpError
     statusText: status === 500 ? 'Internal Server Error' : String(status),
     responseBody
   });
+}
+
+function bifrostPatchHttpError(status: number, responseBody: string): HttpError {
+  return new HttpError({
+    method: 'PATCH',
+    url: 'https://bifrost.example.com/ws/proxy',
+    status,
+    statusText: status === 500 ? 'Internal Server Error' : String(status),
+    responseBody
+  });
+}
+
+function collectionExport(scripts: Array<{ type: string; code: string; language: string }> = []) {
+  return {
+    data: {
+      collection: {
+        id: 'col-1',
+        scripts
+      }
+    }
+  };
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -160,13 +186,12 @@ describe('PostmanGatewayAssetsClient', () => {
     });
   });
 
-  it('adds an idempotent private-mock runtime hook without persisting a credential', async () => {
+  it('adds an idempotent private-mock runtime hook at the collection root without persisting a credential', async () => {
     const requestJson = vi.fn(async (request: { method: string; path: string; body?: unknown }) => {
-      if (request.method === 'get' && request.path.endsWith('/items/')) {
-        return { data: [{ id: 'req-1', $kind: 'http-request' }, { id: 'folder', $kind: 'folder' }] };
-      }
-      if (request.method === 'get') {
-        return { data: { id: 'req-1', scripts: [{ type: 'afterResponse', code: 'pm.test("ok")', language: 'text/javascript' }] } };
+      if (request.method === 'get' && request.path.endsWith('/export')) {
+        return collectionExport([
+          { type: 'http:afterResponse', code: 'pm.test("ok")', language: 'text/javascript' }
+        ]);
       }
       return { data: {} };
     });
@@ -178,12 +203,13 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(serialized).toContain('postmanPrivateMockApiKey');
     expect(serialized).toContain('x-api-key');
     expect(serialized).toContain('replaceIn');
-    expect(serialized).toContain('private-mock-auth-v3');
-    expect(serialized).toContain('afterResponse');
+    expect(serialized).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+    expect(serialized).toContain('http:afterResponse');
     expect(serialized).not.toContain('pmak-');
+    expect(requestJson.mock.calls.some(([request]) => request.method === 'patch' && String(request.path ?? '').includes('/items/'))).toBe(false);
 
     const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
-    const code = scripts.find((script) => script.type === 'beforeRequest')?.code ?? '';
+    const code = scripts.find((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE)?.code ?? '';
     const mockUpsert = vi.fn();
     runInNewContext(code, {
       URL,
@@ -226,50 +252,17 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(apiUpsert).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      'v1',
-      [
-        '// postman-enterprise-automation: private-mock-auth',
-        "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
-        "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
-        "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
-        "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-        '}'
-      ].join('\n')
-    ],
-    [
-      'v2',
-      [
-        '// postman-enterprise-automation: private-mock-auth-v2',
-        "var privateMockApiKey = pm.variables.get('postmanPrivateMockApiKey');",
-        "var privateMockHostValue = pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '';",
-        "var privateMockHost = Array.isArray(privateMockHostValue) ? privateMockHostValue.join('.') : String(privateMockHostValue);",
-        "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
-        'if (isPrivateMockHost && privateMockApiKey) {',
-        "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-        '} else if (isPrivateMockHost) {',
-        "  console.warn('This mock server is private. Set the postmanPrivateMockApiKey variable to a Postman API key with access to it, or the request returns 401.');",
-        '}'
-      ].join('\n')
-    ]
-  ])('replaces a stale %s private-mock hook instead of stacking a second copy', async (_version, legacyBlock) => {
-    const legacyMarker = 'postman-enterprise-automation: private-mock-auth';
+  it('preserves pre-existing customer root http:beforeRequest code as a separate listener ahead of the managed hook', async () => {
     const authorLine = 'var callerOwned = true;';
+    const customerRootScript = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: authorLine,
+      language: 'text/javascript'
+    };
 
     const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
-      if (request.method === 'get' && request.path?.endsWith('/items/')) {
-        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
-      }
-      if (request.method === 'get') {
-        return {
-          data: {
-            id: 'req-1',
-            scripts: [
-              { type: 'beforeRequest', code: `${legacyBlock}\n${authorLine}`, language: 'text/javascript' }
-            ]
-          }
-        };
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport([customerRootScript]);
       }
       return { data: {} };
     });
@@ -279,35 +272,25 @@ describe('PostmanGatewayAssetsClient', () => {
 
     const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
     const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
-    const code = scripts.find((script) => script.type === 'beforeRequest')?.code ?? '';
+    const beforeScripts = scripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
 
-    // Exactly one managed block survives, and it is the current generation.
-    expect(code.split(legacyMarker).length - 1).toBe(1);
-    expect(code).toContain('private-mock-auth-v3');
-    // The caller's own script is never discarded.
-    expect(code).toContain(authorLine);
-    // The broken String(array) form must not survive the upgrade.
-    expect(code).not.toContain("String(pm.request.url && pm.request.url.getHost");
+    expect(beforeScripts).toHaveLength(2);
+    expect(beforeScripts[0]?.code).toBe(authorLine);
+    expect(beforeScripts[1]?.code).toBe(PRIVATE_MOCK_AUTH_ROOT_SCRIPT);
+    expect(beforeScripts[1]?.code).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+    expect(requestJson.mock.calls.some(([request]) => request.method === 'patch' && String(request.path ?? '').includes('/items/'))).toBe(false);
   });
 
-  it('leaves the request untouched when the current hook generation is already installed', async () => {
+  it('leaves the collection untouched when the exact managed root hook is already installed', async () => {
     const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
-      if (request.method === 'get' && request.path?.endsWith('/items/')) {
-        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
-      }
-      if (request.method === 'get') {
-        return {
-          data: {
-            id: 'req-1',
-            scripts: [
-              {
-                type: 'beforeRequest',
-                code: '// postman-enterprise-automation: private-mock-auth-v3\nvar privateMockApiKey = 1;',
-                language: 'text/javascript'
-              }
-            ]
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport([
+          {
+            type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+            code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+            language: 'text/javascript'
           }
-        };
+        ]);
       }
       return { data: {} };
     });
@@ -317,12 +300,38 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(requestJson.mock.calls.some(([request]) => request.method === 'patch')).toBe(false);
   });
 
+  it('preserves marker-only corrupt root listeners and appends one exact managed hook', async () => {
+    const corrupt = `// ${PRIVATE_MOCK_AUTH_ROOT_MARKER}\nvar privateMockApiKey = 1;`;
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport([
+          {
+            type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+            code: corrupt,
+            language: 'text/javascript'
+          }
+        ]);
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
+    const beforeScripts = scripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
+
+    expect(beforeScripts).toHaveLength(2);
+    expect(beforeScripts[0]?.code).toBe(corrupt);
+    expect(beforeScripts[1]?.code).toBe(PRIVATE_MOCK_AUTH_ROOT_SCRIPT);
+  });
+
   it('warns instead of silently sending nothing when a private mock host has no key', async () => {
     const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
-      if (request.method === 'get' && request.path?.endsWith('/items/')) {
-        return { data: [{ $kind: 'http-request', id: 'req-1' }] };
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport([]);
       }
-      if (request.method === 'get') return { data: { id: 'req-1', scripts: [] } };
       return { data: {} };
     });
     const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
@@ -334,6 +343,321 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(code).toContain('console.warn');
     expect(code).toContain('postmanPrivateMockApiKey');
     expect(code).toContain('replaceIn');
+  });
+
+  it('reconciles an ambiguous root PATCH when the exact managed hook is already present after re-read', async () => {
+    let exportReads = 0;
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        exportReads += 1;
+        if (exportReads === 1) {
+          return collectionExport([]);
+        }
+        return collectionExport([
+          {
+            type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+            code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+            language: 'text/javascript'
+          }
+        ]);
+      }
+      if (request.method === 'patch') {
+        throw bifrostPatchHttpError(500, '{"error":{"name":"serverError","details":"ESOCKETTIMEDOUT"}}');
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    expect(requestJson.mock.calls.filter(([request]) => request.method === 'patch').length).toBe(1);
+  });
+
+  it('retries exactly one recomputed root PATCH when an ambiguous failure leaves the marker absent', async () => {
+    let patchAttempts = 0;
+    let exportReads = 0;
+    const staleCustomer = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: 'var staleCustomer = true;',
+      language: 'text/javascript'
+    };
+    const freshCustomer = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: 'var freshCustomer = true;',
+      language: 'text/javascript'
+    };
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        exportReads += 1;
+        return collectionExport(exportReads === 1 ? [staleCustomer] : [freshCustomer]);
+      }
+      if (request.method === 'patch') {
+        patchAttempts += 1;
+        if (patchAttempts === 1) {
+          throw bifrostPatchHttpError(500, '{"error":{"name":"serverError","details":"ESOCKETTIMEDOUT"}}');
+        }
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    expect(patchAttempts).toBe(2);
+    expect(exportReads).toBe(2);
+
+    const patchBodies = requestJson.mock.calls
+      .filter(([request]) => request.method === 'patch')
+      .map(([request]) => request.body as Array<{ value: Array<{ type: string; code: string }> }>);
+    const firstScripts = patchBodies[0][0].value;
+    const retryScripts = patchBodies[1][0].value;
+    expect(retryScripts).not.toEqual(firstScripts);
+    expect(JSON.stringify(firstScripts)).toContain('staleCustomer');
+    expect(JSON.stringify(firstScripts)).not.toContain('freshCustomer');
+    expect(JSON.stringify(retryScripts)).toContain('freshCustomer');
+    expect(JSON.stringify(retryScripts)).not.toContain('staleCustomer');
+    expect(retryScripts.some((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE)).toBe(true);
+    const retryCustomer = retryScripts.find((script) => script.code.includes('freshCustomer'));
+    const retryManaged = retryScripts.find((script) => script.code.includes(PRIVATE_MOCK_AUTH_ROOT_MARKER));
+    expect(retryCustomer?.code).toBe(freshCustomer.code);
+    expect(retryManaged?.code).toBe(PRIVATE_MOCK_AUTH_ROOT_SCRIPT);
+    expect(
+      requestJson.mock.calls.some(
+        ([request]) => request.method === 'patch' && String(request.path ?? '').includes('/items/')
+      )
+    ).toBe(false);
+  });
+
+  it('second and third configurePrivateMockRuntimeAuth calls perform zero writes', async () => {
+    let rootScripts: Array<{ type: string; code: string; language: string }> = [];
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport(rootScripts);
+      }
+      if (request.method === 'patch') {
+        const scripts = (request.body as Array<{ value: Array<{ type: string; code: string; language: string }> }>)[0]
+          .value;
+        rootScripts = scripts.map((script) => ({ ...script }));
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(0);
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(0);
+
+    const patches = requestJson.mock.calls.filter(([request]) => request.method === 'patch');
+    expect(patches).toHaveLength(1);
+    expect(patches.every(([request]) => !String(request.path ?? '').includes('/items/'))).toBe(true);
+  });
+
+  it('keeps customer root http:beforeRequest verbatim and unduplicated across re-runs', async () => {
+    const authorLine = 'var callerOwned = true;';
+    const customerRootScript = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: authorLine,
+      language: 'text/javascript'
+    };
+    let rootScripts: Array<{ type: string; code: string; language: string }> = [customerRootScript];
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport(rootScripts);
+      }
+      if (request.method === 'patch') {
+        const scripts = (request.body as Array<{ value: Array<{ type: string; code: string; language: string }> }>)[0]
+          .value;
+        rootScripts = scripts.map((script) => ({ ...script }));
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(0);
+
+    const beforeScripts = rootScripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
+    expect(beforeScripts).toHaveLength(2);
+    expect(beforeScripts[0]?.code).toBe(authorLine);
+    expect(beforeScripts[1]?.code).toBe(PRIVATE_MOCK_AUTH_ROOT_SCRIPT);
+    expect(requestJson.mock.calls.filter(([request]) => request.method === 'patch')).toHaveLength(1);
+  });
+
+  it('fails actionably when the collection export envelope is unexpected', async () => {
+    for (const envelope of [{ unexpected: true }, { data: {} }, { data: { collection: null } }, null]) {
+      const requestJson = vi.fn(async (request: { method?: string; path?: string }) => {
+        if (request.method === 'get' && request.path?.endsWith('/export')) {
+          return envelope;
+        }
+        return { data: {} };
+      });
+      const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+      await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).rejects.toThrow(
+        /PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection owner-col-1 /
+      );
+      expect(requestJson.mock.calls.some(([request]) => request.method === 'patch')).toBe(false);
+    }
+  });
+
+  it('preserves every customer http:beforeRequest root script ahead of one managed listener', async () => {
+    const first = 'var firstCustomer = 1;';
+    const second = 'var secondCustomer = 2;';
+    const afterResponse = 'pm.test("untouched", function () {});';
+    const originalScripts: Array<{ type: string; code: string; language: string }> = [
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: first, language: 'text/javascript' },
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: second, language: 'text/javascript' },
+      { type: 'http:afterResponse', code: afterResponse, language: 'text/javascript' }
+    ];
+    let rootScripts: Array<{ type: string; code: string; language: string }> = originalScripts.map(
+      (script) => ({ ...script })
+    );
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport(rootScripts);
+      }
+      if (request.method === 'patch') {
+        const scripts = (request.body as Array<{ value: Array<{ type: string; code: string; language: string }> }>)[0]
+          .value;
+        rootScripts = scripts.map((script) => ({ ...script }));
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(0);
+
+    const beforeScripts = rootScripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
+    expect(beforeScripts.map((script) => script.code)).toEqual([
+      first,
+      second,
+      PRIVATE_MOCK_AUTH_ROOT_SCRIPT
+    ]);
+    expect(rootScripts.filter((script) => script.type === 'http:afterResponse')).toEqual([
+      { type: 'http:afterResponse', code: afterResponse, language: 'text/javascript' }
+    ]);
+    expect(requestJson.mock.calls.filter(([request]) => request.method === 'patch')).toHaveLength(1);
+  });
+
+  it('preserves every existing root listener in order and appends the managed hook', async () => {
+    const first = 'var firstCustomer = 1;';
+    const second = 'var secondCustomer = 2;';
+    const third = 'var thirdCustomer = 3;';
+    const afterResponse = 'pm.test("untouched", function () {});';
+    const prerequest = 'console.log("also-untouched");';
+    const originalScripts: Array<{ type: string; code: string; language: string }> = [
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: first, language: 'text/javascript' },
+      { type: 'http:afterResponse', code: afterResponse, language: 'text/javascript' },
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: second, language: 'text/javascript' },
+      { type: 'prerequest', code: prerequest, language: 'text/javascript' },
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: third, language: 'text/javascript' }
+    ];
+    let rootScripts: Array<{ type: string; code: string; language: string }> = originalScripts.map(
+      (script) => ({ ...script })
+    );
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport(rootScripts);
+      }
+      if (request.method === 'patch') {
+        const scripts = (request.body as Array<{ value: Array<{ type: string; code: string; language: string }> }>)[0]
+          .value;
+        rootScripts = scripts.map((script) => ({ ...script }));
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+
+    expect(rootScripts.map((script) => script.type)).toEqual([
+      PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      'http:afterResponse',
+      PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      'prerequest',
+      PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      PRIVATE_MOCK_AUTH_ROOT_TYPE
+    ]);
+    const beforeScripts = rootScripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
+    expect(beforeScripts.map((script) => script.code)).toEqual([
+      first,
+      second,
+      third,
+      PRIVATE_MOCK_AUTH_ROOT_SCRIPT
+    ]);
+    expect(rootScripts.filter((script) => script.type === 'http:afterResponse')).toEqual([
+      { type: 'http:afterResponse', code: afterResponse, language: 'text/javascript' }
+    ]);
+    expect(rootScripts.filter((script) => script.type === 'prerequest')).toEqual([
+      { type: 'prerequest', code: prerequest, language: 'text/javascript' }
+    ]);
+  });
+
+  it('keeps customer listeners separate so duplicate lexical declarations remain runnable', async () => {
+    const first = 'const shared = 1;';
+    const second = 'const shared = 2;';
+    const originalScripts = [
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: first, language: 'text/javascript' },
+      { type: PRIVATE_MOCK_AUTH_ROOT_TYPE, code: second, language: 'text/javascript' }
+    ];
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport(originalScripts);
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const scripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
+    const beforeScripts = scripts.filter((script) => script.type === PRIVATE_MOCK_AUTH_ROOT_TYPE);
+
+    expect(beforeScripts.map((script) => script.code)).toEqual([
+      first,
+      second,
+      PRIVATE_MOCK_AUTH_ROOT_SCRIPT
+    ]);
+    expect(() => runInNewContext(beforeScripts[0]?.code ?? '', {})).not.toThrow();
+    expect(() => runInNewContext(beforeScripts[1]?.code ?? '', {})).not.toThrow();
+  });
+
+  it.each([undefined, [], null, { nope: true }, 'scripts'])(
+    'does not throw when collection.scripts is %s and still installs the root hook',
+    async (scripts) => {
+      const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+        if (request.method === 'get' && request.path?.endsWith('/export')) {
+          return { data: { collection: { id: 'col-1', scripts } } };
+        }
+        return { data: {} };
+      });
+      const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+      await expect(assets.configurePrivateMockRuntimeAuth('owner-col-1')).resolves.toBe(1);
+      const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+      const bodyScripts = (patch?.body as Array<{ value: Array<{ type: string; code: string }> }>)[0].value;
+      expect(bodyScripts).toEqual([
+        {
+          type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+          code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+          language: 'text/javascript'
+        }
+      ]);
+    }
+  );
+
+  it('PATCH body root type is http:beforeRequest, never bare beforeRequest', async () => {
+    const requestJson = vi.fn(async (request: { method?: string; path?: string; body?: unknown }) => {
+      if (request.method === 'get' && request.path?.endsWith('/export')) {
+        return collectionExport([]);
+      }
+      return { data: {} };
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+    await assets.configurePrivateMockRuntimeAuth('owner-col-1');
+    const patch = requestJson.mock.calls.find(([request]) => request.method === 'patch')?.[0];
+    const bodyScripts = (patch?.body as Array<{ value: Array<{ type: string }> }>)[0].value;
+    expect(bodyScripts.map((script) => script.type)).toEqual([PRIVATE_MOCK_AUTH_ROOT_TYPE]);
+    expect(JSON.stringify(patch?.body)).not.toMatch(/"type"\s*:\s*"beforeRequest"/);
+    expect(PRIVATE_MOCK_AUTH_ROOT_TYPE).toBe('http:beforeRequest');
   });
 
   it('createEnvironment returns the owner-prefixed public uid built from the import response', async () => {
@@ -421,6 +745,7 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(env.body).toEqual({
       name: 'mon',
       collection: PUBLIC_UID,
+      active: true,
       options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
       notifications: { onFailure: [], onError: [] },
       retry: {},
@@ -430,7 +755,7 @@ describe('PostmanGatewayAssetsClient', () => {
     });
   });
 
-  it('createMonitor omits environment when none is supplied and defaults the cron', async () => {
+  it('createMonitor sends an inactive body without schedule when cron is empty', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ data: [] }))
@@ -439,7 +764,9 @@ describe('PostmanGatewayAssetsClient', () => {
     await assets.createMonitor('ws-1', 'mon', PUBLIC_UID, '');
     const body = parseEnvelope(fetchImpl.mock.calls[1]).body as Record<string, unknown>;
     expect(body.environment).toBeUndefined();
-    expect(body.schedule).toEqual({ cronPattern: '0 0 * * 0', timeZone: 'UTC' });
+    expect(body.active).toBe(false);
+    expect(body.schedule).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('0 0 * * 0');
   });
 
   it('listMonitors reads /jobTemplates and the flat collection uid', async () => {

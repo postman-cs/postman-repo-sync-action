@@ -89,7 +89,9 @@ function buildCiWorkflowLines(
   `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
   '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
   '      - name: Login to Postman CLI',
-  '        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}' +
+  '        env:',
+  '          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}',
+  '        run: postman login --with-api-key "$POSTMAN_API_KEY"' +
     (postmanRegion === 'eu' ? ' --region eu' : ''),
   '      - name: Resolve Postman Resource IDs',
   '        run: |',
@@ -129,13 +131,14 @@ function buildCiWorkflowLines(
   '      - name: Run Smoke Tests',
   '        env:',
   '          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}',
+  ...(privateMockAuth ? ['          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}'] : []),
   '        run: |',
   '          CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
   "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
   ...(privateMockAuth
-    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")']
+    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
     : []),
   "          if [ -f \"$RUNNER_TEMP/postman-ssl/client.crt\" ]; then",
   '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
@@ -151,13 +154,14 @@ function buildCiWorkflowLines(
   '      - name: Run Contract Tests',
   '        env:',
   '          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}',
+  ...(privateMockAuth ? ['          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}'] : []),
   '        run: |',
   '          CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
   "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
   ...(privateMockAuth
-    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")']
+    ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
     : []),
   "          if [ -f \"$RUNNER_TEMP/postman-ssl/client.crt\" ]; then",
   '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
@@ -191,7 +195,9 @@ function buildAdoWindowsCollectionRunLines(
     `      $collectionUid = $env:${collectionEnvironmentName}`,
     '      $ciEnvironment = Resolve-AdoOptional $env:CI_ENVIRONMENT',
     "      if ([string]::IsNullOrWhiteSpace($ciEnvironment)) { $ciEnvironment = 'Production' }",
-    `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment")`,
+    '      $responseTimeThreshold = Resolve-AdoOptional $env:RESPONSE_TIME_THRESHOLD',
+    "      if ([string]::IsNullOrWhiteSpace($responseTimeThreshold)) { $responseTimeThreshold = '10000' }",
+    `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment", '--env-var', "RESPONSE_TIME_THRESHOLD=$responseTimeThreshold")`,
     ...(privateMockAuth
       ? [`      $arguments += @('--env-var', "${PRIVATE_MOCK_AUTH_VARIABLE}=$env:POSTMAN_API_KEY")`]
       : []),
@@ -216,6 +222,7 @@ function buildAdoWindowsCollectionRunLines(
     `      ${collectionEnvironmentName}: $(${collectionEnvironmentName})`,
     '      POSTMAN_ENVIRONMENT_UID: $(POSTMAN_ENVIRONMENT_UID)',
     '      CI_ENVIRONMENT: $(CI_ENVIRONMENT)',
+    '      RESPONSE_TIME_THRESHOLD: $(RESPONSE_TIME_THRESHOLD)',
     '      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)',
     ...(privateMockAuth ? ['      POSTMAN_API_KEY: $(POSTMAN_API_KEY)'] : [])
   ];

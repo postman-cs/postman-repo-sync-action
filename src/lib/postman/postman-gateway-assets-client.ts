@@ -1,6 +1,13 @@
 import type { AccessTokenGatewayClient } from './gateway-client.js';
 import { HttpError } from '../http-error.js';
 import { retry, sleep as defaultSleep } from '../retry.js';
+import {
+  isManagedPrivateMockAuthRootHook,
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from './private-mock-auth-script.js';
+
+export { PRIVATE_MOCK_AUTH_VARIABLE } from './private-mock-auth-script.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -43,54 +50,6 @@ export function requireMockVisibility(
 
 export function requirePublicMock(mock: MockRecord): MockRecord {
   return requireMockVisibility(mock, 'public');
-}
-
-const LEGACY_PRIVATE_MOCK_AUTH_MARKER = 'postman-enterprise-automation: private-mock-auth';
-const PRIVATE_MOCK_AUTH_V2_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
-const PRIVATE_MOCK_AUTH_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v3`;
-export const PRIVATE_MOCK_AUTH_VARIABLE = 'postmanPrivateMockApiKey';
-const LEGACY_PRIVATE_MOCK_AUTH_SCRIPT = [
-  `// ${LEGACY_PRIVATE_MOCK_AUTH_MARKER}`,
-  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
-  "var privateMockHost = String(pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '');",
-  "if (privateMockApiKey && /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost)) {",
-  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-  "}"
-].join('\n');
-const PRIVATE_MOCK_AUTH_V2_SCRIPT = [
-  `// ${PRIVATE_MOCK_AUTH_V2_MARKER}`,
-  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
-  "var privateMockHostValue = pm.request.url && pm.request.url.getHost ? pm.request.url.getHost() : '';",
-  "var privateMockHost = Array.isArray(privateMockHostValue) ? privateMockHostValue.join('.') : String(privateMockHostValue);",
-  "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
-  "if (isPrivateMockHost && privateMockApiKey) {",
-  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-  "} else if (isPrivateMockHost) {",
-  `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE} variable to a Postman API key with access to it, or the request returns 401.');`,
-  "}"
-].join('\n');
-const PRIVATE_MOCK_AUTH_SCRIPT = [
-  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
-  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE}');`,
-  "var privateMockHost = '';",
-  "try {",
-  "  var privateMockUrl = pm.variables.replaceIn(pm.request.url.toString());",
-  "  privateMockHost = new URL(privateMockUrl).hostname;",
-  "} catch (error) {",
-  "  console.warn('Could not resolve the request URL for private mock authentication; x-api-key was not added.');",
-  "}",
-  "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
-  "if (isPrivateMockHost && privateMockApiKey) {",
-  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
-  "} else if (isPrivateMockHost) {",
-  `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE} variable to a Postman API key with access to it, or the request returns 401.');`,
-  "}"
-].join('\n');
-
-function removeLegacyPrivateMockAuth(code: string): string {
-  return [LEGACY_PRIVATE_MOCK_AUTH_SCRIPT, PRIVATE_MOCK_AUTH_V2_SCRIPT]
-    .reduce((next, script) => next.split(script).join(''), code)
-    .trim();
 }
 
 const MAX_CREATE_FLIGHTS = 256;
@@ -780,56 +739,93 @@ export class PostmanGatewayAssetsClient {
     });
   }
 
+  private isAmbiguousTransportError(error: unknown): boolean {
+    return this.isRetryableIdempotentWriteOutcome(error);
+  }
+
+  private normalizeCollectionScripts(scripts: unknown): JsonRecord[] {
+    if (!Array.isArray(scripts)) return [];
+    return scripts
+      .map((entry) => this.asRecord(entry))
+      .filter((entry): entry is JsonRecord => entry !== null);
+  }
+
+  private rootScriptsIncludeManagedAuthHook(scripts: JsonRecord[]): boolean {
+    return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
+  }
+
+  private buildPrivateMockRootScripts(existingScripts: JsonRecord[]): JsonRecord[] {
+    const managedScript: JsonRecord = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+      language: 'text/javascript'
+    };
+    return [...existingScripts, managedScript];
+  }
+
+  private async readCollectionRootScripts(collectionUid: string): Promise<JsonRecord[]> {
+    const id = this.toModelId(collectionUid);
+    const response = await this.gateway.requestJson<JsonRecord>({
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${id}/export`
+    });
+    const data = this.asRecord(response?.data);
+    const collection = this.asRecord(data?.collection);
+    if (!collection) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection ${id} export did not return data.collection; refusing to configure private-mock root auth from an unexpected envelope.`
+      );
+    }
+    return this.normalizeCollectionScripts(collection.scripts);
+  }
+
+  private async patchCollectionRootScripts(collectionUid: string, scripts: JsonRecord[]): Promise<void> {
+    const id = this.toModelId(collectionUid);
+    await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'collection',
+        method: 'patch',
+        path: `/v3/collections/${id}`,
+        body: [{ op: 'add', path: '/scripts', value: scripts }]
+      },
+      { retryTransient: false }
+    );
+  }
+
   /**
-   * Add a secret-free runtime hook to every HTTP request in a collection. The
-   * PMAK value is supplied only by the runner as a transient variable; this
-   * method persists the variable name and header wiring, never the credential.
+   * Add a secret-free runtime hook at the collection root. The PMAK value is
+   * supplied only by the runner as a transient variable; this method persists
+   * the variable name and header wiring, never the credential.
    */
   async configurePrivateMockRuntimeAuth(collectionUid: string): Promise<number> {
     const cid = String(collectionUid ?? '').trim();
     if (!cid) return 0;
-    const listed = await this.gateway.requestJson<JsonRecord>({
-      service: 'collection',
-      method: 'get',
-      path: `/v3/collections/${cid}/items/`
-    });
-    const items = Array.isArray(listed?.data) ? listed.data as JsonRecord[] : [];
-    let patched = 0;
-    for (const listedItem of items) {
-      if (String(listedItem.$kind ?? '') !== 'http-request') continue;
-      const itemId = String(listedItem.id ?? '').trim();
-      if (!itemId) continue;
-      const response = await this.gateway.requestJson<JsonRecord>({
-        service: 'collection',
-        method: 'get',
-        path: `/v3/collections/${cid}/items/${itemId}`,
-        headers: { 'X-Entity-Type': 'http-request' }
-      });
-      const item = this.asRecord(response?.data) ?? listedItem;
-      const scripts = Array.isArray(item.scripts)
-        ? item.scripts.filter((entry): entry is JsonRecord => Boolean(this.asRecord(entry)))
-        : [];
-      const before = scripts.find((script) => String(script.type ?? '') === 'beforeRequest');
-      const existingCode = String(before?.code ?? '');
-      if (existingCode.includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
-      const code = [removeLegacyPrivateMockAuth(existingCode), PRIVATE_MOCK_AUTH_SCRIPT]
-        .filter(Boolean)
-        .join('\n');
-      const nextScripts = [
-        ...scripts.filter((script) => String(script.type ?? '') !== 'beforeRequest'),
-        { type: 'beforeRequest', code, language: 'text/javascript' }
-      ];
-      await this.gateway.requestJson<JsonRecord>({
-        service: 'collection',
-        method: 'patch',
-        path: `/v3/collections/${cid}/items/${itemId}`,
 
-        headers: { 'X-Entity-Type': 'http-request' },
-        body: [{ op: 'add', path: '/scripts', value: nextScripts }]
-      });
-      patched += 1;
-    }
-    return patched;
+    const installFromFreshRoot = async (existingScripts: JsonRecord[]): Promise<number> => {
+      if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
+        return 0;
+      }
+      const nextScripts = this.buildPrivateMockRootScripts(existingScripts);
+      try {
+        await this.patchCollectionRootScripts(cid, nextScripts);
+        return 1;
+      } catch (error) {
+        if (!this.isAmbiguousTransportError(error)) {
+          throw error;
+        }
+        const freshScripts = await this.readCollectionRootScripts(cid);
+        if (this.rootScriptsIncludeManagedAuthHook(freshScripts)) {
+          return 1;
+        }
+        const recomputed = this.buildPrivateMockRootScripts(freshScripts);
+        await this.patchCollectionRootScripts(cid, recomputed);
+        return 1;
+      }
+    };
+
+    const scripts = await this.readCollectionRootScripts(cid);
+    return installFromFreshRoot(scripts);
   }
 
   async listMocks(): Promise<MockRecord[]> {
@@ -949,12 +945,13 @@ export class PostmanGatewayAssetsClient {
     cronSchedule?: string
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
-    const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : '0 0 * * 0';
+    const cronTrimmed = String(cronSchedule ?? '').trim();
+    const hasCron = cronTrimmed.length > 0;
     const monitorName = String(name ?? '').trim();
     const collection = String(collectionUid ?? '').trim();
     const environment = String(environmentUid ?? '').trim();
     const flightKey = `monitor:${ws}:${collection}:${environment}:${monitorName}`;
-    return this.singleFlight(flightKey, effectiveCron, 'monitor', async () => {
+    return this.singleFlight(flightKey, hasCron ? cronTrimmed : 'inactive', 'monitor', async () => {
       const existing = await this.findMonitorByCollection(collection, environment, monitorName);
       if (existing?.uid) {
         return existing.uid;
@@ -966,11 +963,12 @@ export class PostmanGatewayAssetsClient {
       const body: JsonRecord = {
         name: monitorName,
         collection,
+        active: hasCron,
         options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
         notifications: { onFailure: [], onError: [] },
         retry: {},
-        schedule: { cronPattern: effectiveCron, timeZone: 'UTC' },
         distribution: null,
+        ...(hasCron ? { schedule: { cronPattern: cronTrimmed, timeZone: 'UTC' } } : {}),
         ...(environment ? { environment } : {})
       };
 

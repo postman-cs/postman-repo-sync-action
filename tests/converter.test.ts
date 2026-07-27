@@ -150,6 +150,29 @@ describe('convertAndSplitV3Collection (v3 export -> v3, no v2 round-trip)', () =
     // owner prefix on the request id is stripped (matches the v2->v3 path)
     expect(req).not.toContain('99-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
   });
+
+  it('passes collection-root gateway script types through to definition.yaml unchanged', async () => {
+    const dir = freshDir();
+    await convertAndSplitV3Collection(
+      {
+        id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        name: 'Root Scripts',
+        $kind: 'collection',
+        scripts: [
+          {
+            type: 'http:beforeRequest',
+            code: "console.log('root hook');",
+            language: 'text/javascript'
+          }
+        ],
+        items: []
+      },
+      dir
+    );
+    const def = readFileSync(join(dir, '.resources', 'definition.yaml'), 'utf8');
+    expect(def).toContain('type: http:beforeRequest');
+    expect(def).not.toMatch(/^[ ]{2}- type: beforeRequest$/m);
+  });
 });
 
 describe('convertAndSplitAnyCollection (auto-detect)', () => {

@@ -42720,14 +42720,14 @@ var require_description = __commonJS({
     var z = __importStar(require_mini());
     var metadata_1 = require_metadata();
     var MAX_CONTENT_LENGTH = 1e6;
-    function truncate2(value) {
+    function truncate3(value) {
       return value.length > MAX_CONTENT_LENGTH ? value.slice(0, MAX_CONTENT_LENGTH) : value;
     }
     exports2.Description = (0, schemas_1.model)(z.union([
-      z.pipe(z.string(), z.transform(truncate2)),
+      z.pipe(z.string(), z.transform(truncate3)),
       z.null(),
       z.object({
-        content: z.pipe(z.optional(z.string()), z.transform((value) => truncate2(value ?? ""))),
+        content: z.pipe(z.optional(z.string()), z.transform((value) => truncate3(value ?? ""))),
         type: z.optional(z.string()),
         version: z.optional(z.unknown())
       })
@@ -57953,7 +57953,7 @@ var require_lodash = __commonJS({
           var strSymbols = stringToArray(string), start = charsStartIndex(strSymbols, stringToArray(chars));
           return castSlice(strSymbols, start).join("");
         }
-        function truncate2(string, options) {
+        function truncate3(string, options) {
           var length = DEFAULT_TRUNC_LENGTH, omission = DEFAULT_TRUNC_OMISSION;
           if (isObject(options)) {
             var separator = "separator" in options ? options.separator : separator;
@@ -58513,7 +58513,7 @@ var require_lodash = __commonJS({
         lodash.trim = trim;
         lodash.trimEnd = trimEnd;
         lodash.trimStart = trimStart;
-        lodash.truncate = truncate2;
+        lodash.truncate = truncate3;
         lodash.unescape = unescape2;
         lodash.uniqueId = uniqueId;
         lodash.upperCase = upperCase;
@@ -95744,10 +95744,10 @@ var require_unicode = __commonJS({
     module2.exports.isLineTerminatorJSON = function isLineTerminatorJSON(x) {
       return x === "\n" || x === "\r";
     };
-    module2.exports.isIdentifierStart = function isIdentifierStart(x) {
+    module2.exports.isIdentifierStart = function isIdentifierStart2(x) {
       return x === "$" || x === "_" || x >= "A" && x <= "Z" || x >= "a" && x <= "z" || x >= "\x80" && Uni.NonAsciiIdentifierStart.test(x);
     };
-    module2.exports.isIdentifierPart = function isIdentifierPart(x) {
+    module2.exports.isIdentifierPart = function isIdentifierPart2(x) {
       return x === "$" || x === "_" || x >= "A" && x <= "Z" || x >= "a" && x <= "z" || x >= "0" && x <= "9" || x >= "\x80" && Uni.NonAsciiIdentifierPart.test(x);
     };
     module2.exports.NonAsciiIdentifierStart = /[\xAA\xB5\xBA\xC0-\xD6\xD8-\xF6\xF8-\u02C1\u02C6-\u02D1\u02E0-\u02E4\u02EC\u02EE\u0370-\u0374\u0376\u0377\u037A-\u037D\u0386\u0388-\u038A\u038C\u038E-\u03A1\u03A3-\u03F5\u03F7-\u0481\u048A-\u0527\u0531-\u0556\u0559\u0561-\u0587\u05D0-\u05EA\u05F0-\u05F2\u0620-\u064A\u066E\u066F\u0671-\u06D3\u06D5\u06E5\u06E6\u06EE\u06EF\u06FA-\u06FC\u06FF\u0710\u0712-\u072F\u074D-\u07A5\u07B1\u07CA-\u07EA\u07F4\u07F5\u07FA\u0800-\u0815\u081A\u0824\u0828\u0840-\u0858\u08A0\u08A2-\u08AC\u0904-\u0939\u093D\u0950\u0958-\u0961\u0971-\u0977\u0979-\u097F\u0985-\u098C\u098F\u0990\u0993-\u09A8\u09AA-\u09B0\u09B2\u09B6-\u09B9\u09BD\u09CE\u09DC\u09DD\u09DF-\u09E1\u09F0\u09F1\u0A05-\u0A0A\u0A0F\u0A10\u0A13-\u0A28\u0A2A-\u0A30\u0A32\u0A33\u0A35\u0A36\u0A38\u0A39\u0A59-\u0A5C\u0A5E\u0A72-\u0A74\u0A85-\u0A8D\u0A8F-\u0A91\u0A93-\u0AA8\u0AAA-\u0AB0\u0AB2\u0AB3\u0AB5-\u0AB9\u0ABD\u0AD0\u0AE0\u0AE1\u0B05-\u0B0C\u0B0F\u0B10\u0B13-\u0B28\u0B2A-\u0B30\u0B32\u0B33\u0B35-\u0B39\u0B3D\u0B5C\u0B5D\u0B5F-\u0B61\u0B71\u0B83\u0B85-\u0B8A\u0B8E-\u0B90\u0B92-\u0B95\u0B99\u0B9A\u0B9C\u0B9E\u0B9F\u0BA3\u0BA4\u0BA8-\u0BAA\u0BAE-\u0BB9\u0BD0\u0C05-\u0C0C\u0C0E-\u0C10\u0C12-\u0C28\u0C2A-\u0C33\u0C35-\u0C39\u0C3D\u0C58\u0C59\u0C60\u0C61\u0C85-\u0C8C\u0C8E-\u0C90\u0C92-\u0CA8\u0CAA-\u0CB3\u0CB5-\u0CB9\u0CBD\u0CDE\u0CE0\u0CE1\u0CF1\u0CF2\u0D05-\u0D0C\u0D0E-\u0D10\u0D12-\u0D3A\u0D3D\u0D4E\u0D60\u0D61\u0D7A-\u0D7F\u0D85-\u0D96\u0D9A-\u0DB1\u0DB3-\u0DBB\u0DBD\u0DC0-\u0DC6\u0E01-\u0E30\u0E32\u0E33\u0E40-\u0E46\u0E81\u0E82\u0E84\u0E87\u0E88\u0E8A\u0E8D\u0E94-\u0E97\u0E99-\u0E9F\u0EA1-\u0EA3\u0EA5\u0EA7\u0EAA\u0EAB\u0EAD-\u0EB0\u0EB2\u0EB3\u0EBD\u0EC0-\u0EC4\u0EC6\u0EDC-\u0EDF\u0F00\u0F40-\u0F47\u0F49-\u0F6C\u0F88-\u0F8C\u1000-\u102A\u103F\u1050-\u1055\u105A-\u105D\u1061\u1065\u1066\u106E-\u1070\u1075-\u1081\u108E\u10A0-\u10C5\u10C7\u10CD\u10D0-\u10FA\u10FC-\u1248\u124A-\u124D\u1250-\u1256\u1258\u125A-\u125D\u1260-\u1288\u128A-\u128D\u1290-\u12B0\u12B2-\u12B5\u12B8-\u12BE\u12C0\u12C2-\u12C5\u12C8-\u12D6\u12D8-\u1310\u1312-\u1315\u1318-\u135A\u1380-\u138F\u13A0-\u13F4\u1401-\u166C\u166F-\u167F\u1681-\u169A\u16A0-\u16EA\u16EE-\u16F0\u1700-\u170C\u170E-\u1711\u1720-\u1731\u1740-\u1751\u1760-\u176C\u176E-\u1770\u1780-\u17B3\u17D7\u17DC\u1820-\u1877\u1880-\u18A8\u18AA\u18B0-\u18F5\u1900-\u191C\u1950-\u196D\u1970-\u1974\u1980-\u19AB\u19C1-\u19C7\u1A00-\u1A16\u1A20-\u1A54\u1AA7\u1B05-\u1B33\u1B45-\u1B4B\u1B83-\u1BA0\u1BAE\u1BAF\u1BBA-\u1BE5\u1C00-\u1C23\u1C4D-\u1C4F\u1C5A-\u1C7D\u1CE9-\u1CEC\u1CEE-\u1CF1\u1CF5\u1CF6\u1D00-\u1DBF\u1E00-\u1F15\u1F18-\u1F1D\u1F20-\u1F45\u1F48-\u1F4D\u1F50-\u1F57\u1F59\u1F5B\u1F5D\u1F5F-\u1F7D\u1F80-\u1FB4\u1FB6-\u1FBC\u1FBE\u1FC2-\u1FC4\u1FC6-\u1FCC\u1FD0-\u1FD3\u1FD6-\u1FDB\u1FE0-\u1FEC\u1FF2-\u1FF4\u1FF6-\u1FFC\u2071\u207F\u2090-\u209C\u2102\u2107\u210A-\u2113\u2115\u2119-\u211D\u2124\u2126\u2128\u212A-\u212D\u212F-\u2139\u213C-\u213F\u2145-\u2149\u214E\u2160-\u2188\u2C00-\u2C2E\u2C30-\u2C5E\u2C60-\u2CE4\u2CEB-\u2CEE\u2CF2\u2CF3\u2D00-\u2D25\u2D27\u2D2D\u2D30-\u2D67\u2D6F\u2D80-\u2D96\u2DA0-\u2DA6\u2DA8-\u2DAE\u2DB0-\u2DB6\u2DB8-\u2DBE\u2DC0-\u2DC6\u2DC8-\u2DCE\u2DD0-\u2DD6\u2DD8-\u2DDE\u2E2F\u3005-\u3007\u3021-\u3029\u3031-\u3035\u3038-\u303C\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FC-\u30FF\u3105-\u312D\u3131-\u318E\u31A0-\u31BA\u31F0-\u31FF\u3400-\u4DB5\u4E00-\u9FCC\uA000-\uA48C\uA4D0-\uA4FD\uA500-\uA60C\uA610-\uA61F\uA62A\uA62B\uA640-\uA66E\uA67F-\uA697\uA6A0-\uA6EF\uA717-\uA71F\uA722-\uA788\uA78B-\uA78E\uA790-\uA793\uA7A0-\uA7AA\uA7F8-\uA801\uA803-\uA805\uA807-\uA80A\uA80C-\uA822\uA840-\uA873\uA882-\uA8B3\uA8F2-\uA8F7\uA8FB\uA90A-\uA925\uA930-\uA946\uA960-\uA97C\uA984-\uA9B2\uA9CF\uAA00-\uAA28\uAA40-\uAA42\uAA44-\uAA4B\uAA60-\uAA76\uAA7A\uAA80-\uAAAF\uAAB1\uAAB5\uAAB6\uAAB9-\uAABD\uAAC0\uAAC2\uAADB-\uAADD\uAAE0-\uAAEA\uAAF2-\uAAF4\uAB01-\uAB06\uAB09-\uAB0E\uAB11-\uAB16\uAB20-\uAB26\uAB28-\uAB2E\uABC0-\uABE2\uAC00-\uD7A3\uD7B0-\uD7C6\uD7CB-\uD7FB\uF900-\uFA6D\uFA70-\uFAD9\uFB00-\uFB06\uFB13-\uFB17\uFB1D\uFB1F-\uFB28\uFB2A-\uFB36\uFB38-\uFB3C\uFB3E\uFB40\uFB41\uFB43\uFB44\uFB46-\uFBB1\uFBD3-\uFD3D\uFD50-\uFD8F\uFD92-\uFDC7\uFDF0-\uFDFB\uFE70-\uFE74\uFE76-\uFEFC\uFF21-\uFF3A\uFF41-\uFF5A\uFF66-\uFFBE\uFFC2-\uFFC7\uFFCA-\uFFCF\uFFD2-\uFFD7\uFFDA-\uFFDC]/;
@@ -118661,7 +118661,7 @@ var require_truncate = __commonJS({
     function isLowSurrogate(codePoint) {
       return codePoint >= 56320 && codePoint <= 57343;
     }
-    module2.exports = function truncate2(getLength, string, byteLength) {
+    module2.exports = function truncate3(getLength, string, byteLength) {
       if (typeof string !== "string") {
         throw new Error("Input must be string");
       }
@@ -118692,9 +118692,9 @@ var require_truncate = __commonJS({
 var require_truncate_utf8_bytes = __commonJS({
   "node_modules/truncate-utf8-bytes/index.js"(exports2, module2) {
     "use strict";
-    var truncate2 = require_truncate();
+    var truncate3 = require_truncate();
     var getLength = Buffer.byteLength.bind(Buffer);
-    module2.exports = truncate2.bind(null, getLength);
+    module2.exports = truncate3.bind(null, getLength);
   }
 });
 
@@ -134309,7 +134309,9 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     `          POSTMAN_CLI_INSTALL_URL: ${installUrl}`,
     '        run: curl -fsSL "$POSTMAN_CLI_INSTALL_URL" | sh',
     "      - name: Login to Postman CLI",
-    "        run: postman login --with-api-key ${{ secrets.POSTMAN_API_KEY }}" + (postmanRegion === "eu" ? " --region eu" : ""),
+    "        env:",
+    "          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}",
+    '        run: postman login --with-api-key "$POSTMAN_API_KEY"' + (postmanRegion === "eu" ? " --region eu" : ""),
     "      - name: Resolve Postman Resource IDs",
     "        run: |",
     "          ruby <<'RUBY'",
@@ -134348,12 +134350,13 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "      - name: Run Smoke Tests",
     "        env:",
     "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+    ...privateMockAuth ? ["          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}"] : [],
     "        run: |",
     '          CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
     '            -e "$POSTMAN_ENVIRONMENT_UID"',
     "            --report-events",
     `            --env-var "CI_ENVIRONMENT=\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
-    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")'] : [],
+    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")'] : [],
     '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
     '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
     '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -134368,12 +134371,13 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "      - name: Run Contract Tests",
     "        env:",
     "          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}",
+    ...privateMockAuth ? ["          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}"] : [],
     "        run: |",
     '          CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
     '            -e "$POSTMAN_ENVIRONMENT_UID"',
     "            --report-events",
     `            --env-var "CI_ENVIRONMENT=\${{ vars.CI_ENVIRONMENT || 'Production' }}")`,
-    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=${{ secrets.POSTMAN_API_KEY }}")'] : [],
+    ...privateMockAuth ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")'] : [],
     '          if [ -f "$RUNNER_TEMP/postman-ssl/client.crt" ]; then',
     '            CMD+=(--ssl-client-cert "$RUNNER_TEMP/postman-ssl/client.crt"',
     '              --ssl-client-key "$RUNNER_TEMP/postman-ssl/client.key")',
@@ -134400,7 +134404,9 @@ function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentNam
     `      $collectionUid = $env:${collectionEnvironmentName}`,
     "      $ciEnvironment = Resolve-AdoOptional $env:CI_ENVIRONMENT",
     "      if ([string]::IsNullOrWhiteSpace($ciEnvironment)) { $ciEnvironment = 'Production' }",
-    `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment")`,
+    "      $responseTimeThreshold = Resolve-AdoOptional $env:RESPONSE_TIME_THRESHOLD",
+    "      if ([string]::IsNullOrWhiteSpace($responseTimeThreshold)) { $responseTimeThreshold = '10000' }",
+    `      $arguments = @('collection', 'run', $collectionUid, '-e', $env:POSTMAN_ENVIRONMENT_UID, '--report-events', '--env-var', "CI_ENVIRONMENT=$ciEnvironment", '--env-var', "RESPONSE_TIME_THRESHOLD=$responseTimeThreshold")`,
     ...privateMockAuth ? [`      $arguments += @('--env-var', "${PRIVATE_MOCK_AUTH_VARIABLE}=$env:POSTMAN_API_KEY")`] : [],
     "      $sslRoot = Join-Path $env:AGENT_TEMPDIRECTORY 'postman-ssl'",
     "      $clientCert = Join-Path $sslRoot 'client.crt'",
@@ -134423,6 +134429,7 @@ function buildAdoWindowsCollectionRunLines(displayName, collectionEnvironmentNam
     `      ${collectionEnvironmentName}: $(${collectionEnvironmentName})`,
     "      POSTMAN_ENVIRONMENT_UID: $(POSTMAN_ENVIRONMENT_UID)",
     "      CI_ENVIRONMENT: $(CI_ENVIRONMENT)",
+    "      RESPONSE_TIME_THRESHOLD: $(RESPONSE_TIME_THRESHOLD)",
     "      POSTMAN_SSL_CLIENT_PASSPHRASE: $(POSTMAN_SSL_CLIENT_PASSPHRASE)",
     ...privateMockAuth ? ["      POSTMAN_API_KEY: $(POSTMAN_API_KEY)"] : []
   ];
@@ -135192,7 +135199,7 @@ function detectRepoContext(input, env = process.env) {
   };
 }
 
-// node_modules/@postman-cse/automation-telemetry-core/dist/ci-context.js
+// node_modules/@postman-cse/automation-core/dist/ci-context.js
 function norm(value) {
   const trimmed = (value ?? "").trim();
   return trimmed.length > 0 ? trimmed : void 0;
@@ -135343,7 +135350,7 @@ function detectCiProviderContext(env = process.env) {
   return { ciProvider: "unknown", runnerKind: "unknown" };
 }
 
-// node_modules/@postman-cse/automation-telemetry-core/dist/repo-context.js
+// node_modules/@postman-cse/automation-core/dist/repo-context.js
 function normalize2(value) {
   const trimmed = (value ?? "").trim();
   return trimmed.length > 0 ? trimmed : void 0;
@@ -135432,7 +135439,7 @@ function detectRepoContext2(input, env = process.env) {
   };
 }
 
-// node_modules/@postman-cse/automation-telemetry-core/dist/telemetry.js
+// node_modules/@postman-cse/automation-core/dist/telemetry.js
 var import_node_crypto = require("node:crypto");
 var import_undici2 = __toESM(require_undici(), 1);
 var SCHEMA_VERSION = 3;
@@ -135442,9 +135449,13 @@ var proxyDispatcher;
 function getProxyDispatcher() {
   return proxyDispatcher ??= new import_undici2.EnvHttpProxyAgent();
 }
-function resolveActionVersion(explicit) {
+function resolveActionVersion(explicit, env = process.env) {
   if (explicit) {
     return explicit;
+  }
+  const ref = env.GITHUB_ACTION_REF?.trim();
+  if (ref) {
+    return ref;
   }
   return typeof __ACTION_VERSION__ !== "undefined" && __ACTION_VERSION__ ? __ACTION_VERSION__ : "unknown";
 }
@@ -135528,7 +135539,7 @@ async function send(event, options) {
 function createTelemetryContext(options) {
   const env = options.env ?? process.env;
   const now = options.now ?? Date.now;
-  const actionVersion = resolveActionVersion(options.actionVersion);
+  const actionVersion = resolveActionVersion(options.actionVersion, env);
   let teamId = "";
   let accountType = "unknown";
   let emitted = false;
@@ -135568,6 +135579,186 @@ function createTelemetryContext(options) {
   };
 }
 
+// node_modules/@postman-cse/automation-core/dist/logger.js
+var LEVEL_ORDER = {
+  debug: 10,
+  info: 20,
+  warning: 30,
+  error: 40
+};
+function defaultCorrelationId() {
+  return Math.random().toString(36).slice(2, 10);
+}
+function resolveLogLevel(env = process.env) {
+  const explicit = String(env.POSTMAN_ACTIONS_LOG_LEVEL ?? "").trim().toLowerCase();
+  if (explicit === "debug" || explicit === "trace" || explicit === "verbose")
+    return "debug";
+  if (explicit === "info")
+    return "info";
+  if (explicit === "warn" || explicit === "warning")
+    return "warning";
+  if (explicit === "error" || explicit === "quiet")
+    return "error";
+  if (isTruthyFlag(env.RUNNER_DEBUG) || isTruthyFlag(env.ACTIONS_STEP_DEBUG))
+    return "debug";
+  if (isTruthyFlag(env.POSTMAN_ACTIONS_DEBUG))
+    return "debug";
+  return "info";
+}
+function isTruthyFlag(value) {
+  if (!value)
+    return false;
+  const flag = value.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes" || flag === "on";
+}
+function actionSink(core) {
+  return {
+    debug: (message) => core.debug?.(message),
+    info: (message) => core.info(message),
+    warning: (message) => (core.warning ?? core.info)(message),
+    error: (message) => (core.error ?? core.warning ?? core.info)(message),
+    startGroup: core.startGroup ? (name) => core.startGroup?.(name) : void 0,
+    endGroup: core.endGroup ? () => core.endGroup?.() : void 0,
+    isDebug: core.isDebug ? () => core.isDebug?.() ?? false : void 0
+  };
+}
+var MIN_SECRET_LENGTH = 4;
+function renderValue(value, maxLength = 512) {
+  if (value === void 0)
+    return "undefined";
+  if (value === null)
+    return "null";
+  if (typeof value === "string")
+    return truncate(value, maxLength);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value instanceof Error)
+    return truncate(describeError(value), maxLength);
+  if (Array.isArray(value)) {
+    return truncate(`[${value.map((entry) => renderValue(entry, 120)).join(", ")}]`, maxLength);
+  }
+  try {
+    return truncate(JSON.stringify(value) ?? String(value), maxLength);
+  } catch {
+    return "<unserializable>";
+  }
+}
+function truncate(text, maxLength) {
+  if (text.length <= maxLength)
+    return text;
+  return `${text.slice(0, maxLength)}\u2026 (+${text.length - maxLength} chars)`;
+}
+function describeError(error2, maxDepth = 5) {
+  const parts = [];
+  let current = error2;
+  let depth = 0;
+  while (current !== void 0 && current !== null && depth < maxDepth) {
+    if (current instanceof Error) {
+      const code = current.code;
+      parts.push(code ? `${current.name}[${code}]: ${current.message}` : `${current.name}: ${current.message}`);
+      current = current.cause;
+    } else if (typeof current === "object") {
+      try {
+        parts.push(JSON.stringify(current) ?? String(current));
+      } catch {
+        parts.push(String(current));
+      }
+      current = void 0;
+    } else {
+      parts.push(String(current));
+      current = void 0;
+    }
+    depth += 1;
+  }
+  if (parts.length === 0)
+    return "unknown error";
+  return parts.join(" <- caused by ");
+}
+function createLogger(options) {
+  const env = options.env ?? process.env;
+  const level = options.level ?? resolveLogLevel(env);
+  const secrets = options.secrets ?? /* @__PURE__ */ new Set();
+  const correlationId = options.correlationId ?? defaultCorrelationId();
+  const now = options.now ?? (() => Date.now());
+  const threshold = LEVEL_ORDER[level];
+  function addSecret(value) {
+    if (typeof value !== "string")
+      return;
+    const trimmed = value.trim();
+    if (trimmed.length < MIN_SECRET_LENGTH)
+      return;
+    secrets.add(trimmed);
+  }
+  function redact(text) {
+    let output = typeof text === "string" ? text : renderValue(text, 4096);
+    for (const secret of secrets) {
+      if (!secret)
+        continue;
+      output = output.split(secret).join("***");
+      const encoded = encodeURIComponent(secret);
+      if (encoded !== secret)
+        output = output.split(encoded).join("***");
+    }
+    return output;
+  }
+  function build2(baseFields) {
+    function emit(target, message, fields) {
+      if (LEVEL_ORDER[target] < threshold)
+        return;
+      const merged = { ...baseFields, ...fields ?? {} };
+      const rendered = Object.entries(merged).filter(([, value]) => value !== void 0).map(([key, value]) => `${key}=${redact(renderValue(value))}`).join(" ");
+      const line = rendered ? `${redact(message)} | ${rendered}` : redact(message);
+      switch (target) {
+        case "debug":
+          options.sink.debug(line);
+          break;
+        case "info":
+          options.sink.info(line);
+          break;
+        case "warning":
+          options.sink.warning(line);
+          break;
+        case "error":
+          options.sink.error(line);
+          break;
+      }
+    }
+    const logger = {
+      level,
+      correlationId,
+      addSecret,
+      redact,
+      isDebug: () => threshold <= LEVEL_ORDER.debug,
+      debug: (message, fields) => emit("debug", message, fields),
+      info: (message, fields) => emit("info", message, fields),
+      warning: (message, fields) => emit("warning", message, fields),
+      error: (message, fields) => emit("error", message, fields),
+      failure: (message, error2, fields) => emit("error", message, { ...fields ?? {}, error: describeError(error2) }),
+      child: (fields) => build2({ ...baseFields, ...fields }),
+      async phase(name, fn, fields) {
+        const scoped = build2({ ...baseFields, ...fields ?? {}, phase: name });
+        const started = now();
+        scoped.debug("phase start");
+        options.sink.startGroup?.(name);
+        try {
+          const result = await fn();
+          scoped.debug("phase ok", { duration_ms: Math.round(now() - started) });
+          return result;
+        } catch (error2) {
+          scoped.failure("phase failed", error2, { duration_ms: Math.round(now() - started) });
+          throw error2;
+        } finally {
+          options.sink.endGroup?.();
+        }
+      }
+    };
+    return logger;
+  }
+  const root = build2({ run: correlationId, ...options.fields ?? {} });
+  return root;
+}
+
 // src/action-version.ts
 var import_node_fs3 = require("node:fs");
 var import_node_path2 = require("node:path");
@@ -135584,7 +135775,7 @@ function resolveActionVersion2() {
 }
 
 // src/lib/http-error.ts
-function truncate(value, limit) {
+function truncate2(value, limit) {
   if (value.length <= limit) {
     return value;
   }
@@ -135594,7 +135785,7 @@ function buildMessage(init) {
   const method = String(init.method || "GET").toUpperCase();
   const status = `${init.status}${init.statusText ? ` ${init.statusText}` : ""}`;
   const url = redactSecrets(init.url, init.secretValues);
-  const body = truncate(
+  const body = truncate2(
     redactSecrets(init.responseBody || "", init.secretValues),
     Math.max(0, init.bodyLimit ?? 800)
   );
@@ -136973,31 +137164,13 @@ var PostmanAssetsClient = class {
   }
 };
 
-// src/lib/postman/postman-gateway-assets-client.ts
-var MockContractError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "MockContractError";
-  }
-};
-function requireMockVisibility(mock, requested) {
-  if (mock.visibility === "unknown") {
-    throw new MockContractError(
-      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is callable.`
-    );
-  }
-  if (mock.visibility !== requested) {
-    const code = requested === "public" ? "MOCK_NOT_PUBLIC" : "MOCK_NOT_PRIVATE";
-    throw new MockContractError(
-      `${code}: Mock ${mock.uid} is ${mock.visibility}, but mock-visibility requires ${requested}. Change the mock visibility in Postman or set mock-visibility to ${mock.visibility}.`
-    );
-  }
-  return mock;
-}
+// src/lib/postman/private-mock-auth-script.ts
 var LEGACY_PRIVATE_MOCK_AUTH_MARKER = "postman-enterprise-automation: private-mock-auth";
 var PRIVATE_MOCK_AUTH_V2_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
-var PRIVATE_MOCK_AUTH_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v3`;
+var PRIVATE_MOCK_AUTH_V3_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v3`;
 var PRIVATE_MOCK_AUTH_VARIABLE2 = "postmanPrivateMockApiKey";
+var PRIVATE_MOCK_AUTH_ROOT_TYPE = "http:beforeRequest";
+var PRIVATE_MOCK_AUTH_ROOT_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-root`;
 var LEGACY_PRIVATE_MOCK_AUTH_SCRIPT = [
   `// ${LEGACY_PRIVATE_MOCK_AUTH_MARKER}`,
   `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
@@ -137018,8 +137191,8 @@ var PRIVATE_MOCK_AUTH_V2_SCRIPT = [
   `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
   "}"
 ].join("\n");
-var PRIVATE_MOCK_AUTH_SCRIPT = [
-  `// ${PRIVATE_MOCK_AUTH_MARKER}`,
+var PRIVATE_MOCK_AUTH_V3_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_V3_MARKER}`,
   `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
   "var privateMockHost = '';",
   "try {",
@@ -137035,8 +137208,330 @@ var PRIVATE_MOCK_AUTH_SCRIPT = [
   `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
   "}"
 ].join("\n");
-function removeLegacyPrivateMockAuth(code) {
-  return [LEGACY_PRIVATE_MOCK_AUTH_SCRIPT, PRIVATE_MOCK_AUTH_V2_SCRIPT].reduce((next, script) => next.split(script).join(""), code).trim();
+var PRIVATE_MOCK_AUTH_ROOT_SCRIPT = [
+  `// ${PRIVATE_MOCK_AUTH_ROOT_MARKER}`,
+  `var privateMockApiKey = pm.variables.get('${PRIVATE_MOCK_AUTH_VARIABLE2}');`,
+  "var privateMockHost = '';",
+  "try {",
+  "  var privateMockUrl = pm.variables.replaceIn(pm.request.url.toString());",
+  "  privateMockHost = new URL(privateMockUrl).hostname;",
+  "} catch (error) {",
+  "  console.warn('Could not resolve the request URL for private mock authentication; x-api-key was not added.');",
+  "}",
+  "var isPrivateMockHost = /(^|\\.)mock\\.pstmn\\.io$/i.test(privateMockHost);",
+  "if (isPrivateMockHost && privateMockApiKey) {",
+  "  pm.request.headers.upsert({ key: 'x-api-key', value: privateMockApiKey });",
+  "} else if (isPrivateMockHost) {",
+  `  console.warn('This mock server is private. Set the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable to a Postman API key with access to it, or the request returns 401.');`,
+  "}"
+].join("\n");
+var MANAGED_ITEM_AUTH_BLOCKS = [
+  LEGACY_PRIVATE_MOCK_AUTH_SCRIPT,
+  PRIVATE_MOCK_AUTH_V2_SCRIPT,
+  PRIVATE_MOCK_AUTH_V3_SCRIPT
+];
+function isManagedPrivateMockAuthRootHook(script) {
+  return String(script.type ?? "") === PRIVATE_MOCK_AUTH_ROOT_TYPE && String(script.code ?? "") === PRIVATE_MOCK_AUTH_ROOT_SCRIPT;
+}
+var REGEX_PREFIX_KEYWORDS = /* @__PURE__ */ new Set([
+  "await",
+  "case",
+  "delete",
+  "do",
+  "else",
+  "in",
+  "instanceof",
+  "of",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "yield"
+]);
+function isIdentifierStart(ch) {
+  return ch !== void 0 && /[A-Za-z_$]/.test(ch);
+}
+function isIdentifierPart(ch) {
+  return ch !== void 0 && /[A-Za-z0-9_$]/.test(ch);
+}
+function markTopLevelScriptBytes(source) {
+  const topLevel = new Uint8Array(source.length);
+  let state = "script";
+  let canStartRegex = true;
+  let regexCharacterClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (state === "script") {
+      topLevel[i] = 1;
+      if (ch === "/" && next === "*") {
+        topLevel[i] = 0;
+        state = "block_comment";
+        i++;
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === "/" && next === "/") {
+        topLevel[i + 1] = 1;
+        i++;
+        while (i + 1 < source.length && source[i + 1] !== "\n") {
+          i++;
+          topLevel[i] = 1;
+        }
+        continue;
+      }
+      if (ch === "/") {
+        if (canStartRegex) {
+          topLevel[i] = 0;
+          state = "regex";
+          regexCharacterClass = false;
+          continue;
+        }
+        canStartRegex = true;
+        if (next === "=") {
+          i++;
+          topLevel[i] = 1;
+        }
+        continue;
+      }
+      if (ch === "'") {
+        state = "single";
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === '"') {
+        state = "double";
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === "`") {
+        state = "template";
+        topLevel[i] = 0;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        continue;
+      }
+      if (isIdentifierStart(ch)) {
+        let end = i + 1;
+        while (isIdentifierPart(source[end])) {
+          topLevel[end] = 1;
+          end++;
+        }
+        canStartRegex = REGEX_PREFIX_KEYWORDS.has(source.slice(i, end));
+        i = end - 1;
+        continue;
+      }
+      if (/[0-9]/.test(ch)) {
+        let end = i + 1;
+        while (/[A-Za-z0-9_.]/.test(source[end] ?? "")) {
+          topLevel[end] = 1;
+          end++;
+        }
+        canStartRegex = false;
+        i = end - 1;
+        continue;
+      }
+      if ((ch === "+" || ch === "-") && next === ch) {
+        const wasPrefix = canStartRegex;
+        i++;
+        topLevel[i] = 1;
+        canStartRegex = wasPrefix;
+        continue;
+      }
+      if (ch === "?" && next === ".") {
+        i++;
+        topLevel[i] = 1;
+        canStartRegex = false;
+        continue;
+      }
+      if (")]}".includes(ch) || ch === ".") {
+        canStartRegex = false;
+        continue;
+      }
+      if ("([{,;:=!~*%&|^<>+-?".includes(ch)) {
+        canStartRegex = true;
+        continue;
+      }
+      canStartRegex = false;
+      continue;
+    }
+    if (state === "block_comment") {
+      topLevel[i] = 0;
+      if (ch === "*" && next === "/") {
+        topLevel[i] = 0;
+        i++;
+        topLevel[i] = 0;
+        state = "script";
+      }
+      continue;
+    }
+    if (state === "single") {
+      topLevel[i] = 0;
+      if (ch === "\\" && i + 1 < source.length) {
+        i++;
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === "'") {
+        state = "script";
+        canStartRegex = false;
+      }
+      continue;
+    }
+    if (state === "double") {
+      topLevel[i] = 0;
+      if (ch === "\\" && i + 1 < source.length) {
+        i++;
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === '"') {
+        state = "script";
+        canStartRegex = false;
+      }
+      continue;
+    }
+    if (state === "regex") {
+      topLevel[i] = 0;
+      if (ch === "\\" && i + 1 < source.length) {
+        i++;
+        topLevel[i] = 0;
+        continue;
+      }
+      if (ch === "\n" || ch === "\r") {
+        state = "script";
+        canStartRegex = true;
+        regexCharacterClass = false;
+        continue;
+      }
+      if (ch === "[") {
+        regexCharacterClass = true;
+        continue;
+      }
+      if (ch === "]" && regexCharacterClass) {
+        regexCharacterClass = false;
+        continue;
+      }
+      if (ch === "/" && !regexCharacterClass) {
+        while (isIdentifierPart(source[i + 1])) {
+          i++;
+          topLevel[i] = 0;
+        }
+        state = "script";
+        canStartRegex = false;
+      }
+      continue;
+    }
+    topLevel[i] = 0;
+    if (ch === "\\" && i + 1 < source.length) {
+      i++;
+      topLevel[i] = 0;
+      continue;
+    }
+    if (ch === "`") {
+      state = "script";
+      canStartRegex = false;
+    }
+  }
+  return topLevel;
+}
+function isWholeLineTopLevelMatch(source, startIndex, block, topLevel) {
+  if (!source.startsWith(block, startIndex)) {
+    return false;
+  }
+  if (startIndex > 0 && source[startIndex - 1] !== "\n") {
+    return false;
+  }
+  const endIndex = startIndex + block.length;
+  for (let lineStart = startIndex; lineStart < endIndex; ) {
+    if (!topLevel[lineStart]) {
+      return false;
+    }
+    const nextNewline = source.indexOf("\n", lineStart);
+    if (nextNewline === -1 || nextNewline >= endIndex - 1) {
+      break;
+    }
+    lineStart = nextNewline + 1;
+  }
+  return true;
+}
+function findManagedBlockRanges(source) {
+  const topLevel = markTopLevelScriptBytes(source);
+  const ranges = [];
+  for (let i = 0; i < source.length; i++) {
+    if (i > 0 && source[i - 1] !== "\n") {
+      continue;
+    }
+    for (const block of MANAGED_ITEM_AUTH_BLOCKS) {
+      if (!isWholeLineTopLevelMatch(source, i, block, topLevel)) {
+        continue;
+      }
+      ranges.push({ start: i, end: i + block.length });
+      break;
+    }
+  }
+  return ranges;
+}
+function countManagedItemAuthBlocks(code) {
+  if (typeof code !== "string" || !code) {
+    return 0;
+  }
+  return findManagedBlockRanges(code).length;
+}
+function deleteRangeWithSeam(source, start, end) {
+  let before = source.slice(0, start);
+  let after = source.slice(end);
+  const beforeHadNl = before.endsWith("\n");
+  const afterHadNl = after.startsWith("\n");
+  if (beforeHadNl) {
+    before = before.slice(0, -1);
+  }
+  if (afterHadNl) {
+    after = after.slice(1);
+  }
+  if (beforeHadNl && afterHadNl && before.length > 0 && after.length > 0) {
+    return `${before}
+${after}`;
+  }
+  return `${before}${after}`;
+}
+function stripManagedItemAuthBlocks(code) {
+  if (typeof code !== "string" || !code) {
+    return "";
+  }
+  const ranges = findManagedBlockRanges(code);
+  if (ranges.length === 0) {
+    return code;
+  }
+  ranges.sort((left, right) => right.start - left.start);
+  let next = code;
+  for (const range of ranges) {
+    next = deleteRangeWithSeam(next, range.start, range.end);
+  }
+  return next;
+}
+
+// src/lib/postman/postman-gateway-assets-client.ts
+var MockContractError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MockContractError";
+  }
+};
+function requireMockVisibility(mock, requested) {
+  if (mock.visibility === "unknown") {
+    throw new MockContractError(
+      `MOCK_VISIBILITY_UNKNOWN: Mock ${mock.uid} did not expose a supported visibility field. Refusing to assume it is callable.`
+    );
+  }
+  if (mock.visibility !== requested) {
+    const code = requested === "public" ? "MOCK_NOT_PUBLIC" : "MOCK_NOT_PRIVATE";
+    throw new MockContractError(
+      `${code}: Mock ${mock.uid} is ${mock.visibility}, but mock-visibility requires ${requested}. Change the mock visibility in Postman or set mock-visibility to ${mock.visibility}.`
+    );
+  }
+  return mock;
 }
 var MAX_CREATE_FLIGHTS = 256;
 var createFlights = /* @__PURE__ */ new Map();
@@ -137607,51 +138102,83 @@ var PostmanGatewayAssetsClient = class {
       }
     });
   }
+  isAmbiguousTransportError(error2) {
+    return this.isRetryableIdempotentWriteOutcome(error2);
+  }
+  normalizeCollectionScripts(scripts) {
+    if (!Array.isArray(scripts)) return [];
+    return scripts.map((entry) => this.asRecord(entry)).filter((entry) => entry !== null);
+  }
+  rootScriptsIncludeManagedAuthHook(scripts) {
+    return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
+  }
+  buildPrivateMockRootScripts(existingScripts) {
+    const managedScript = {
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+      language: "text/javascript"
+    };
+    return [...existingScripts, managedScript];
+  }
+  async readCollectionRootScripts(collectionUid) {
+    const id = this.toModelId(collectionUid);
+    const response = await this.gateway.requestJson({
+      service: "collection",
+      method: "get",
+      path: `/v3/collections/${id}/export`
+    });
+    const data = this.asRecord(response?.data);
+    const collection = this.asRecord(data?.collection);
+    if (!collection) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection ${id} export did not return data.collection; refusing to configure private-mock root auth from an unexpected envelope.`
+      );
+    }
+    return this.normalizeCollectionScripts(collection.scripts);
+  }
+  async patchCollectionRootScripts(collectionUid, scripts) {
+    const id = this.toModelId(collectionUid);
+    await this.gateway.requestJson(
+      {
+        service: "collection",
+        method: "patch",
+        path: `/v3/collections/${id}`,
+        body: [{ op: "add", path: "/scripts", value: scripts }]
+      },
+      { retryTransient: false }
+    );
+  }
   /**
-   * Add a secret-free runtime hook to every HTTP request in a collection. The
-   * PMAK value is supplied only by the runner as a transient variable; this
-   * method persists the variable name and header wiring, never the credential.
+   * Add a secret-free runtime hook at the collection root. The PMAK value is
+   * supplied only by the runner as a transient variable; this method persists
+   * the variable name and header wiring, never the credential.
    */
   async configurePrivateMockRuntimeAuth(collectionUid) {
     const cid = String(collectionUid ?? "").trim();
     if (!cid) return 0;
-    const listed = await this.gateway.requestJson({
-      service: "collection",
-      method: "get",
-      path: `/v3/collections/${cid}/items/`
-    });
-    const items = Array.isArray(listed?.data) ? listed.data : [];
-    let patched = 0;
-    for (const listedItem of items) {
-      if (String(listedItem.$kind ?? "") !== "http-request") continue;
-      const itemId = String(listedItem.id ?? "").trim();
-      if (!itemId) continue;
-      const response = await this.gateway.requestJson({
-        service: "collection",
-        method: "get",
-        path: `/v3/collections/${cid}/items/${itemId}`,
-        headers: { "X-Entity-Type": "http-request" }
-      });
-      const item = this.asRecord(response?.data) ?? listedItem;
-      const scripts = Array.isArray(item.scripts) ? item.scripts.filter((entry) => Boolean(this.asRecord(entry))) : [];
-      const before = scripts.find((script) => String(script.type ?? "") === "beforeRequest");
-      const existingCode = String(before?.code ?? "");
-      if (existingCode.includes(PRIVATE_MOCK_AUTH_MARKER)) continue;
-      const code = [removeLegacyPrivateMockAuth(existingCode), PRIVATE_MOCK_AUTH_SCRIPT].filter(Boolean).join("\n");
-      const nextScripts = [
-        ...scripts.filter((script) => String(script.type ?? "") !== "beforeRequest"),
-        { type: "beforeRequest", code, language: "text/javascript" }
-      ];
-      await this.gateway.requestJson({
-        service: "collection",
-        method: "patch",
-        path: `/v3/collections/${cid}/items/${itemId}`,
-        headers: { "X-Entity-Type": "http-request" },
-        body: [{ op: "add", path: "/scripts", value: nextScripts }]
-      });
-      patched += 1;
-    }
-    return patched;
+    const installFromFreshRoot = async (existingScripts) => {
+      if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
+        return 0;
+      }
+      const nextScripts = this.buildPrivateMockRootScripts(existingScripts);
+      try {
+        await this.patchCollectionRootScripts(cid, nextScripts);
+        return 1;
+      } catch (error2) {
+        if (!this.isAmbiguousTransportError(error2)) {
+          throw error2;
+        }
+        const freshScripts = await this.readCollectionRootScripts(cid);
+        if (this.rootScriptsIncludeManagedAuthHook(freshScripts)) {
+          return 1;
+        }
+        const recomputed = this.buildPrivateMockRootScripts(freshScripts);
+        await this.patchCollectionRootScripts(cid, recomputed);
+        return 1;
+      }
+    };
+    const scripts = await this.readCollectionRootScripts(cid);
+    return installFromFreshRoot(scripts);
   }
   async listMocks() {
     const response = await this.gateway.requestJson({
@@ -137735,12 +138262,13 @@ var PostmanGatewayAssetsClient = class {
   }
   async createMonitor(workspaceId, name, collectionUid, environmentUid, cronSchedule) {
     const ws = workspaceId || this.workspaceId;
-    const effectiveCron = cronSchedule && cronSchedule.trim() ? cronSchedule.trim() : "0 0 * * 0";
+    const cronTrimmed = String(cronSchedule ?? "").trim();
+    const hasCron = cronTrimmed.length > 0;
     const monitorName = String(name ?? "").trim();
     const collection = String(collectionUid ?? "").trim();
     const environment = String(environmentUid ?? "").trim();
     const flightKey = `monitor:${ws}:${collection}:${environment}:${monitorName}`;
-    return this.singleFlight(flightKey, effectiveCron, "monitor", async () => {
+    return this.singleFlight(flightKey, hasCron ? cronTrimmed : "inactive", "monitor", async () => {
       const existing = await this.findMonitorByCollection(collection, environment, monitorName);
       if (existing?.uid) {
         return existing.uid;
@@ -137748,11 +138276,12 @@ var PostmanGatewayAssetsClient = class {
       const body = {
         name: monitorName,
         collection,
+        active: hasCron,
         options: { strictSSL: false, followRedirects: true, requestTimeout: null, requestDelay: 0 },
         notifications: { onFailure: [], onError: [] },
         retry: {},
-        schedule: { cronPattern: effectiveCron, timeZone: "UTC" },
         distribution: null,
+        ...hasCron ? { schedule: { cronPattern: cronTrimmed, timeZone: "UTC" } } : {},
         ...environment ? { environment } : {}
       };
       const send2 = (fallback) => this.gateway.requestJson(
@@ -137837,6 +138366,128 @@ var PostmanGatewayAssetsClient = class {
     );
   }
 };
+
+// src/lib/postman/private-mock-export-cleanup.ts
+function asArray2(value) {
+  return Array.isArray(value) ? value : [];
+}
+function cloneScriptRecord(script) {
+  if (!script || typeof script !== "object" || Array.isArray(script)) {
+    return script;
+  }
+  return { ...script };
+}
+function cloneCollectionNodeIterative(collection) {
+  const cloned = { ...collection };
+  if (Array.isArray(collection.scripts)) {
+    cloned.scripts = collection.scripts.map((script) => cloneScriptRecord(script));
+  }
+  const stack = [];
+  const attachNested = (source, target) => {
+    if (Array.isArray(source.scripts)) {
+      target.scripts = source.scripts.map((script) => cloneScriptRecord(script));
+    }
+    for (const key of ["items", "children"]) {
+      const nested = asArray2(source[key]);
+      if (nested.length === 0) {
+        continue;
+      }
+      const clonedNested = nested.map((item) => ({ ...item }));
+      target[key] = clonedNested;
+      for (let i = 0; i < nested.length; i += 1) {
+        stack.push({ source: nested[i], target: clonedNested[i] });
+      }
+    }
+  };
+  attachNested(collection, cloned);
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    attachNested(frame.source, frame.target);
+  }
+  return cloned;
+}
+function cloneCollection(collection) {
+  if (typeof globalThis.structuredClone === "function") {
+    try {
+      return globalThis.structuredClone(collection);
+    } catch {
+    }
+  }
+  try {
+    return JSON.parse(JSON.stringify(collection));
+  } catch {
+    return cloneCollectionNodeIterative(collection);
+  }
+}
+function isPrivateMockLegacyExportCleanupEnabled() {
+  const value = String(process.env.POSTMAN_PRIVATE_MOCK_LEGACY_EXPORT_CLEANUP ?? "").trim().toLowerCase();
+  return value !== "off";
+}
+function verifyPrivateMockRootHook(collection) {
+  const scripts = asArray2(collection.scripts);
+  return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
+}
+function applyPrivateMockExportCleanup(collection, options = {}) {
+  const stripManagedBlocks = options.stripManagedBlocks ?? isPrivateMockLegacyExportCleanupEnabled();
+  const cloned = cloneCollection(collection);
+  let strippedBlocks = 0;
+  const visitItem = (item) => {
+    if (!stripManagedBlocks) {
+      return;
+    }
+    const scripts = item.scripts;
+    if (!Array.isArray(scripts)) {
+      return;
+    }
+    const nextScripts = [];
+    for (const script of scripts) {
+      if (!script || typeof script !== "object" || Array.isArray(script)) {
+        nextScripts.push(script);
+        continue;
+      }
+      const record = script;
+      if (String(record.type ?? "") !== "beforeRequest") {
+        nextScripts.push(record);
+        continue;
+      }
+      const originalCode = String(record.code ?? "");
+      const cleaned = stripManagedItemAuthBlocks(originalCode);
+      if (cleaned === originalCode) {
+        nextScripts.push(record);
+        continue;
+      }
+      strippedBlocks += countManagedItemAuthBlocks(originalCode);
+      if (!cleaned) {
+        continue;
+      }
+      nextScripts.push({ ...record, code: cleaned });
+    }
+    if (nextScripts.length === 0) {
+      delete item.scripts;
+    } else {
+      item.scripts = nextScripts;
+    }
+  };
+  const walkItemsIteratively = (rootItems) => {
+    const stack = [...rootItems].reverse();
+    while (stack.length > 0) {
+      const item = stack.pop();
+      visitItem(item);
+      for (const key of ["items", "children"]) {
+        const nested = asArray2(item[key]);
+        for (let i = nested.length - 1; i >= 0; i -= 1) {
+          stack.push(nested[i]);
+        }
+      }
+    }
+  };
+  walkItemsIteratively(asArray2(cloned.items));
+  return {
+    collection: cloned,
+    strippedBlocks,
+    rootVerified: verifyPrivateMockRootHook(cloned)
+  };
+}
 
 // src/lib/postman/token-provider.ts
 var MintError = class extends Error {
@@ -138647,6 +139298,15 @@ var identitySecretMasker = (input) => input;
 function resolveRepoSyncMasker(dependencies) {
   return dependencies.secretMasker ?? identitySecretMasker;
 }
+function resolveRepoSyncLogger(dependencies) {
+  return dependencies.logger ?? createLogger({
+    sink: actionSink(dependencies.core),
+    fields: {
+      action: "postman-repo-sync-action",
+      action_version: resolveActionVersion2()
+    }
+  });
+}
 function causeText(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -139063,13 +139723,51 @@ function normalizeToPosix(filePath) {
 function canonicalizeRelativePath(value) {
   return normalizeToPosix(String(value ?? "").trim()).replace(/^\.\/+/, "").replace(/\/{2,}/g, "/").replace(/\/+$/g, "");
 }
-function isOpenApiSpecFile(filePath) {
-  if (!(filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml"))) {
-    return false;
+var LOCAL_SPEC_DISCOVERY_MAX_DEPTH = 6;
+var LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES = 1e4;
+var LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES = 200;
+var LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES = 512 * 1024;
+var LOCAL_SPEC_DISCOVERY_IGNORED_DIRS = /* @__PURE__ */ new Set([
+  ".git",
+  ".nyc_output",
+  ".omc",
+  ".omx",
+  ".llm-plans",
+  ".pulumi",
+  ".terraform",
+  ".venv",
+  "__pycache__",
+  "bin",
+  "build",
+  "coverage",
+  "discovered-specs",
+  "node_modules",
+  "dist",
+  "obj",
+  "out",
+  "target",
+  "vendor",
+  "venv"
+]);
+var LocalSpecDiscoveryLimitError = class extends Error {
+  code = "CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT";
+  constructor(message) {
+    super(`CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT: ${message}`);
+    this.name = "LocalSpecDiscoveryLimitError";
   }
+};
+function failLocalSpecDiscoveryLimit(detail) {
+  throw new LocalSpecDiscoveryLimitError(
+    `${detail} Set spec-path to the OpenAPI file explicitly and keep generated trees (for example dist/, node_modules/) out of the repository layout.`
+  );
+}
+function isSpecCandidateExtension(filePath) {
+  return filePath.endsWith(".json") || filePath.endsWith(".yaml") || filePath.endsWith(".yml");
+}
+function readOpenApiSpecFile(fullPath) {
   try {
-    const raw = (0, import_node_fs5.readFileSync)(filePath, "utf8");
-    const parsed = filePath.endsWith(".json") ? JSON.parse(raw) : load(raw);
+    const raw = (0, import_node_fs5.readFileSync)(fullPath, "utf8");
+    const parsed = fullPath.endsWith(".json") ? JSON.parse(raw) : load(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
@@ -139085,28 +139783,75 @@ function isOpenApiSpecFile(filePath) {
   }
   return false;
 }
-function scanLocalSpecReferences(baseDir = ".") {
-  const ignoredDirs = /* @__PURE__ */ new Set([
-    ".git",
-    ".omc",
-    ".omx",
-    ".llm-plans",
-    "node_modules",
-    "dist"
-  ]);
+function shouldIgnoreSpecDiscoveryEntry(entryName, currentDir, baseDir, ignoredPrefixes) {
+  if (LOCAL_SPEC_DISCOVERY_IGNORED_DIRS.has(entryName)) {
+    return true;
+  }
+  const relative4 = normalizeToPosix(path8.relative(baseDir, path8.join(currentDir, entryName)));
+  return ignoredPrefixes.some(
+    (prefix) => relative4 === prefix || relative4.startsWith(`${prefix}/`)
+  );
+}
+function scanLocalSpecReferences(baseDir = ".", options = {}) {
+  const ignoredPrefixes = (options.ignoredPrefixes ?? []).map((value) => canonicalizeRelativePath(value)).filter(Boolean);
   const found = /* @__PURE__ */ new Set();
   const refs = [];
-  const visit2 = (currentDir) => {
-    for (const entry of (0, import_node_fs5.readdirSync)(currentDir, { withFileTypes: true })) {
-      if (ignoredDirs.has(entry.name)) {
+  let traversalEntries = 0;
+  let candidateFiles = 0;
+  const pendingDirs = [{ dir: baseDir, depth: 0 }];
+  while (pendingDirs.length > 0) {
+    const { dir: currentDir, depth: currentDepth } = pendingDirs.shift();
+    let entries;
+    try {
+      entries = (0, import_node_fs5.readdirSync)(currentDir, { withFileTypes: true }).sort(
+        (left, right) => left.name.localeCompare(right.name)
+      );
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      traversalEntries += 1;
+      if (traversalEntries > LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES) {
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES} traversal-entry liveness budget.`
+        );
+      }
+      if (shouldIgnoreSpecDiscoveryEntry(entry.name, currentDir, baseDir, ignoredPrefixes)) {
         continue;
       }
       const fullPath = path8.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        visit2(fullPath);
+        const nextDepth = currentDepth + 1;
+        if (nextDepth > LOCAL_SPEC_DISCOVERY_MAX_DEPTH) {
+          failLocalSpecDiscoveryLimit(
+            `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_DEPTH} directory-depth budget.`
+          );
+        }
+        pendingDirs.push({ dir: fullPath, depth: nextDepth });
         continue;
       }
-      if (!entry.isFile() || !isOpenApiSpecFile(fullPath)) {
+      if (!entry.isFile() || !isSpecCandidateExtension(fullPath)) {
+        continue;
+      }
+      candidateFiles += 1;
+      if (candidateFiles > LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES) {
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery exceeded the ${LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILES} candidate-file budget.`
+        );
+      }
+      let sizeBytes;
+      try {
+        sizeBytes = (0, import_node_fs5.statSync)(fullPath).size;
+      } catch {
+        continue;
+      }
+      if (sizeBytes > LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES) {
+        const repoRelativePath2 = normalizeToPosix(path8.relative(baseDir, fullPath));
+        failLocalSpecDiscoveryLimit(
+          `local spec discovery candidate ${repoRelativePath2} exceeds ${LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES} bytes.`
+        );
+      }
+      if (!readOpenApiSpecFile(fullPath)) {
         continue;
       }
       const repoRelativePath = normalizeToPosix(path8.relative(baseDir, fullPath));
@@ -139119,20 +139864,36 @@ function scanLocalSpecReferences(baseDir = ".") {
         configRelativePath: normalizeToPosix(path8.join("..", repoRelativePath))
       });
     }
-  };
-  visit2(baseDir);
+  }
   return refs.sort((left, right) => left.repoRelativePath.localeCompare(right.repoRelativePath));
 }
-function resolveMappedSpecReference(explicitSpecPath, discoveredSpecs) {
+function tryResolveExplicitSpecReference(explicitSpecPath) {
   const normalizedExplicitPath = normalizeToPosix(explicitSpecPath.trim());
-  if (normalizedExplicitPath) {
-    const explicitFullPath = path8.resolve(normalizedExplicitPath);
-    if ((0, import_node_fs5.existsSync)(explicitFullPath) && (0, import_node_fs5.statSync)(explicitFullPath).isFile()) {
-      return {
-        repoRelativePath: normalizedExplicitPath,
-        configRelativePath: normalizeToPosix(path8.join("..", normalizedExplicitPath))
-      };
-    }
+  if (!normalizedExplicitPath) {
+    return void 0;
+  }
+  const explicitFullPath = path8.resolve(normalizedExplicitPath);
+  if ((0, import_node_fs5.existsSync)(explicitFullPath) && (0, import_node_fs5.statSync)(explicitFullPath).isFile()) {
+    return {
+      repoRelativePath: normalizedExplicitPath,
+      configRelativePath: normalizeToPosix(path8.join("..", normalizedExplicitPath))
+    };
+  }
+  return void 0;
+}
+function resolveLocalSpecReferences(explicitSpecPath, baseDir = ".", options = {}) {
+  const explicit = tryResolveExplicitSpecReference(explicitSpecPath);
+  if (explicit) {
+    return { discoveredSpecs: [], mappedSpec: explicit };
+  }
+  const discoveredSpecs = scanLocalSpecReferences(baseDir, options);
+  const mappedSpec = resolveMappedSpecReference(explicitSpecPath, discoveredSpecs);
+  return { discoveredSpecs, mappedSpec };
+}
+function resolveMappedSpecReference(explicitSpecPath, discoveredSpecs) {
+  const explicit = tryResolveExplicitSpecReference(explicitSpecPath);
+  if (explicit) {
+    return explicit;
   }
   if (discoveredSpecs.length === 1) {
     return discoveredSpecs[0];
@@ -139953,6 +140714,18 @@ function tryReusePrebuiltCollection(options) {
   }
   return prepared.artifactDigest === entry.artifactDigest;
 }
+async function preparePrivateMockCloudCollection(role, collectionId, postman) {
+  const col = await postman.getCollection(collectionId);
+  const { collection } = applyPrivateMockExportCleanup(col, {
+    stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
+  });
+  if (!verifyPrivateMockRootHook(collection)) {
+    throw new Error(
+      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+    );
+  }
+  return collection;
+}
 async function exportCollectionArtifact(options) {
   const {
     role,
@@ -139961,14 +140734,17 @@ async function exportCollectionArtifact(options) {
     collectionsDir,
     prebuiltByRole,
     postman,
-    core
+    core,
+    privateMockAuth = false,
+    preparedCloudCollection
   } = options;
   if (!collectionId) {
     return void 0;
   }
   const expectedPath = `${collectionsDir}/${dirName}`;
+  const forceCloudExport = privateMockAuth && (role === "smoke" || role === "contract");
   const entry = prebuiltByRole.get(role);
-  if (entry) {
+  if (entry && !forceCloudExport) {
     const reused = tryReusePrebuiltCollection({
       prepared: entry,
       expectedPath,
@@ -139983,12 +140759,30 @@ async function exportCollectionArtifact(options) {
     core.info(
       `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`
     );
+  } else if (entry && forceCloudExport) {
+    core.info(
+      `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
+    );
   }
-  const col = await postman.getCollection(collectionId);
-  await convertAndSplitAnyCollection(
-    col,
-    expectedPath
-  );
+  let collectionForExport;
+  if (forceCloudExport && preparedCloudCollection) {
+    collectionForExport = preparedCloudCollection;
+  } else if (forceCloudExport) {
+    const col = await postman.getCollection(collectionId);
+    const { collection } = applyPrivateMockExportCleanup(col, {
+      stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
+    });
+    if (!verifyPrivateMockRootHook(collection)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+      );
+    }
+    collectionForExport = collection;
+  } else {
+    const col = await postman.getCollection(collectionId);
+    collectionForExport = col;
+  }
+  await convertAndSplitAnyCollection(collectionForExport, expectedPath);
   return `../${expectedPath}`;
 }
 function hasControlCharacter2(value) {
@@ -140041,6 +140835,78 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   const globalsDir = `${inputs.artifactDir}/globals`;
   const mocksDir = `${inputs.artifactDir}/mocks`;
   const specsDir = `${inputs.artifactDir}/specs`;
+  const manifestCollections = {};
+  const artifactDirPrefix = canonicalizeRelativePath(inputs.artifactDir);
+  const { discoveredSpecs, mappedSpec } = resolveLocalSpecReferences(inputs.specPath, ".", {
+    ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, ".postman"] : [".postman"]
+  });
+  const mappedSpecCloudKey = mappedSpec && inputs.specId ? buildMappedSpecCloudKey(
+    mappedSpec.configRelativePath,
+    inputs.specSyncMode,
+    options.releaseLabel
+  ) : void 0;
+  const prebuiltByRole = options.preparedPrebuiltCollections;
+  const privateMockAuth = options.privateMockAuth === true;
+  const preparedPrivateMockCollections = /* @__PURE__ */ new Map();
+  if (privateMockAuth) {
+    for (const spec of [
+      { role: "smoke", collectionId: inputs.smokeCollectionId },
+      { role: "contract", collectionId: inputs.contractCollectionId }
+    ]) {
+      if (!spec.collectionId) {
+        continue;
+      }
+      preparedPrivateMockCollections.set(
+        spec.role,
+        await preparePrivateMockCloudCollection(
+          spec.role,
+          spec.collectionId,
+          dependencies.postman
+        )
+      );
+    }
+  }
+  const baselineRef = await exportCollectionArtifact({
+    role: "baseline",
+    collectionId: inputs.baselineCollectionId,
+    dirName: getCollectionDirectoryName("Baseline", assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth
+  });
+  if (baselineRef) {
+    manifestCollections[baselineRef] = inputs.baselineCollectionId;
+  }
+  const smokeRef = await exportCollectionArtifact({
+    role: "smoke",
+    collectionId: inputs.smokeCollectionId,
+    dirName: getCollectionDirectoryName("Smoke", assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth,
+    preparedCloudCollection: preparedPrivateMockCollections.get("smoke")
+  });
+  if (smokeRef) {
+    manifestCollections[smokeRef] = inputs.smokeCollectionId;
+  }
+  const contractRef = await exportCollectionArtifact({
+    role: "contract",
+    collectionId: inputs.contractCollectionId,
+    dirName: getCollectionDirectoryName("Contract", assetProjectName),
+    collectionsDir,
+    prebuiltByRole,
+    postman: dependencies.postman,
+    core: dependencies.core,
+    privateMockAuth,
+    preparedCloudCollection: preparedPrivateMockCollections.get("contract")
+  });
+  if (contractRef) {
+    manifestCollections[contractRef] = inputs.contractCollectionId;
+  }
   ensureDir(collectionsDir);
   ensureDir(environmentsDir);
   ensureDir(flowsDir);
@@ -140057,51 +140923,6 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     if (ciDir) {
       ensureDir(ciDir);
     }
-  }
-  const manifestCollections = {};
-  const discoveredSpecs = scanLocalSpecReferences();
-  const mappedSpec = resolveMappedSpecReference(inputs.specPath, discoveredSpecs);
-  const mappedSpecCloudKey = mappedSpec && inputs.specId ? buildMappedSpecCloudKey(
-    mappedSpec.configRelativePath,
-    inputs.specSyncMode,
-    options.releaseLabel
-  ) : void 0;
-  const prebuiltByRole = options.preparedPrebuiltCollections;
-  const baselineRef = await exportCollectionArtifact({
-    role: "baseline",
-    collectionId: inputs.baselineCollectionId,
-    dirName: getCollectionDirectoryName("Baseline", assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (baselineRef) {
-    manifestCollections[baselineRef] = inputs.baselineCollectionId;
-  }
-  const smokeRef = await exportCollectionArtifact({
-    role: "smoke",
-    collectionId: inputs.smokeCollectionId,
-    dirName: getCollectionDirectoryName("Smoke", assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (smokeRef) {
-    manifestCollections[smokeRef] = inputs.smokeCollectionId;
-  }
-  const contractRef = await exportCollectionArtifact({
-    role: "contract",
-    collectionId: inputs.contractCollectionId,
-    dirName: getCollectionDirectoryName("Contract", assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core
-  });
-  if (contractRef) {
-    manifestCollections[contractRef] = inputs.contractCollectionId;
   }
   for (const [envName, envUid] of Object.entries(envUids)) {
     writeJsonFile(
@@ -140255,19 +141076,41 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
 async function runRepoSync(inputs, dependencies) {
   const telemetry = createTelemetryContext({ action: "postman-repo-sync-action", actionVersion: resolveActionVersion2(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
+  const logger = resolveRepoSyncLogger(dependencies);
+  for (const secret of [
+    inputs.postmanApiKey,
+    inputs.postmanAccessToken,
+    inputs.adoToken,
+    inputs.githubToken,
+    inputs.ghFallbackToken,
+    inputs.sslClientCert,
+    inputs.sslClientKey,
+    inputs.sslClientPassphrase,
+    inputs.sslExtraCaCerts
+  ]) {
+    logger.addSecret(secret);
+  }
+  logger.debug("resolved inputs", {
+    project: inputs.projectName,
+    collection_sync_mode: inputs.collectionSyncMode,
+    spec_sync_mode: inputs.specSyncMode,
+    team_id: dependencies.teamId || void 0
+  });
   try {
-    const result = await runRepoSyncInner(inputs, dependencies);
+    const result = await runRepoSyncInner(inputs, { ...dependencies, logger });
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion("success");
     return result;
   } catch (error2) {
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion("failure");
+    logger.failure("repo sync failed", error2);
     throw error2;
   }
 }
 async function runRepoSyncInner(inputs, dependencies) {
   const mask = resolveRepoSyncMasker(dependencies);
+  const logger = resolveRepoSyncLogger(dependencies);
   const branchDecision = decideBranchTier(inputs);
   assertBranchAssetIds(inputs, branchDecision);
   const isCanonicalWriter = branchDecision.tier === "legacy" || branchDecision.tier === "canonical";
@@ -140327,7 +141170,10 @@ async function runRepoSyncInner(inputs, dependencies) {
       }
     }
   }
-  const preparedPrebuiltCollections = await preparePrebuiltCollections(inputs);
+  const preparedPrebuiltCollections = await logger.phase(
+    "prepare-collections",
+    async () => preparePrebuiltCollections(inputs)
+  );
   let skipRepositoryLinkPost = false;
   let repositoryLinkPreflightWasFree = false;
   if (inputs.workspaceLinkEnabled && inputs.workspaceId && inputs.repoUrl && dependencies.internalIntegration?.findWorkspaceForRepo) {
@@ -140362,7 +141208,10 @@ async function runRepoSyncInner(inputs, dependencies) {
     }
   }
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = await upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker);
+  const envUids = await logger.phase(
+    "sync-environments",
+    async () => upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
+  );
   outputs["environment-uids-json"] = JSON.stringify(envUids);
   dependencies.core.setOutput("environment-uids-json", outputs["environment-uids-json"]);
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -140525,10 +141374,21 @@ async function runRepoSyncInner(inputs, dependencies) {
           );
         }
         const configured = [];
-        for (const collectionUid of [inputs.smokeCollectionId, inputs.contractCollectionId]) {
-          if (collectionUid) {
+        for (const { role, collectionUid } of [
+          { role: "smoke", collectionUid: inputs.smokeCollectionId },
+          { role: "contract", collectionUid: inputs.contractCollectionId }
+        ]) {
+          if (!collectionUid) {
+            continue;
+          }
+          try {
             await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
             configured.push(collectionUid);
+          } catch (error2) {
+            throw new Error(
+              `PRIVATE_MOCK_AUTH_ROOT_PATCH: Failed to install managed root hook on ${role} collection ${collectionUid}: ${mask(causeText(error2))}`,
+              { cause: error2 }
+            );
           }
         }
         if (configured.length > 0) {
@@ -140680,16 +141540,23 @@ async function runRepoSyncInner(inputs, dependencies) {
       dependencies.core.warning(message);
     }
   }
-  await exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
-    workspaceLinkStatus: outputs["workspace-link-status"],
-    priorWorkspaceId: resourcesState?.workspace?.id,
-    existingSpecs: resourcesState?.cloudResources?.specs,
-    mockEnvironmentUid: outputs["mock-environment-uid"] || void 0,
-    releaseLabel,
-    priorState: resourcesState,
-    preparedPrebuiltCollections
-  });
-  const commit = await commitAndPushGeneratedFiles(inputs, dependencies);
+  await logger.phase(
+    "export-artifacts",
+    async () => exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
+      workspaceLinkStatus: outputs["workspace-link-status"],
+      priorWorkspaceId: resourcesState?.workspace?.id,
+      existingSpecs: resourcesState?.cloudResources?.specs,
+      mockEnvironmentUid: outputs["mock-environment-uid"] || void 0,
+      releaseLabel,
+      priorState: resourcesState,
+      preparedPrebuiltCollections,
+      privateMockAuth: inputs.mockVisibility === "private"
+    })
+  );
+  const commit = await logger.phase(
+    "commit-and-push",
+    async () => commitAndPushGeneratedFiles(inputs, dependencies)
+  );
   outputs["commit-sha"] = commit.commitSha;
   if (commit.resolvedCurrentRef) {
     outputs["resolved-current-ref"] = commit.resolvedCurrentRef;

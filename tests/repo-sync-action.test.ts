@@ -46,6 +46,12 @@ import {
   computeArtifactDigest
 } from '../src/postman-v3/converter.js';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
+import {
+  MANAGED_ITEM_AUTH_BLOCKS,
+  PRIVATE_MOCK_AUTH_ROOT_MARKER,
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from '../src/lib/postman/private-mock-auth-script.js';
 
 type IndexModule = typeof import('../src/index.js');
 type IdentityModule = typeof import('../src/lib/postman/credential-identity.js');
@@ -243,6 +249,66 @@ function createCollectionFixture(name: string) {
   };
 }
 
+function createV3CollectionFixture(
+  name: string,
+  options: {
+    rootHook?: boolean;
+    itemLegacyBlockIndex?: 0 | 1 | 2;
+    itemCustomerScript?: string;
+    itemNearMissScript?: string;
+  } = {}
+) {
+  const codeParts: string[] = [];
+  if (options.itemLegacyBlockIndex !== undefined) {
+    codeParts.push(MANAGED_ITEM_AUTH_BLOCKS[options.itemLegacyBlockIndex]);
+  }
+  if (options.itemNearMissScript) {
+    codeParts.push(options.itemNearMissScript);
+  }
+  if (options.itemCustomerScript) {
+    codeParts.push(options.itemCustomerScript);
+  }
+
+  const request: Record<string, unknown> = {
+    id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    name: 'List Payments',
+    $kind: 'http-request',
+    method: 'GET',
+    url: 'https://api.example.com/payments'
+  };
+  if (codeParts.length > 0) {
+    request.scripts = [{
+      type: 'beforeRequest',
+      code: codeParts.join('\n\n'),
+      language: 'text/javascript'
+    }];
+  }
+
+  const collection: Record<string, unknown> = {
+    id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+    name,
+    $kind: 'collection',
+    items: [request]
+  };
+  if (options.rootHook !== false) {
+    collection.scripts = [{
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+      language: 'text/javascript'
+    }];
+  }
+  return collection;
+}
+
+const PRIVATE_MOCK_LIST_ENTRY = {
+  uid: 'explicit-private',
+  name: 'Existing Mock',
+  collection: 'col-baseline',
+  environment: 'env-prod',
+  mockUrl: 'https://explicit-private.mock.pstmn.io',
+  visibility: 'private' as const
+};
+
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
@@ -379,7 +445,8 @@ function createExportPostmanStub() {
     listEnvironments: vi.fn().mockResolvedValue([]),
     deleteEnvironment: vi.fn().mockResolvedValue(undefined),
     deleteMock: vi.fn().mockResolvedValue(undefined),
-    deleteMonitor: vi.fn().mockResolvedValue(undefined)
+    deleteMonitor: vi.fn().mockResolvedValue(undefined),
+    configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0)
   };
 }
 
@@ -1469,6 +1536,598 @@ describe('repo sync action', () => {
       expect(serialized).not.toMatch(/collectionId|cloudId|uid:/i);
       await runRepoSync(inputs, deps(createExportPostmanStub()));
       expect(readFileSync('.postman/workflows.yaml', 'utf8')).toBe(serialized);
+    });
+  });
+
+  describe('local spec discovery', () => {
+    const maxCandidateBytes = 512 * 1024;
+
+    function deps(postman: ReturnType<typeof createExportPostmanStub>) {
+      return {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      };
+    }
+
+    function writeSparseOversizeFile(filePath: string, logicalSize: number): void {
+      const slash = filePath.lastIndexOf('/');
+      if (slash >= 0) {
+        mkdirSync(filePath.slice(0, slash), { recursive: true });
+      }
+      const fd = openSync(filePath, 'w');
+      try {
+        if (logicalSize > 0) {
+          writeSync(fd, Buffer.from('x'), 0, 1, logicalSize - 1);
+        }
+      } finally {
+        closeSync(fd);
+      }
+    }
+
+    function seedCandidateJsonFiles(count: number, dir = 'discovery-noise'): void {
+      mkdirSync(dir, { recursive: true });
+      for (let index = 0; index < count; index += 1) {
+        writeFileSync(
+          join(dir, `candidate-${String(index).padStart(4, '0')}.json`),
+          JSON.stringify({ not: 'openapi' })
+        );
+      }
+    }
+
+    function seedOpenApiSpec(relativePath: string): void {
+      const slash = relativePath.lastIndexOf('/');
+      if (slash >= 0) {
+        mkdirSync(relativePath.slice(0, slash), { recursive: true });
+      }
+      writeFileSync(
+        relativePath,
+        JSON.stringify({
+          openapi: '3.1.0',
+          info: { title: 'Payments', version: '1.0.0' },
+          paths: {}
+        })
+      );
+    }
+
+    function seedNonCandidateFiles(count: number, dir = 'wide-tree'): void {
+      mkdirSync(dir, { recursive: true });
+      for (let index = 0; index < count; index += 1) {
+        writeFileSync(
+          join(dir, `note-${String(index).padStart(4, '0')}.txt`),
+          'plain text'
+        );
+      }
+    }
+
+    function seedDeepDirectoryChain(depth: number): string {
+      let current = '';
+      for (let index = 0; index < depth; index += 1) {
+        current = join(current, `level-${index}`);
+        mkdirSync(current, { recursive: true });
+      }
+      return current;
+    }
+
+    it('discovers an ordinary OpenAPI file during automatic discovery', async () => {
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({ specId: 'spec-auto', generateCiWorkflow: false }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.canonical?.specs?.['../openapi.yaml']).toBe('spec-auto');
+    });
+
+    it('discovers OpenAPI after scanning more than 200 non-candidate entries', async () => {
+      seedNonCandidateFiles(250);
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({ specId: 'spec-wide-tree', generateCiWorkflow: false }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.canonical?.specs?.['../openapi.yaml']).toBe('spec-wide-tree');
+    });
+
+    it('uses explicit spec-path without scanning unrelated oversized trees', async () => {
+      seedOpenApiSpec('packages/sdk/openapi.json');
+      writeSparseOversizeFile('generated/huge.openapi.json', maxCandidateBytes + 1);
+      seedCandidateJsonFiles(250);
+
+      await runRepoSync(
+        createInputs({
+          specId: 'spec-explicit',
+          specPath: 'packages/sdk/openapi.json',
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.canonical?.specs?.['../packages/sdk/openapi.json']).toBe('spec-explicit');
+    });
+
+    it('skips deep vendor trees while discovering a repository OpenAPI file', async () => {
+      let current = 'vendor';
+      for (let index = 0; index < 10; index += 1) {
+        current = join(current, `dependency-${index}`);
+        mkdirSync(current, { recursive: true });
+      }
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({ specId: 'spec-vendor-tree', generateCiWorkflow: false }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.canonical?.specs?.['../openapi.yaml']).toBe('spec-vendor-tree');
+    });
+
+    it('fails closed when local spec discovery exceeds the candidate-file budget', async () => {
+      seedCandidateJsonFiles(201);
+
+      await expect(
+        runRepoSync(
+          createInputs({ specId: 'spec-limit', generateCiWorkflow: false }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(
+        /CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT:.*candidate-file budget.*spec-path/
+      );
+    });
+
+    it('fails closed when local spec discovery exceeds the directory-depth budget', async () => {
+      const deepDir = seedDeepDirectoryChain(7);
+      seedOpenApiSpec(join(deepDir, 'openapi.json'));
+
+      await expect(
+        runRepoSync(
+          createInputs({ specId: 'spec-depth', generateCiWorkflow: false }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(
+        /CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT:.*directory-depth budget.*spec-path/
+      );
+    });
+
+    it('fails closed before reading an oversized spec candidate file', async () => {
+      writeSparseOversizeFile('oversized-spec.json', maxCandidateBytes + 1);
+
+      await expect(
+        runRepoSync(
+          createInputs({ specId: 'spec-oversized', generateCiWorkflow: false }),
+          deps(createExportPostmanStub())
+        )
+      ).rejects.toThrow(
+        /CONTRACT_LOCAL_SPEC_DISCOVERY_LIMIT:.*exceeds 524288 bytes.*spec-path/
+      );
+    });
+  });
+
+  describe.sequential('private-mock export artifact reconciliation', () => {
+    function snapshotRepoArtifactFiles(): Map<string, Buffer> {
+      const snapshot = new Map<string, Buffer>();
+      const roots = ['postman', '.postman', '.github'];
+      for (const root of roots) {
+        if (!existsSync(root)) {
+          continue;
+        }
+        const stack = [root];
+        while (stack.length > 0) {
+          const current = stack.pop()!;
+          for (const entry of readdirSync(current, { withFileTypes: true })) {
+            const rel = join(current, entry.name);
+            if (entry.isDirectory()) {
+              stack.push(rel);
+            } else if (entry.isFile()) {
+              snapshot.set(rel, readFileSync(rel));
+            }
+          }
+        }
+      }
+      return snapshot;
+    }
+
+    function assertRepoArtifactSnapshotUnchanged(before: Map<string, Buffer>): void {
+      const after = snapshotRepoArtifactFiles();
+      expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+      for (const [filePath, bytes] of before) {
+        expect(after.get(filePath)).toEqual(bytes);
+      }
+    }
+
+    function privateMockDeps(
+      postman: ReturnType<typeof createExportPostmanStub>,
+      options: {
+        commitAndPush?: ReturnType<typeof vi.fn>;
+        secretMasker?: ReturnType<typeof createSecretMasker>;
+      } = {}
+    ) {
+      const commitAndPush = options.commitAndPush ?? vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      return {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: {
+          commitAndPush
+        } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>,
+        ...(options.secretMasker ? { secretMasker: options.secretMasker } : {})
+      };
+    }
+
+    function buildAllPrebuiltManifest() {
+      const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
+      const smoke = writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      const contract = writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      return {
+        baseline,
+        smoke,
+        contract,
+        manifest: buildPrebuiltManifest([
+          {
+            role: 'baseline',
+            collectionPath: 'postman/collections/core-payments',
+            cloudId: 'col-baseline',
+            artifactDigest: baseline.artifactDigest
+          },
+          {
+            role: 'smoke',
+            collectionPath: 'postman/collections/[Smoke] core-payments',
+            cloudId: 'col-smoke',
+            artifactDigest: smoke.artifactDigest
+          },
+          {
+            role: 'contract',
+            collectionPath: 'postman/collections/[Contract] core-payments',
+            cloudId: 'col-contract',
+            artifactDigest: contract.artifactDigest
+          }
+        ])
+      };
+    }
+
+    it('forces smoke/contract cloud export on private mock while baseline still reuses prebuilt trees', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn()
+          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
+            itemLegacyBlockIndex: 2,
+            itemCustomerScript: "console.log('customer-owned');"
+          }))
+          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+      };
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'private',
+          mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+          prebuiltCollectionsJson: manifest
+        }),
+        privateMockDeps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+
+      const smokeDefinition = readFileSync(
+        'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
+        'utf8'
+      );
+      expect(smokeDefinition).toContain('type: http:beforeRequest');
+      expect(smokeDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+
+      const smokeRequest = readFileSync(
+        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'utf8'
+      );
+      expect(smokeRequest).not.toContain('private-mock-auth-v3');
+      expect(smokeRequest).toContain("console.log('customer-owned');");
+    });
+
+    it('keeps public-mock prebuilt reuse at zero extra cloud reads', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([{
+          ...PRIVATE_MOCK_LIST_ENTRY,
+          visibility: 'public' as const,
+          mockUrl: 'https://explicit-public.mock.pstmn.io'
+        }])
+      };
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'public',
+          mockUrl: 'https://explicit-public.mock.pstmn.io',
+          prebuiltCollectionsJson: manifest
+        }),
+        privateMockDeps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(0);
+      expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalled();
+    });
+
+    it('fails before repo mutation when the managed root hook is missing from smoke export', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const artifactSnapshotBefore = snapshotRepoArtifactFiles();
+      const commitAndPush = vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn().mockResolvedValue(
+          createV3CollectionFixture('[Smoke] core-payments', { rootHook: false })
+        )
+      };
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            mockVisibility: 'private',
+            mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+            prebuiltCollectionsJson: manifest
+          }),
+          privateMockDeps(postman, { commitAndPush })
+        )
+      ).rejects.toThrow(/PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED.*smoke.*col-smoke/);
+
+      assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
+      expect(postman.getCollection).toHaveBeenCalledTimes(1);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-contract');
+      expect(commitAndPush).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);
+      expect(existsSync('.postman/workflows.yaml')).toBe(false);
+    });
+
+    it('fails before repo mutation when contract root hook is missing after smoke validates', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const artifactSnapshotBefore = snapshotRepoArtifactFiles();
+      const commitAndPush = vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn()
+          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments'))
+          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments', { rootHook: false }))
+      };
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            environments: ['prod'],
+            generateCiWorkflow: false,
+            mockVisibility: 'private',
+            mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+            prebuiltCollectionsJson: manifest
+          }),
+          privateMockDeps(postman, { commitAndPush })
+        )
+      ).rejects.toThrow(/PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED.*contract.*col-contract/);
+
+      assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(postman.getCollection).toHaveBeenNthCalledWith(1, 'col-smoke');
+      expect(postman.getCollection).toHaveBeenNthCalledWith(2, 'col-contract');
+      expect(commitAndPush).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);
+      expect(existsSync('.postman/workflows.yaml')).toBe(false);
+    });
+
+    it('stops before cloud export or repo mutation when the root auth PATCH fails hard', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const artifactSnapshotBefore = snapshotRepoArtifactFiles();
+      const commitAndPush = vi.fn().mockResolvedValue({
+        commitSha: '',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      const secret = 'test-private-mock-token';
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        configurePrivateMockRuntimeAuth: vi.fn().mockRejectedValue(
+          new Error(`gateway PATCH 403 forbidden: ${secret}`)
+        )
+      };
+
+      const error = await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'private',
+          mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+          prebuiltCollectionsJson: manifest
+        }),
+        privateMockDeps(postman, {
+          commitAndPush,
+          secretMasker: createSecretMasker([secret])
+        })
+      ).then(
+        () => undefined,
+        (caught: unknown) => caught
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toContain('PRIVATE_MOCK_AUTH_ROOT_PATCH');
+      expect(message).toContain('smoke collection col-smoke');
+      expect(message).toContain('gateway PATCH 403 forbidden');
+      expect(message).not.toContain(secret);
+
+      assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
+      expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalledWith('col-contract');
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(commitAndPush).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);
+    });
+
+    it('retains legacy item blocks when cleanup kill switch is off but still exports the root hook', async () => {
+      vi.stubEnv('POSTMAN_PRIVATE_MOCK_LEGACY_EXPORT_CLEANUP', 'off');
+      const { manifest } = buildAllPrebuiltManifest();
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn()
+          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
+            itemLegacyBlockIndex: 2
+          }))
+          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+      };
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'private',
+          mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+          prebuiltCollectionsJson: manifest
+        }),
+        privateMockDeps(postman)
+      );
+
+      const smokeRequest = readFileSync(
+        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'utf8'
+      );
+      expect(smokeRequest).toContain('private-mock-auth-v3');
+      expect(readFileSync(
+        'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
+        'utf8'
+      )).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      vi.unstubAllEnvs();
+    });
+
+    it('leaves a customer-edited near-miss item block untouched in exported YAML', async () => {
+      const nearMiss = MANAGED_ITEM_AUTH_BLOCKS[2].replace(
+        'private-mock-auth-v3',
+        'private-mock-auth-v3-customer-edit'
+      );
+      const { manifest } = buildAllPrebuiltManifest();
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn()
+          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
+            itemNearMissScript: nearMiss
+          }))
+          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+      };
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'private',
+          mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+          prebuiltCollectionsJson: manifest
+        }),
+        privateMockDeps(postman)
+      );
+
+      const smokeRequest = readFileSync(
+        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'utf8'
+      );
+      expect(smokeRequest).toContain('private-mock-auth-v3-customer-edit');
+    });
+
+    it('emits byte-identical smoke YAML on a second private-mock sync', async () => {
+      const { manifest } = buildAllPrebuiltManifest();
+      const smokeV3 = createV3CollectionFixture('[Smoke] core-payments', {
+        itemLegacyBlockIndex: 1,
+        itemCustomerScript: "console.log('stable');"
+      });
+      const contractV3 = createV3CollectionFixture('[Contract] core-payments');
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn()
+          .mockResolvedValueOnce(smokeV3)
+          .mockResolvedValueOnce(contractV3)
+          .mockResolvedValueOnce(smokeV3)
+          .mockResolvedValueOnce(contractV3)
+      };
+      const inputs = createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        mockVisibility: 'private',
+        mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+        prebuiltCollectionsJson: manifest
+      });
+      const deps = privateMockDeps(postman);
+
+      await runRepoSync(inputs, deps);
+      const firstDigest = await digestTreeOnDisk('postman/collections/[Smoke] core-payments');
+
+      await runRepoSync(inputs, deps);
+      const secondDigest = await digestTreeOnDisk('postman/collections/[Smoke] core-payments');
+
+      expect(firstDigest).toBe(secondDigest);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledTimes(4);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(3, 'col-smoke');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(4, 'col-contract');
     });
   });
 
@@ -2815,6 +3474,28 @@ describe('state ownership persistence', () => {
 });
 
 describe('monitor resolution paths', () => {
+  let originalCwd = '';
+  let testDir = '';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'repo-sync-monitor-'));
+    process.chdir(testDir);
+    process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
+    process.env.GITHUB_REF_NAME = 'feature/repo-sync';
+    delete process.env.GITHUB_HEAD_REF;
+    __resetIdentityMemo();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REF_NAME;
+    delete process.env.GITHUB_HEAD_REF;
+    __resetIdentityMemo();
+  });
+
   function makePostman(overrides: Record<string, unknown> = {}) {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -2830,6 +3511,7 @@ describe('monitor resolution paths', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0),
       runMonitor: vi.fn().mockResolvedValue(undefined),
       listEnvironments: vi.fn().mockResolvedValue([]),
       deleteEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -3023,6 +3705,28 @@ describe('monitor resolution paths', () => {
 });
 
 describe('mock resolution paths', () => {
+  let originalCwd = '';
+  let testDir = '';
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    testDir = mkdtempSync(join(tmpdir(), 'repo-sync-mock-'));
+    process.chdir(testDir);
+    process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
+    process.env.GITHUB_REF_NAME = 'feature/repo-sync';
+    delete process.env.GITHUB_HEAD_REF;
+    __resetIdentityMemo();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.GITHUB_REPOSITORY;
+    delete process.env.GITHUB_REF_NAME;
+    delete process.env.GITHUB_HEAD_REF;
+    __resetIdentityMemo();
+  });
+
   function makePostman(overrides: Record<string, unknown> = {}) {
     return {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -3030,7 +3734,18 @@ describe('mock resolution paths', () => {
       findEnvironmentByName: vi.fn().mockResolvedValue(null),
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-new', url: 'https://mock-new.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
-      getCollection: vi.fn().mockResolvedValue(createCollectionFixture('core-payments')),
+      getCollection: vi.fn().mockImplementation((uid: string) => {
+        if (uid === 'col-baseline') {
+          return Promise.resolve(createCollectionFixture('core-payments'));
+        }
+        if (uid === 'col-smoke') {
+          return Promise.resolve(createV3CollectionFixture('[Smoke] core-payments'));
+        }
+        if (uid === 'col-contract') {
+          return Promise.resolve(createV3CollectionFixture('[Contract] core-payments'));
+        }
+        return Promise.resolve(createCollectionFixture('core-payments'));
+      }),
       getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
@@ -3038,6 +3753,7 @@ describe('mock resolution paths', () => {
       mockExists: vi.fn().mockResolvedValue(false),
       findMonitorByCollection: vi.fn().mockResolvedValue(null),
       findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0),
       runMonitor: vi.fn().mockResolvedValue(undefined),
       listEnvironments: vi.fn().mockResolvedValue([]),
       deleteEnvironment: vi.fn().mockResolvedValue(undefined),
