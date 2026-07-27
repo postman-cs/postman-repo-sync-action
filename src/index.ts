@@ -722,11 +722,47 @@ export function assertBranchAssetIds(
   }
 }
 
+/**
+ * Credential-slot keys every supported provider can seed. Used to decide which
+ * pre-existing environment values are worth carrying across a refresh; anything
+ * else (baseUrl, CI, markers) is rebuilt from scratch each run.
+ */
+const CREDENTIAL_SLOT_PREFIXES = ['AWS_', 'AZURE_', 'GCP_'] as const;
+
+function isCredentialSlotKey(key: unknown): boolean {
+  return typeof key === 'string' && CREDENTIAL_SLOT_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
 function buildEnvironmentValues(
   envName: string,
   baseUrl: string,
-  options: { privateMockAuth?: boolean; secretsResolverProvider?: SecretsResolverProvider } = {}
+  options: {
+    privateMockAuth?: boolean;
+    secretsResolverProvider?: SecretsResolverProvider;
+    /**
+     * Credential slots the environment already carried. A collection onboarded
+     * before provider scoping can still reference {{AWS_REGION}} and friends,
+     * and updateEnvironment REPLACES the whole value array — so dropping them
+     * here breaks that collection at runtime. Refresh passes the prior values;
+     * fresh creates omit this and stay clean.
+     */
+    preservedCredentialValues?: EnvironmentValues;
+  } = {}
 ): EnvironmentValues {
+  const seeded = secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? 'none').map((entry) => ({
+    key: entry.key,
+    value:
+      entry.key.endsWith('_SECRET_NAME') && !entry.secret
+        ? `api-credentials-${envName}`
+        : (entry.defaultValue ?? ''),
+    type: (entry.secret ? 'secret' : 'default') as 'secret' | 'default'
+  }));
+  // The selected provider always wins; preserved slots only fill gaps it left.
+  const seededKeys = new Set(seeded.map((entry) => entry.key));
+  const preserved = (options.preservedCredentialValues ?? []).filter(
+    (entry) => isCredentialSlotKey(entry.key) && !seededKeys.has(entry.key)
+  );
+
   return [
     { key: 'baseUrl', value: baseUrl, type: 'default' },
     // A private mock refuses anonymous calls, so the manual-validation environment
@@ -740,14 +776,8 @@ function buildEnvironmentValues(
     // Provider-scoped credential slots. `none` (the default) seeds nothing, so a
     // consumer that does not use a cloud secret store gets a clean environment
     // instead of four dead AWS variables.
-    ...secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? 'none').map((entry) => ({
-      key: entry.key,
-      value:
-        entry.key.endsWith('_SECRET_NAME') && !entry.secret
-          ? `api-credentials-${envName}`
-          : (entry.defaultValue ?? ''),
-      type: (entry.secret ? 'secret' : 'default') as 'secret' | 'default'
-    }))
+    ...seeded,
+    ...preserved
   ];
 }
 
@@ -1382,24 +1412,37 @@ async function upsertEnvironments(
 
     if (existingUid) {
       let marker = assetMarker;
-      if (marker) {
-        try {
-          const existing = await dependencies.postman.getEnvironment(existingUid) as { data?: { values?: Array<{ key?: string; value?: string }> }; values?: Array<{ key?: string; value?: string }> };
-          const values = existing.data?.values ?? existing.values ?? [];
-          const prior = values.find((value) => value.key === 'x-pm-onboarding')?.value;
+      // Read the live environment once: the marker's createdAt and any
+      // credential slots a pre-provider collection still depends on both come
+      // from here. This must run regardless of marker/tier — a legacy-tier
+      // consumer has no marker but can still reference {{AWS_REGION}}.
+      let priorValues: EnvironmentValues = [];
+      try {
+        const existing = await dependencies.postman.getEnvironment(existingUid) as { data?: { values?: Array<{ key?: string; value?: string; type?: string }> }; values?: Array<{ key?: string; value?: string; type?: string }> };
+        const values = existing?.data?.values ?? existing?.values ?? [];
+        priorValues = values
+          .filter((value): value is { key: string; value?: string; type?: string } => typeof value?.key === 'string')
+          .map((value) => ({
+            key: value.key,
+            value: typeof value.value === 'string' ? value.value : '',
+            type: value.type === 'secret' ? 'secret' : 'default'
+          }));
+        if (marker) {
+          const prior = priorValues.find((value) => value.key === 'x-pm-onboarding')?.value;
           const priorMarker = parseAssetMarker(prior ? `x-pm-onboarding: ${prior}` : undefined);
           // `createdAt` identifies a branch generation. Preserve it across
           // successful refreshes; only lastSyncedAt/expiresAt slide forward.
           if (priorMarker?.repo === marker.repo && priorMarker.rawBranch === marker.rawBranch) {
             marker = { ...marker, createdAt: priorMarker.createdAt };
           }
-        } catch {
-          // Marker reads are optimization/safety metadata. Continue with a
-          // fresh marker when the environment cannot be read for refresh.
         }
+      } catch {
+        // Marker reads are optimization/safety metadata. Continue with a
+        // fresh marker when the environment cannot be read for refresh.
       }
       const values = buildEnvironmentValues(envName, runtimeUrl, {
-        secretsResolverProvider: inputs.secretsResolverProvider
+        secretsResolverProvider: inputs.secretsResolverProvider,
+        preservedCredentialValues: priorValues
       });
       if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
       try {
