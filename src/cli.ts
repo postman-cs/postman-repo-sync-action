@@ -90,6 +90,7 @@ const CLI_INPUT_NAMES = [
    'spec-content-changed',
    'spec-path',
   'team-id',
+  'secrets-resolver',
   'postman-region',
   'postman-stack',
   'branch-strategy',

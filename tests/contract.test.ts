@@ -67,6 +67,7 @@ describe('postman-repo-sync-action contract', () => {
       'postman-api-key',
       'postman-access-token',
       'team-id',
+      'secrets-resolver',
       'credential-preflight',
       'branch-strategy',
       'canonical-branch',

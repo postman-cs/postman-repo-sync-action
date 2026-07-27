@@ -26,7 +26,10 @@ import {
   actionSink,
   createLogger,
   createTelemetryContext,
-  type Logger
+  parseSecretsResolverProvider,
+  secretsResolverEnvironmentKeys,
+  type Logger,
+  type SecretsResolverProvider
 } from '@postman-cse/automation-core';
 import { resolveActionVersion } from './action-version.js';
 import {
@@ -51,6 +54,7 @@ import { retry } from './lib/retry.js';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {
+  AmbiguousMonitorRebindError,
   MockContractError,
   PostmanGatewayAssetsClient,
   requireMockVisibility,
@@ -161,6 +165,8 @@ export interface ResolvedInputs {
   postmanCliInstallUrl: string;
   postmanCliWindowsInstallUrl?: string;
   postmanIapubBase: string;
+  /** Cloud secret store the generated environments seed credential slots for. */
+  secretsResolverProvider: SecretsResolverProvider;
 }
 
 interface RepoSyncOutputs {
@@ -571,6 +577,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   );
 
   const environments = parseJsonArray(getInput('environments-json', env) || '["prod"]');
+  const secretsResolverProvider = parseSecretsResolverProvider(getInput('secrets-resolver', env));
   const systemEnvMap = parseJsonMap(getInput('system-env-map-json', env) || '{}');
   const environmentUids = parseJsonMap(getInput('environment-uids-json', env) || '{}');
   const envRuntimeUrls = parseJsonMap(getInput('env-runtime-urls-json', env) || '{}');
@@ -589,6 +596,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     specContentChanged: parseBooleanInput(getInput('spec-content-changed', env), true),
     specPath: getInput('spec-path', env),
     collectionSyncMode: normalizeCollectionSyncMode(getInput('collection-sync-mode', env) || 'refresh'),
+    secretsResolverProvider,
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
     releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
     environments: environments.length > 0 ? environments : ['prod'],
@@ -717,7 +725,7 @@ export function assertBranchAssetIds(
 function buildEnvironmentValues(
   envName: string,
   baseUrl: string,
-  options: { privateMockAuth?: boolean } = {}
+  options: { privateMockAuth?: boolean; secretsResolverProvider?: SecretsResolverProvider } = {}
 ): EnvironmentValues {
   return [
     { key: 'baseUrl', value: baseUrl, type: 'default' },
@@ -729,10 +737,17 @@ function buildEnvironmentValues(
       : []),
     { key: 'CI', value: 'false', type: 'default' },
     { key: 'RESPONSE_TIME_THRESHOLD', value: '2000', type: 'default' },
-    { key: 'AWS_ACCESS_KEY_ID', value: '', type: 'secret' },
-    { key: 'AWS_SECRET_ACCESS_KEY', value: '', type: 'secret' },
-    { key: 'AWS_REGION', value: 'eu-west-2', type: 'default' },
-    { key: 'AWS_SECRET_NAME', value: `api-credentials-${envName}`, type: 'default' }
+    // Provider-scoped credential slots. `none` (the default) seeds nothing, so a
+    // consumer that does not use a cloud secret store gets a clean environment
+    // instead of four dead AWS variables.
+    ...secretsResolverEnvironmentKeys(options.secretsResolverProvider ?? 'none').map((entry) => ({
+      key: entry.key,
+      value:
+        entry.key.endsWith('_SECRET_NAME') && !entry.secret
+          ? `api-credentials-${envName}`
+          : (entry.defaultValue ?? ''),
+      type: (entry.secret ? 'secret' : 'default') as 'secret' | 'default'
+    }))
   ];
 }
 
@@ -1383,7 +1398,9 @@ async function upsertEnvironments(
           // fresh marker when the environment cannot be read for refresh.
         }
       }
-      const values = buildEnvironmentValues(envName, runtimeUrl);
+      const values = buildEnvironmentValues(envName, runtimeUrl, {
+        secretsResolverProvider: inputs.secretsResolverProvider
+      });
       if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
       try {
         await dependencies.postman.updateEnvironment(existingUid, displayName, values);
@@ -1404,7 +1421,9 @@ async function upsertEnvironments(
       continue;
     }
 
-    const values = buildEnvironmentValues(envName, runtimeUrl);
+    const values = buildEnvironmentValues(envName, runtimeUrl, {
+        secretsResolverProvider: inputs.secretsResolverProvider
+      });
     if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
     try {
       envUids[envName] = await dependencies.postman.createEnvironment(
@@ -1441,7 +1460,10 @@ async function upsertMockEnvironment(
     return '';
   }
   const displayName = `${assetProjectName} - Mock`;
-  const values = buildEnvironmentValues('mock', mockUrl, { privateMockAuth });
+  const values = buildEnvironmentValues('mock', mockUrl, {
+    privateMockAuth,
+    secretsResolverProvider: inputs.secretsResolverProvider
+  });
   const mask = resolveRepoSyncMasker(dependencies);
   try {
     const discovered = await dependencies.postman.findEnvironmentByName(
@@ -3094,12 +3116,9 @@ async function runRepoSyncInner(
         }
       }
 
-      // The canonical Smoke collection can change UID between runs (bootstrap
-      // re-import after a marker/stranger miss, or an operator rebuild). The
-      // monitor is still bound to the previous UID, so the collection-triple
-      // discovery above misses. Rebind the stable (name, environment) monitor
-      // onto the current collection instead of creating a duplicate and
-      // orphaning the old one.
+      // Rebind stable (name, environment) monitors when collection UID changed. Ambiguity fails closed
+      // because createMonitor would add another duplicate; other failures warn and fall through to
+      // createMonitor because the jobTemplates PUT contract is not yet live-proven.
       if (!resolvedMonitorId && inputs.smokeCollectionId && dependencies.postman.rebindMonitorByName) {
         try {
           const rebound = await dependencies.postman.rebindMonitorByName(
@@ -3114,15 +3133,26 @@ async function runRepoSyncInner(
             );
           }
         } catch (error) {
-          throw new Error(
+          if (error instanceof AmbiguousMonitorRebindError) {
+            throw new Error(
+              formatOrchestrationIssue({
+                operation: 'Monitor rebind',
+                entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
+                cause: error,
+                remediation: monitorRemediation,
+                mask
+              }),
+              { cause: error }
+            );
+          }
+          dependencies.core.warning(
             formatOrchestrationIssue({
               operation: 'Monitor rebind',
               entity: `monitor "${monitorName}" workspace ${inputs.workspaceId} collection ${inputs.smokeCollectionId} environment ${monitorEnvUid}`,
               cause: error,
               remediation: monitorRemediation,
               mask
-            }),
-            { cause: error }
+            })
           );
         }
       }
@@ -3666,6 +3696,7 @@ export function createRepoSyncDependencies(
     listMonitors: gatewayAssets.listMonitors.bind(gatewayAssets),
     monitorExists: gatewayAssets.monitorExists.bind(gatewayAssets),
     findMonitorByCollection: gatewayAssets.findMonitorByCollection.bind(gatewayAssets),
+    rebindMonitorByName: gatewayAssets.rebindMonitorByName.bind(gatewayAssets),
     runMonitor: gatewayAssets.runMonitor.bind(gatewayAssets),
     listEnvironments: gatewayAssets.listEnvironments.bind(gatewayAssets),
     // GC path (preview/channel retention machine — lib/repo/preview-gc.ts).

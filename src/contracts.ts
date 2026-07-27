@@ -261,6 +261,13 @@ export const postmanRepoSyncActionContract: {
       required: false,
       default: ''
     },
+    'secrets-resolver': {
+      description:
+        'Cloud secret store the generated environments seed credential slots for (none, aws, azure, gcp). Must match the value passed to bootstrap and smoke-flow.',
+      required: false,
+      default: 'none',
+      allowedValues: ['none', 'aws', 'azure', 'gcp']
+    },
     'credential-preflight': {
       description:
         'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.',

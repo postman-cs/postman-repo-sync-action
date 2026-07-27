@@ -71,6 +71,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanFallbackBase: 'https://go.postman.co/_api',
     postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
     postmanIapubBase: 'https://iapub.postman.co',
+    secretsResolverProvider: 'none',
     ...overrides
   };
 }
@@ -184,5 +185,22 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
         factory
       )
     ).toThrow(/postman-access-token is required/);
+  });
+});
+
+describe('createRepoSyncDependencies production capability wiring', () => {
+  // The orchestrator guards monitor reuse on method presence (e.g. rebindMonitorByName &&
+  // ...). A missing factory registration silently falls through to createMonitor;
+  // unit tests that stub postman cannot catch the omission.
+  it('wires every guarded postman monitor capability into the production dependencies', () => {
+    const { factory } = factories();
+    const deps = createRepoSyncDependencies(
+      createInputs(),
+      { apiKey: 'pmak-test', teamId: '10490519' },
+      factory
+    );
+    expect(deps.postman.rebindMonitorByName).toBeTypeOf('function');
+    expect(deps.postman.findMonitorByCollection).toBeTypeOf('function');
+    expect(deps.postman.monitorExists).toBeTypeOf('function');
   });
 });

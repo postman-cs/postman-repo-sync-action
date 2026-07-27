@@ -185,6 +185,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     postmanFallbackBase: 'https://go.postman.co/_api',
     postmanCliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
     postmanIapubBase: 'https://iapub.postman.co',
+    secretsResolverProvider: 'none',
     ...overrides
   };
 }

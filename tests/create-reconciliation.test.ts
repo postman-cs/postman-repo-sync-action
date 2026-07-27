@@ -637,6 +637,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       postmanFallbackBase: 'https://fallback.example.com/_api',
       postmanCliInstallUrl: '',
       postmanIapubBase: '',
+      secretsResolverProvider: 'none',
       credentialPreflight: 'warn',
       branchStrategy: 'legacy',
   previewTtlDays: 30,
