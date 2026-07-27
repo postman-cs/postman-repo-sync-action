@@ -40,13 +40,12 @@ function execPwsh(command: string, options: ExecPwshOptions = {}): string {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
-        // These bodies only ever use built-in cmdlets, so the module search path
-        // is dead weight. Leaving it unset makes pwsh walk every user module dir
-        // and authenticode-verify what it finds, which on a signed module with no
-        // reachable CRL responder blocks on the network for ~49s per spawn and
-        // blows the timeout below. Pinning it empty keeps the probe hermetic:
-        // the generated script's behaviour cannot depend on which modules the
-        // machine running the suite happens to have installed.
+        // These bodies only use built-in cmdlets, so the module search path is
+        // dead weight. Pinning it empty keeps the probe hermetic: what the
+        // generated script does must not depend on which modules the machine
+        // running the suite happens to have installed. This is not a latency
+        // fix - pwsh startup stalls on its own roughly one spawn in ten, inside
+        // CLR init, with or without this pin.
         PSModulePath: '',
         POWERSHELL_TELEMETRY_OPTOUT: '1',
         POWERSHELL_UPDATECHECK: 'Off',
