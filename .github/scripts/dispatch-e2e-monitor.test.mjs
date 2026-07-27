@@ -1,164 +1,230 @@
-/* global AbortController, DOMException */
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import test from 'node:test';
 
 import {
-  DEFAULT_DISPATCH_TIMEOUT_MS,
-  REDACTED_TOKEN_MARKER,
+  buildCorrelationId,
+  buildDispatchInputs,
   buildDispatchPayload,
-  dispatchE2eMonitor
+  buildDispatchUrl,
+  dispatchE2eMonitor,
+  normalizeSuite,
+  redactTokenOccurrences,
+  REDACTED_TOKEN_MARKER,
+  SUPPORTED_SUITES
 } from './dispatch-e2e-monitor.mjs';
 
-const SENTINEL_TOKEN = 'sentinel-token-never-log-me';
-
 const baseEnv = {
-  E2E_DISPATCH_TOKEN: SENTINEL_TOKEN,
+  E2E_DISPATCH_TOKEN: 'test-token',
   GITHUB_REPOSITORY: 'postman-cs/postman-repo-sync-action',
-  E2E_GATE_REF: 'v2.1.10',
+  GITHUB_REF_NAME: 'v9.9.9',
+  GITHUB_RUN_ID: '4242',
+  GITHUB_RUN_ATTEMPT: '2',
   E2E_GATE_SUITE: 'smoke'
 };
 
-test('buildDispatchPayload pins central main and the exact released input ref', () => {
-  assert.deepEqual(buildDispatchPayload('postman-repo-sync-action', 'v2.1.10', 'smoke'), {
-    ref: 'main',
-    inputs: { action: 'postman-repo-sync-action', ref: 'v2.1.10', suite: 'smoke' }
-  });
-  assert.throws(() => buildDispatchPayload('action', 'v1.0.0', 'fast'), /smoke or full/);
-});
-
-test('dispatchE2eMonitor posts once with exact payload, supplied abort signal, and notice side effect', async () => {
-  const calls = [];
-  const notices = [];
-  const controller = new AbortController();
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    return { ok: true, status: 204 };
+function okFetch(captured) {
+  return async (url, options) => {
+    captured.url = url;
+    captured.options = options;
+    return { ok: true, status: 204, text: async () => '' };
   };
+}
 
-  await dispatchE2eMonitor({
-    env: baseEnv,
-    fetchImpl,
-    abortSignal: controller.signal,
-    log: (message) => notices.push(message)
-  });
+// --- listener contract -------------------------------------------------
+// postman-cs/postman-actions-e2e e2e.yml is triggered by workflow_dispatch and
+// reads inputs.action / inputs.ref / inputs.gate_correlation_id / inputs.suite.
+// A repository_dispatch whose event type does not match returns HTTP 204 and is
+// then silently dropped, so these assertions are the only thing standing
+// between a green release job and zero live coverage.
 
-  assert.equal(calls.length, 1);
+test('targets the workflow_dispatch endpoint, never bare repository_dispatch', async () => {
+  const captured = {};
+  await dispatchE2eMonitor({ env: baseEnv, fetchImpl: okFetch(captured), log() {} });
   assert.equal(
-    calls[0].url,
+    captured.url,
     'https://api.github.com/repos/postman-cs/postman-actions-e2e/actions/workflows/e2e.yml/dispatches'
   );
-  assert.equal(calls[0].init.method, 'POST');
-  assert.equal(calls[0].init.headers.Accept, 'application/vnd.github+json');
-  assert.equal(calls[0].init.headers.Authorization, `Bearer ${SENTINEL_TOKEN}`);
-  assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
-  assert.equal(calls[0].init.headers['X-GitHub-Api-Version'], '2026-03-10');
-  assert.equal(calls[0].init.signal, controller.signal);
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
-    ref: 'main',
-    inputs: {
-      action: 'postman-repo-sync-action',
-      ref: 'v2.1.10',
-      suite: 'smoke'
-    }
+  assert.ok(
+    !/\/repos\/[^/]+\/[^/]+\/dispatches$/.test(String(captured.url)),
+    'must not POST the repository_dispatch endpoint'
+  );
+});
+
+test('sends exactly the four inputs the listener reads, and no event_type', async () => {
+  const captured = {};
+  await dispatchE2eMonitor({ env: baseEnv, fetchImpl: okFetch(captured), log() {} });
+  const body = JSON.parse(String(captured.options.body));
+  assert.equal(captured.options.method, 'POST');
+  assert.equal(body.ref, 'main', 'workflow ref must be the monitor default branch');
+  assert.deepEqual(Object.keys(body.inputs).sort(), [
+    'action',
+    'gate_correlation_id',
+    'ref',
+    'suite'
+  ]);
+  assert.equal(body.inputs.action, 'postman-repo-sync-action');
+  assert.equal(body.inputs.ref, 'v9.9.9');
+  assert.equal(body.inputs.suite, 'smoke');
+  assert.equal(body.event_type, undefined, 'event_type belongs to repository_dispatch only');
+  assert.equal(body.client_payload, undefined, 'client_payload belongs to repository_dispatch only');
+  assert.match(String(captured.options.headers.Authorization), /^Bearer test-token$/);
+  assert.ok(captured.options.signal, 'bounded AbortSignal must be supplied');
+});
+
+test('E2E_GATE_REF pins the immutable release tag over GITHUB_REF_NAME', async () => {
+  const captured = {};
+  await dispatchE2eMonitor({
+    env: { ...baseEnv, E2E_GATE_REF: 'v1.2.3' },
+    fetchImpl: okFetch(captured),
+    log() {}
   });
-  assert.equal(notices.length, 1);
-  assert.equal(
-    notices[0],
-    '::notice::Dispatched asynchronous e2e smoke monitor for postman-repo-sync-action@v2.1.10'
-  );
-  assert.doesNotMatch(notices[0], new RegExp(SENTINEL_TOKEN));
-  assert.equal(DEFAULT_DISPATCH_TIMEOUT_MS, 30_000);
+  assert.equal(JSON.parse(String(captured.options.body)).inputs.ref, 'v1.2.3');
 });
 
-test('dispatchE2eMonitor rejects an invalid suite before fetch', async () => {
-  let called = 0;
-  await assert.rejects(
-    () =>
-      dispatchE2eMonitor({
-        env: { ...baseEnv, E2E_GATE_SUITE: 'fast' },
-        fetchImpl: async () => {
-          called += 1;
-          return { ok: true, status: 204 };
-        }
-      }),
-    /smoke or full/
-  );
-  assert.equal(called, 0);
+test('correlation id is deterministic, sanitized, and traceable to the release run', () => {
+  const id = buildCorrelationId({
+    repository: 'postman-cs/some-action',
+    runId: '77',
+    runAttempt: '1',
+    refName: 'v1.0.0'
+  });
+  assert.equal(id, 'postman-cs-some-action-77-1-v1.0.0');
+  assert.doesNotMatch(id, /[^A-Za-z0-9_.-]/);
 });
 
-test('dispatchE2eMonitor throws status-only HTTP errors without disclosing the token', async () => {
+test('suite accepts every value the monitor workflow offers and rejects the rest', () => {
+  assert.deepEqual([...SUPPORTED_SUITES], ['smoke', 'full', 'branch-aware']);
+  for (const suite of SUPPORTED_SUITES) {
+    assert.equal(normalizeSuite(suite), suite);
+  }
+  assert.equal(normalizeSuite(undefined), 'smoke');
+  assert.throws(() => normalizeSuite('nightly'), /must be one of smoke\|full\|branch-aware/);
+});
+
+test('failure text names the action and ref, and never leaks the token', async () => {
   await assert.rejects(
     () =>
       dispatchE2eMonitor({
         env: baseEnv,
-        fetchImpl: async () => ({ ok: false, status: 502 })
+        fetchImpl: async () => ({
+          ok: false,
+          status: 422,
+          text: async () => 'workflow inputs rejected for test-token'
+        }),
+        log() {}
       }),
     (error) => {
-      assert.equal(String(error.message), 'e2e monitor dispatch failed with HTTP 502');
-      assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
+      assert.match(error.message, /HTTP 422 for postman-repo-sync-action@v9\.9\.9/);
+      assert.match(error.message, /workflow inputs rejected/);
+      assert.doesNotMatch(error.message, /test-token/);
+      assert.match(error.message, new RegExp(REDACTED_TOKEN_MARKER.replace(/[[\]]/g, '\\$&')));
       return true;
     }
   );
 });
 
-test('dispatchE2eMonitor surfaces network/abort failure without disclosing the token', async () => {
+test('an unreadable error body still reports the status code', async () => {
   await assert.rejects(
     () =>
       dispatchE2eMonitor({
         env: baseEnv,
-        timeoutMs: 1,
-        fetchImpl: (_url, init) =>
-          new Promise((_resolve, reject) => {
-            init.signal.addEventListener(
-              'abort',
-              () => {
-                reject(init.signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
-              },
-              { once: true }
-            );
-          })
+        fetchImpl: async () => ({
+          ok: false,
+          status: 503,
+          text: async () => {
+            throw new Error('stream closed');
+          }
+        }),
+        log() {}
+      }),
+    /HTTP 503 for postman-repo-sync-action@v9\.9\.9: <response body unavailable>/
+  );
+});
+
+test('transport failures are redacted and carry no token-bearing cause', async () => {
+  await assert.rejects(
+    () =>
+      dispatchE2eMonitor({
+        env: baseEnv,
+        fetchImpl: async () => {
+          throw new Error('connect ECONNREFUSED (auth test-token)');
+        },
+        log() {}
       }),
     (error) => {
-      assert.match(String(error.message), /e2e monitor dispatch failed:/);
-      assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
+      assert.doesNotMatch(error.message, /test-token/);
       assert.equal(error.cause, undefined);
       return true;
     }
   );
 });
 
-test('dispatchE2eMonitor redacts token-bearing transport errors without preserving cause', async () => {
-  const hostileMessage = `fetch failed: Authorization Bearer ${SENTINEL_TOKEN} refused; retry with ${SENTINEL_TOKEN}`;
+test('missing required env fails closed without echoing the token', async () => {
   await assert.rejects(
     () =>
       dispatchE2eMonitor({
-        env: baseEnv,
-        fetchImpl: async () => {
-          throw new Error(hostileMessage);
-        }
+        env: { E2E_DISPATCH_TOKEN: 'secret-token' },
+        fetchImpl: okFetch({}),
+        log() {}
       }),
     (error) => {
-      assert.match(String(error.message), /e2e monitor dispatch failed:/);
-      assert.match(String(error.message), new RegExp(REDACTED_TOKEN_MARKER.replace(/[[\]]/g, '\\$&')));
-      assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
-      assert.equal(error.cause, undefined);
-      assert.doesNotMatch(String(error.stack ?? ''), new RegExp(SENTINEL_TOKEN));
+      assert.match(error.message, /E2E_DISPATCH_TOKEN, GITHUB_REPOSITORY, and E2E_GATE_REF/);
+      assert.doesNotMatch(error.message, /secret-token/);
       return true;
     }
   );
 });
 
-test('dispatchE2eMonitor rejects missing required env without leaking a token', async () => {
-  await assert.rejects(
-    () =>
-      dispatchE2eMonitor({
-        env: { E2E_DISPATCH_TOKEN: SENTINEL_TOKEN },
-        fetchImpl: async () => ({ ok: true, status: 204 })
-      }),
-    (error) => {
-      assert.match(String(error.message), /E2E_DISPATCH_TOKEN, E2E_GATE_REF, and GITHUB_REPOSITORY are required/);
-      assert.doesNotMatch(String(error.message), new RegExp(SENTINEL_TOKEN));
-      return true;
-    }
+test('dispatch target is validated before any network call', () => {
+  assert.throws(() => buildDispatchUrl('not-a-repo', 'e2e.yml'), /must be owner\/repo/);
+  assert.throws(() => buildDispatchUrl('o/r', 'nested/path.yml'), /single path segment/);
+});
+
+test('an explicit abort deadline is honoured', async () => {
+  const controller = new AbortController();
+  let seen;
+  await dispatchE2eMonitor({
+    env: baseEnv,
+    fetchImpl: async (_url, options) => {
+      seen = options.signal;
+      return { ok: true, status: 204, text: async () => '' };
+    },
+    log() {},
+    abortSignal: controller.signal
+  });
+  assert.equal(seen, controller.signal);
+});
+
+test('success is announced with the correlation id for run-name tracing', async () => {
+  const lines = [];
+  const result = await dispatchE2eMonitor({
+    env: baseEnv,
+    fetchImpl: okFetch({}),
+    log: (line) => lines.push(line)
+  });
+  assert.equal(result.status, 204);
+  assert.equal(result.correlationId, 'postman-cs-postman-repo-sync-action-4242-2-v9.9.9');
+  assert.ok(lines.some((line) => line.includes(result.correlationId)));
+});
+
+test('payload builders are pure and reusable', () => {
+  const inputs = buildDispatchInputs({
+    action: 'a',
+    refName: 'v1',
+    correlationId: 'c',
+    suite: 'full'
+  });
+  assert.deepEqual(inputs, { action: 'a', ref: 'v1', gate_correlation_id: 'c', suite: 'full' });
+  assert.deepEqual(
+    buildDispatchPayload({
+      workflowRef: 'main',
+      action: 'a',
+      refName: 'v1',
+      correlationId: 'c',
+      suite: 'full'
+    }),
+    { ref: 'main', inputs }
   );
+  assert.equal(redactTokenOccurrences('a-token-b', 'token'), `a-${REDACTED_TOKEN_MARKER}-b`);
+  assert.equal(redactTokenOccurrences(undefined, 'token'), '');
 });
