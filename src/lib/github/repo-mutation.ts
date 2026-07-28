@@ -395,7 +395,13 @@ export class RepoMutationService {
           }
 
           if (fetch.exitCode === 0) {
-            const rebase = await this.execute('git', ['rebase', 'FETCH_HEAD']);
+            // During rebase, "theirs" is the replayed commit. Generated paths are authoritative.
+            const rebase = await this.execute('git', [
+              'rebase',
+              '-X',
+              'theirs',
+              'FETCH_HEAD'
+            ]);
             if (rebase.exitCode !== 0) {
               await this.execute('git', ['rebase', '--abort']);
               const cause = rebase.stderr || rebase.stdout || 'Failed to rebase generated changes';
