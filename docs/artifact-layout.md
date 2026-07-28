@@ -19,26 +19,41 @@ The generated files are intended to be committed when `repo-write-mode` is `comm
 
 ## Collection v3 multi-file YAML
 
-Collections are exported in the Postman Collection v3 format (`$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/`) as a directory tree rather than a single JSON file. Each collection becomes a directory containing a `collection.yaml` plus one YAML file per folder and per request:
+Collections are exported in the Postman Collection v3 format (`$schema: https://schema.postman.com/json/draft-2020-12/collection/v3.0.0/`) as a directory tree rather than a single JSON file. Each collection and folder has a `.resources/definition.yaml`; requests are separate `*.request.yaml` files:
 
 ```text
 postman/collections/core-payments/
-  collection.yaml
-  <folder>.yaml
-  <request>.yaml
+  .resources/definition.yaml
+  <folder>/.resources/definition.yaml
+  <request>.request.yaml
 postman/collections/[Smoke] core-payments/
-  collection.yaml
-  <folder>.yaml
-  <request>.yaml
+  .resources/definition.yaml
+  <folder>/.resources/definition.yaml
+  <request>.request.yaml
 ```
 
-This layout keeps diffs reviewable: a change to one request shows up as a change to one file. Long Postman folder and request names are truncated to 120 characters per path segment when files are written.
+Definitions and request files use `$kind:` discriminators (for example, `$kind: collection` and `$kind: http-request`). The legacy `collection.yaml`/`folder.yaml`/`type:` layout is not written; `postman collection lint` rejects it. This layout keeps diffs reviewable: a change to one request shows up as a change to one file.
 
 Note that v3 collections are run with `postman collection run` (Postman CLI). Newman cannot execute the v3 format.
 
 ## Spec and workflow metadata
 
-When a local OpenAPI spec is found, `.postman/resources.yaml` records it under `localResources.specs`. If `spec-id` and an unambiguous local spec are available, the action also maps the spec under `cloudResources.specs`. When a mapped spec and exported collections are both present, `.postman/workflows.yaml` is written with `syncSpecToCollection` metadata that ties the spec to its generated collections.
+`.postman/resources.yaml` is state v2. Its current mappings are canonical: `canonical.collections`, `canonical.environments`, and `canonical.specs` map repository-relative artifact paths to Postman resource UIDs. For example:
+
+```yaml
+version: 2
+workspace:
+  id: <workspace UID>
+canonical:
+  collections:
+    ../postman/collections/core-payments: <collection UID>
+  environments:
+    ../postman/environments/prod.postman_environment.json: <environment UID>
+  specs:
+    ../openapi.yaml: <spec UID>
+```
+
+The action writes each mapping only when that resource is available. When a mapped spec and exported collections are both present, `.postman/workflows.yaml` is written with `syncSpecToCollection` metadata that ties the spec to its generated collections.
 
 ## Versioned runs
 

@@ -1827,6 +1827,10 @@ const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 /** Nonempty Postman collection id: safe characters, no arbitrary length cap. */
 const PREBUILT_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const PREBUILT_COLLECTION_MAX_DEPTH = 128;
+const PREBUILT_COLLECTION_MAX_TRAVERSAL_ENTRIES = LOCAL_SPEC_DISCOVERY_MAX_TRAVERSAL_ENTRIES;
+const PREBUILT_COLLECTION_MAX_FILE_BYTES = 32 * 1024 * 1024;
+const PREBUILT_COLLECTION_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 
 function failPrebuiltCollections(detail: string): never {
   throw new Error(`CONTRACT_PREBUILT_COLLECTIONS_INVALID: ${detail}`);
@@ -1961,8 +1965,9 @@ function assertPathWithinArtifactRoot(
     existingPath = parent;
   }
   const realExisting = realpathSync(existingPath);
-  const realRelative = path.relative(artifactRoot, realExisting);
-  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+  const realArtifactRoot = existsSync(artifactRoot) ? realpathSync(artifactRoot) : undefined;
+  const realRelative = realArtifactRoot ? path.relative(realArtifactRoot, realExisting) : '';
+  if (realArtifactRoot && (realRelative.startsWith('..') || path.isAbsolute(realRelative))) {
     failPrebuiltCollections(
       `${fieldName} resolves outside artifact-dir via symlink; received ${targetPath}`
     );
@@ -2032,14 +2037,17 @@ function listPrebuiltCollectionTreeFiles(
   }
 
   const files: PrebuiltTreeFileMeta[] = [];
-  const pendingDirectories: string[] = [absRoot];
+  const pendingDirectories: Array<{ absolute: string; depth: number }> = [{ absolute: absRoot, depth: 0 }];
   const seenDirectories = new Set<string>();
+  let traversalEntries = 1;
+  let totalBytes = 0;
 
   while (pendingDirectories.length > 0) {
-    const currentAbsolute = pendingDirectories.pop();
-    if (!currentAbsolute) {
+    const current = pendingDirectories.pop();
+    if (!current) {
       break;
     }
+    const { absolute: currentAbsolute, depth: currentDepth } = current;
     const currentStat = lstatSync(currentAbsolute);
     if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
       failPrebuiltCollections(
@@ -2054,8 +2062,16 @@ function listPrebuiltCollectionTreeFiles(
     }
     seenDirectories.add(currentKey);
 
-    const entries = readdirSync(currentAbsolute, { withFileTypes: true });
+    const entries = readdirSync(currentAbsolute, { withFileTypes: true }).sort((left, right) =>
+      left.name.localeCompare(right.name)
+    );
     for (const entry of entries) {
+      traversalEntries += 1;
+      if (traversalEntries > PREBUILT_COLLECTION_MAX_TRAVERSAL_ENTRIES) {
+        failPrebuiltCollections(
+          `prebuilt collection tree exceeded the ${PREBUILT_COLLECTION_MAX_TRAVERSAL_ENTRIES} traversal-entry budget`
+        );
+      }
       const abs = path.join(currentAbsolute, entry.name);
       if (entry.isSymbolicLink()) {
         failPrebuiltCollections(
@@ -2063,7 +2079,13 @@ function listPrebuiltCollectionTreeFiles(
         );
       }
       if (entry.isDirectory()) {
-        pendingDirectories.push(abs);
+        const nextDepth = currentDepth + 1;
+        if (nextDepth > PREBUILT_COLLECTION_MAX_DEPTH) {
+          failPrebuiltCollections(
+            `prebuilt collection tree exceeded the ${PREBUILT_COLLECTION_MAX_DEPTH} directory-depth budget`
+          );
+        }
+        pendingDirectories.push({ absolute: abs, depth: nextDepth });
         continue;
       }
       if (!entry.isFile()) {
@@ -2075,6 +2097,17 @@ function listPrebuiltCollectionTreeFiles(
       if (fileLstat.isSymbolicLink() || !fileLstat.isFile()) {
         failPrebuiltCollections(
           `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix(path.relative(absRoot, abs))}`
+        );
+      }
+      if (fileLstat.size > PREBUILT_COLLECTION_MAX_FILE_BYTES) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file ${normalizeToPosix(path.relative(absRoot, abs))} exceeds the ${PREBUILT_COLLECTION_MAX_FILE_BYTES / (1024 * 1024)} MiB individual-file budget`
+        );
+      }
+      totalBytes += fileLstat.size;
+      if (totalBytes > PREBUILT_COLLECTION_MAX_TOTAL_BYTES) {
+        failPrebuiltCollections(
+          `prebuilt collection tree exceeded the ${PREBUILT_COLLECTION_MAX_TOTAL_BYTES / (1024 * 1024)} MiB total-byte budget`
         );
       }
       files.push({
@@ -2248,7 +2281,42 @@ async function preparePrivateMockCloudCollection(
   return collection;
 }
 
-async function exportCollectionArtifact(options: {
+const ARTIFACT_ACQUISITION_WIDTH = 2;
+
+async function runBoundedInOrder<T, R>(
+  items: readonly T[],
+  width: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const failures = new Map<number, unknown>();
+  const runWorker = async (): Promise<void> => {
+    while (failures.size === 0 && nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        failures.set(index, error);
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, () => runWorker()));
+  const failedIndex = Math.min(...failures.keys());
+  if (Number.isFinite(failedIndex)) {
+    throw failures.get(failedIndex);
+  }
+  return results;
+}
+
+type CollectionArtifactAcquisition = {
+  reusePrebuilt: boolean;
+  cloudCollection?: Record<string, unknown>;
+};
+
+async function acquireCollectionArtifact(options: {
   role: PrebuiltCollectionRole;
   collectionId: string;
   dirName: string;
@@ -2257,70 +2325,58 @@ async function exportCollectionArtifact(options: {
   postman: RepoSyncDependencies['postman'];
   core: RepoSyncDependencies['core'];
   privateMockAuth?: boolean;
-  preparedCloudCollection?: Record<string, unknown>;
+}): Promise<CollectionArtifactAcquisition> {
+  const { role, collectionId, dirName, collectionsDir, prebuiltByRole, postman, core, privateMockAuth = false } = options;
+  const expectedPath = `${collectionsDir}/${dirName}`;
+  const forceCloudExport = privateMockAuth && (role === 'smoke' || role === 'contract');
+  const entry = prebuiltByRole.get(role);
+  if (entry && !forceCloudExport && tryReusePrebuiltCollection({
+    prepared: entry,
+    expectedPath,
+    expectedCloudId: collectionId
+  })) {
+    core.info(`Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`);
+    return { reusePrebuilt: true };
+  }
+  if (entry) {
+    core.info(forceCloudExport
+      ? `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
+      : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
+  }
+  const cloud = forceCloudExport
+    ? await preparePrivateMockCloudCollection(role, collectionId, postman)
+    : await postman.getCollection(collectionId) as Record<string, unknown>;
+  return { reusePrebuilt: false, cloudCollection: cloud };
+}
+
+async function exportCollectionArtifact(options: {
+  role: PrebuiltCollectionRole;
+  collectionId: string;
+  dirName: string;
+  collectionsDir: string;
+  artifactDir: string;
+  acquisition: CollectionArtifactAcquisition;
 }): Promise<string | undefined> {
   const {
-    role,
     collectionId,
     dirName,
     collectionsDir,
-    prebuiltByRole,
-    postman,
-    core,
-    privateMockAuth = false,
-    preparedCloudCollection
+    artifactDir,
+    acquisition
   } = options;
   if (!collectionId) {
     return undefined;
   }
 
   const expectedPath = `${collectionsDir}/${dirName}`;
-  const forceCloudExport =
-    privateMockAuth && (role === 'smoke' || role === 'contract');
-  const entry = prebuiltByRole.get(role);
-  if (entry && !forceCloudExport) {
-    const reused = tryReusePrebuiltCollection({
-      prepared: entry,
-      expectedPath,
-      expectedCloudId: collectionId
-    });
-    if (reused) {
-      core.info(
-        `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
-      );
-      return `../${expectedPath}`;
-    }
-    core.info(
-      `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`
-    );
-  } else if (entry && forceCloudExport) {
-    core.info(
-      `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
-    );
+  if (acquisition.reusePrebuilt) {
+    return `../${expectedPath}`;
   }
-
-  let collectionForExport: Parameters<typeof convertAndSplitAnyCollection>[0];
-  if (forceCloudExport && preparedCloudCollection) {
-    collectionForExport = preparedCloudCollection as Parameters<
-      typeof convertAndSplitAnyCollection
-    >[0];
-  } else if (forceCloudExport) {
-    const col = await postman.getCollection(collectionId);
-    const { collection } = applyPrivateMockExportCleanup(col as Record<string, unknown>, {
-      stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
-    });
-    if (!verifyPrivateMockRootHook(collection)) {
-      throw new Error(
-        `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
-      );
-    }
-    collectionForExport = collection as Parameters<typeof convertAndSplitAnyCollection>[0];
-  } else {
-    const col = await postman.getCollection(collectionId);
-    collectionForExport = col as Parameters<typeof convertAndSplitAnyCollection>[0];
-  }
-
-  await convertAndSplitAnyCollection(collectionForExport, expectedPath);
+  assertPathWithinArtifactRoot(expectedPath, artifactDir, 'collection target');
+  await convertAndSplitAnyCollection(
+    acquisition.cloudCollection as Parameters<typeof convertAndSplitAnyCollection>[0],
+    expectedPath
+  );
   return `../${expectedPath}`;
 }
 
@@ -2423,68 +2479,43 @@ async function exportArtifacts(
   const prebuiltByRole = options.preparedPrebuiltCollections;
   const privateMockAuth = options.privateMockAuth === true;
 
-  const preparedPrivateMockCollections = new Map<PrebuiltCollectionRole, Record<string, unknown>>();
-  if (privateMockAuth) {
-    for (const spec of [
-      { role: 'smoke' as const, collectionId: inputs.smokeCollectionId },
-      { role: 'contract' as const, collectionId: inputs.contractCollectionId }
-    ]) {
-      if (!spec.collectionId) {
-        continue;
-      }
-      preparedPrivateMockCollections.set(
-        spec.role,
-        await preparePrivateMockCloudCollection(
-          spec.role,
-          spec.collectionId,
-          dependencies.postman
-        )
-      );
+  const collectionSpecs = [
+    { role: 'baseline' as const, collectionId: inputs.baselineCollectionId, dirName: getCollectionDirectoryName('Baseline', assetProjectName) },
+    { role: 'smoke' as const, collectionId: inputs.smokeCollectionId, dirName: getCollectionDirectoryName('Smoke', assetProjectName) },
+    { role: 'contract' as const, collectionId: inputs.contractCollectionId, dirName: getCollectionDirectoryName('Contract', assetProjectName) }
+  ].filter((spec) => Boolean(spec.collectionId));
+  const collectionStartedAt = Date.now();
+  let collectionStatus = 'success';
+  let acquisitions: CollectionArtifactAcquisition[];
+  try {
+    acquisitions = await runBoundedInOrder(collectionSpecs, ARTIFACT_ACQUISITION_WIDTH, (spec) =>
+      acquireCollectionArtifact({
+        ...spec,
+        collectionsDir,
+        prebuiltByRole,
+        postman: dependencies.postman,
+        core: dependencies.core,
+        privateMockAuth
+      })
+    );
+  } catch (error) {
+    collectionStatus = 'failed';
+    throw error;
+  } finally {
+    dependencies.core.info(
+      `collection-acquisition count=${collectionSpecs.length} width=${ARTIFACT_ACQUISITION_WIDTH} ms=${Date.now() - collectionStartedAt} status=${collectionStatus}`
+    );
+  }
+  for (const [index, spec] of collectionSpecs.entries()) {
+    const ref = await exportCollectionArtifact({
+      ...spec,
+      collectionsDir,
+      artifactDir: inputs.artifactDir,
+      acquisition: acquisitions[index]
+    });
+    if (ref) {
+      manifestCollections[ref] = spec.collectionId;
     }
-  }
-
-  const baselineRef = await exportCollectionArtifact({
-    role: 'baseline',
-    collectionId: inputs.baselineCollectionId,
-    dirName: getCollectionDirectoryName('Baseline', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core,
-    privateMockAuth
-  });
-  if (baselineRef) {
-    manifestCollections[baselineRef] = inputs.baselineCollectionId;
-  }
-
-  const smokeRef = await exportCollectionArtifact({
-    role: 'smoke',
-    collectionId: inputs.smokeCollectionId,
-    dirName: getCollectionDirectoryName('Smoke', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core,
-    privateMockAuth,
-    preparedCloudCollection: preparedPrivateMockCollections.get('smoke')
-  });
-  if (smokeRef) {
-    manifestCollections[smokeRef] = inputs.smokeCollectionId;
-  }
-
-  const contractRef = await exportCollectionArtifact({
-    role: 'contract',
-    collectionId: inputs.contractCollectionId,
-    dirName: getCollectionDirectoryName('Contract', assetProjectName),
-    collectionsDir,
-    prebuiltByRole,
-    postman: dependencies.postman,
-    core: dependencies.core,
-    privateMockAuth,
-    preparedCloudCollection: preparedPrivateMockCollections.get('contract')
-  });
-  if (contractRef) {
-    manifestCollections[contractRef] = inputs.contractCollectionId;
   }
 
   ensureDir(collectionsDir);
@@ -2505,17 +2536,40 @@ async function exportArtifacts(
     }
   }
 
-  for (const [envName, envUid] of Object.entries(envUids)) {
-    writeJsonFile(
-      `${environmentsDir}/${envName}.postman_environment.json`,
-      await dependencies.postman.getEnvironment(envUid),
-      true
+  const environmentSpecs = [
+    ...Object.entries(envUids).map(([envName, envUid]) => ({
+      envName,
+      envUid,
+      filePath: `${environmentsDir}/${envName}.postman_environment.json`
+    })),
+    ...(options.mockEnvironmentUid ? [{
+      envName: 'manual-validation',
+      envUid: options.mockEnvironmentUid,
+      filePath: `${mocksDir}/manual-validation.postman_environment.json`
+    }] : [])
+  ];
+  const environmentStartedAt = Date.now();
+  let environmentStatus = 'success';
+  let environmentPayloads: unknown[];
+  try {
+    environmentPayloads = await runBoundedInOrder(
+      environmentSpecs,
+      ARTIFACT_ACQUISITION_WIDTH,
+      (spec) => dependencies.postman.getEnvironment(spec.envUid)
+    );
+  } catch (error) {
+    environmentStatus = 'failed';
+    throw error;
+  } finally {
+    dependencies.core.info(
+      `environment-artifact-acquisition count=${environmentSpecs.length} width=${ARTIFACT_ACQUISITION_WIDTH} ms=${Date.now() - environmentStartedAt} status=${environmentStatus}`
     );
   }
-  if (options.mockEnvironmentUid) {
+  for (const [index, spec] of environmentSpecs.entries()) {
+    assertPathWithinCwd(spec.filePath, 'environment target');
     writeJsonFile(
-      `${mocksDir}/manual-validation.postman_environment.json`,
-      await dependencies.postman.getEnvironment(options.mockEnvironmentUid),
+      spec.filePath,
+      environmentPayloads[index],
       true
     );
   }
@@ -2527,6 +2581,7 @@ async function exportArtifacts(
     workspaceLinkStatus: options.workspaceLinkStatus
   });
 
+  assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
   writeFileSync('.postman/resources.yaml', buildResourcesManifest(
     durableWorkspaceId,
     manifestCollections,
@@ -2548,6 +2603,7 @@ async function exportArtifacts(
     } catch {
       existingWorkflows = undefined;
     }
+    assertPathWithinCwd('.postman/workflows.yaml', 'workflows state target');
     writeFileSync(
       '.postman/workflows.yaml',
       buildSpecCollectionWorkflowManifest(
@@ -2609,7 +2665,6 @@ async function commitAndPushGeneratedFiles(
   // File generation is independent of git mutation: mode=none still writes the
   // requested CI workflow, but never stages/commits/pushes.
   if (inputs.generateCiWorkflow) {
-    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
     const ciWorkflow = renderCiWorkflow(inputs);
 
     // Extract dir from ciWorkflowPath
@@ -2619,6 +2674,7 @@ async function commitAndPushGeneratedFiles(
       ensureDir(dir);
     }
 
+    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
 
     // GC workflow: dedicated generated workflow for preview retention (R18a).
@@ -2628,6 +2684,7 @@ async function commitAndPushGeneratedFiles(
       const gcPath = '.github/workflows/postman-preview-gc.yml';
       if (inputs.ciWorkflowPath.endsWith('.github/workflows/ci.yml') || inputs.ciWorkflowPath === '.github/workflows/ci.yml') {
         ensureDir('.github/workflows');
+        assertPathWithinCwd(gcPath, 'preview GC workflow path');
         writeFileSync(gcPath, renderGcWorkflowTemplate());
       }
     }

@@ -16,7 +16,7 @@ export type PrebuiltCollectionEntry = {
   path?: string;
   /** Canonical cloud ID for the collection. */
   cloudId: string;
-  /** SHA-256 digest of the canonical v2 payload (optional; verified when present). */
+  /** SHA-256 digest of the canonical v2 payload (optional; format-validated provenance only, not the reuse gate). */
   payloadDigest?: string;
   /** SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL). */
   artifactDigest: string;

@@ -314,6 +314,25 @@ function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+function artifactTreeDigest(root = '.'): string {
+  const files: string[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    for (const name of readdirSync(current)) {
+      const filePath = join(current, name);
+      if (lstatSync(filePath).isDirectory()) pending.push(filePath);
+      else files.push(filePath);
+    }
+  }
+  const hash = createHash('sha256');
+  for (const filePath of files.sort()) {
+    hash.update(filePath.slice(root.length).replaceAll('\\', '/'));
+    hash.update(readFileSync(filePath));
+  }
+  return hash.digest('hex');
+}
+
 function writeCanonicalV3Tree(
   collectionPath: string,
   definitionBody = '$kind: collection\nname: Fixture\n'
@@ -449,6 +468,16 @@ function createExportPostmanStub() {
     deleteMonitor: vi.fn().mockResolvedValue(undefined),
     configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(0)
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 describe('repo sync action', () => {
@@ -832,6 +861,302 @@ describe('repo sync action', () => {
       expect(postman.getCollection).toHaveBeenCalledTimes(3);
     });
 
+    it('bounds collection acquisition to two, joins before materialization, and preserves role order', async () => {
+      const pending = new Map([
+        ['col-baseline', deferred<ReturnType<typeof createCollectionFixture>>()],
+        ['col-smoke', deferred<ReturnType<typeof createCollectionFixture>>()],
+        ['col-contract', deferred<ReturnType<typeof createCollectionFixture>>()]
+      ]);
+      let active = 0;
+      let peak = 0;
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn((id: string) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          const request = pending.get(id)!;
+          return request.promise.finally(() => { active -= 1; });
+        })
+      };
+      const { core, infos } = createCoreStub();
+      const sync = runRepoSync(createInputs({ generateCiWorkflow: false }), {
+        ...deps(postman), core
+      });
+
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(2));
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(existsSync('postman/collections')).toBe(false);
+      pending.get('col-smoke')!.resolve(createCollectionFixture('[Smoke] core-payments'));
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(3));
+      expect(existsSync('postman/collections')).toBe(false);
+      pending.get('col-baseline')!.resolve(createCollectionFixture('core-payments'));
+      pending.get('col-contract')!.resolve(createCollectionFixture('[Contract] core-payments'));
+      await sync;
+
+      expect(readdirSync('postman/collections')).toEqual([
+        '[Contract] core-payments', '[Smoke] core-payments', 'core-payments'
+      ]);
+      expect(infos.some((line) => /collection-acquisition.*count=3.*width=2.*ms=.*status=success/.test(line))).toBe(true);
+    });
+
+    it.skipIf(process.platform === 'win32')('rechecks collection targets after acquisition before conversion can follow a swapped symlink', async () => {
+      const pending = new Map([
+        ['col-baseline', deferred<ReturnType<typeof createCollectionFixture>>()],
+        ['col-smoke', deferred<ReturnType<typeof createCollectionFixture>>()],
+        ['col-contract', deferred<ReturnType<typeof createCollectionFixture>>()]
+      ]);
+      const outside = mkdtempSync(join(tmpdir(), 'repo-sync-collection-swap-'));
+      const commitAndPush = vi.fn();
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn((id: string) => pending.get(id)!.promise)
+      };
+      const sync = runRepoSync(createInputs({ generateCiWorkflow: false }), {
+        ...deps(postman),
+        repoMutation: { commitAndPush } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      });
+
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(2));
+      mkdirSync('postman/collections', { recursive: true });
+      symlinkSync(outside, 'postman/collections/core-payments');
+      pending.get('col-baseline')!.resolve(createCollectionFixture('core-payments'));
+      pending.get('col-smoke')!.resolve(createCollectionFixture('[Smoke] core-payments'));
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(3));
+      pending.get('col-contract')!.resolve(createCollectionFixture('[Contract] core-payments'));
+
+      await expect(sync).rejects.toThrow(/collection target|artifact-dir|repository root|symlink/i);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+      rmSync(outside, { recursive: true, force: true });
+    });
+
+    it('drains active collection reads after a failure without scheduling later acquisition or materialization', async () => {
+      const baseline = deferred<ReturnType<typeof createCollectionFixture>>();
+      const smoke = deferred<ReturnType<typeof createCollectionFixture>>();
+      const commitAndPush = vi.fn();
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn((id: string) => id === 'col-baseline' ? baseline.promise : smoke.promise)
+      };
+      const { core, infos } = createCoreStub();
+      const sync = runRepoSync(createInputs({ generateCiWorkflow: false }), {
+        ...deps(postman),
+        core,
+        repoMutation: { commitAndPush } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      });
+      let rejected = false;
+      void sync.catch(() => { rejected = true; });
+
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(2));
+      baseline.reject(new Error('baseline export denied'));
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-contract');
+      expect(existsSync('postman/collections')).toBe(false);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('.postman/workflows.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+
+      smoke.resolve(createCollectionFixture('[Smoke] core-payments'));
+      await expect(sync).rejects.toThrow('baseline export denied');
+      expect(rejected).toBe(true);
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(infos.some((line) => /collection-acquisition.*count=3.*width=2.*ms=.*status=failed/.test(line))).toBe(true);
+    });
+
+    it('reports the lowest-index collection failure after draining concurrent rejections', async () => {
+      const baseline = deferred<ReturnType<typeof createCollectionFixture>>();
+      const smoke = deferred<ReturnType<typeof createCollectionFixture>>();
+      const commitAndPush = vi.fn();
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn((id: string) => id === 'col-baseline' ? baseline.promise : smoke.promise)
+      };
+      const sync = runRepoSync(createInputs({ generateCiWorkflow: false }), {
+        ...deps(postman),
+        repoMutation: { commitAndPush } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      });
+      let settled = false;
+      const observed = sync.then(
+        () => new Error('runRepoSync unexpectedly resolved'),
+        (error: unknown) => error
+      );
+      void observed.then(() => { settled = true; });
+
+      await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(2));
+      smoke.reject(new Error('smoke export denied first'));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-contract');
+      expect(existsSync('postman/collections')).toBe(false);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('.postman/workflows.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+
+      baseline.reject(new Error('baseline export denied second'));
+      const error = await observed;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('baseline export denied second');
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(existsSync('postman/collections')).toBe(false);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(existsSync('.postman/workflows.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+    });
+
+    it('drains active environment reads after a failure without scheduling the mock read or writing state', async () => {
+      const prod = deferred<{ values: Array<{ key: string; value: string }> }>();
+      const stage = deferred<{ values: Array<{ key: string; value: string }> }>();
+      const postman = {
+        ...createExportPostmanStub(),
+        findEnvironmentByName: vi.fn().mockResolvedValue(null),
+        createEnvironment: vi.fn((_workspaceId: string, name: string) =>
+          Promise.resolve(name.endsWith(' - Mock') ? 'env-mock' : `env-${name.split(' ').at(-1)}`)
+        ),
+        getEnvironment: vi.fn((id: string) => id === 'env-prod' ? prod.promise : stage.promise)
+      };
+      const { core, infos } = createCoreStub();
+      const sync = runRepoSync(createInputs({
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }), { ...deps(postman), core });
+      let rejected = false;
+      void sync.catch(() => { rejected = true; });
+
+      await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(2));
+      expect(postman.getEnvironment.mock.calls.map(([id]) => id)).toEqual(['env-prod', 'env-stage']);
+      prod.reject(new Error('prod environment denied'));
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(postman.getEnvironment).not.toHaveBeenCalledWith('env-mock');
+      expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
+      expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(false);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+
+      stage.resolve({ values: [{ key: 'stage', value: 'two' }] });
+      await expect(sync).rejects.toThrow('prod environment denied');
+      expect(rejected).toBe(true);
+      expect(postman.getEnvironment).toHaveBeenCalledTimes(2);
+      expect(infos.some((line) => /environment-artifact-acquisition.*count=3.*width=2.*ms=.*status=failed/.test(line))).toBe(true);
+    });
+
+    it('materializes byte-identical artifacts when the same collection payloads complete in opposite orders', async () => {
+      async function syncWithCompletionOrder(directory: string, first: 'baseline' | 'smoke') {
+        mkdirSync(directory);
+        process.chdir(directory);
+        const pending = new Map([
+          ['col-baseline', deferred<ReturnType<typeof createCollectionFixture>>()],
+          ['col-smoke', deferred<ReturnType<typeof createCollectionFixture>>()],
+          ['col-contract', deferred<ReturnType<typeof createCollectionFixture>>()]
+        ]);
+        const postman = {
+          ...createExportPostmanStub(),
+          getCollection: vi.fn((id: string) => pending.get(id)!.promise)
+        };
+        const sync = runRepoSync(createInputs({ generateCiWorkflow: false, repoWriteMode: 'none' }), deps(postman));
+        await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(2));
+        pending.get(first === 'baseline' ? 'col-baseline' : 'col-smoke')!.resolve(
+          createCollectionFixture(first === 'baseline' ? 'core-payments' : '[Smoke] core-payments')
+        );
+        await vi.waitFor(() => expect(postman.getCollection).toHaveBeenCalledTimes(3));
+        pending.get('col-contract')!.resolve(createCollectionFixture('[Contract] core-payments'));
+        pending.get(first === 'baseline' ? 'col-smoke' : 'col-baseline')!.resolve(
+          createCollectionFixture(first === 'baseline' ? '[Smoke] core-payments' : 'core-payments')
+        );
+        await sync;
+        return {
+          digest: artifactTreeDigest(),
+          resources: readFileSync('.postman/resources.yaml')
+        };
+      }
+
+      const first = await syncWithCompletionOrder('completion-baseline-first', 'baseline');
+      process.chdir(testDir);
+      const second = await syncWithCompletionOrder('completion-smoke-first', 'smoke');
+      expect(second.digest).toBe(first.digest);
+      expect(second.resources).toEqual(first.resources);
+    });
+
+    it('joins bounded environment acquisition before writes in finalized serial env spec order despite reverse read completion', async () => {
+      const pending = new Map([
+        ['env-prod', deferred<{ values: Array<{ key: string; value: string }> }>()],
+        ['env-stage', deferred<{ values: Array<{ key: string; value: string }> }>()],
+        ['env-mock', deferred<{ values: Array<{ key: string; value: string }> }>()]
+      ]);
+      let active = 0;
+      let peak = 0;
+      const postman = {
+        ...createExportPostmanStub(),
+        createEnvironment: vi.fn((_workspaceId: string, name: string) =>
+          Promise.resolve(name.endsWith(' - Mock') ? 'env-mock' : name.endsWith('prod') ? 'env-prod' : 'env-stage')
+        ),
+        getEnvironment: vi.fn((id: string) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          return pending.get(id)!.promise.finally(() => { active -= 1; });
+        })
+      };
+      const { core, infos } = createCoreStub();
+      const sync = runRepoSync(createInputs({
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        mockEnvironmentEnabled: true,
+        repoWriteMode: 'none'
+      }), {
+        ...deps(postman), core
+      });
+      await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(2));
+      // The finalized serial env spec order is prod, stage, mock; reads may complete out of order.
+      expect(postman.getEnvironment.mock.calls.map(([id]) => id)).toEqual(['env-prod', 'env-stage']);
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      pending.get('env-stage')!.resolve({ values: [{ key: 'stage', value: 'two' }] });
+      await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(3));
+      expect(postman.getEnvironment.mock.calls.map(([id]) => id)).toEqual(['env-prod', 'env-stage', 'env-mock']);
+      expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
+      expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(false);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      pending.get('env-prod')!.resolve({ values: [{ key: 'prod', value: 'one' }] });
+      pending.get('env-mock')!.resolve({ values: [{ key: 'mock', value: 'three' }] });
+      await sync;
+      expect(readFileSync('postman/environments/prod.postman_environment.json', 'utf8')).toContain('prod');
+      expect(readFileSync('postman/environments/stage.postman_environment.json', 'utf8')).toContain('stage');
+      expect(readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')).toContain('mock');
+      expect(infos.some((line) => /environment-artifact-acquisition.*count=3.*width=2.*ms=.*status=success/.test(line))).toBe(true);
+    });
+
+    it.skipIf(process.platform === 'win32')('rechecks environment targets after acquisition before a swapped symlink can receive a write', async () => {
+      const prod = deferred<{ values: Array<{ key: string; value: string }> }>();
+      const stage = deferred<{ values: Array<{ key: string; value: string }> }>();
+      const outside = mkdtempSync(join(tmpdir(), 'repo-sync-environment-swap-'));
+      const commitAndPush = vi.fn();
+      const postman = {
+        ...createExportPostmanStub(),
+        getEnvironment: vi.fn((id: string) => id === 'env-prod' ? prod.promise : stage.promise)
+      };
+      const sync = runRepoSync(createInputs({ generateCiWorkflow: false }), {
+        ...deps(postman),
+        repoMutation: { commitAndPush } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      });
+
+      await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(2));
+      mkdirSync('postman/environments', { recursive: true });
+      symlinkSync(outside, 'postman/environments/prod.postman_environment.json');
+      prod.resolve({ values: [{ key: 'prod', value: 'one' }] });
+      stage.resolve({ values: [{ key: 'stage', value: 'two' }] });
+
+      await expect(sync).rejects.toThrow(/environment target|repository root|symlink/i);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+      rmSync(outside, { recursive: true, force: true });
+    });
+
     it('reuses an exact digest-bound canonical tree without cloud get/export', async () => {
       const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
       const smoke = writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
@@ -873,6 +1198,68 @@ describe('repo sync action', () => {
       expect(readFileSync('postman/collections/core-payments/Folder/Event.message.yaml', 'utf8')).toContain('$kind: websocket-message');
     });
 
+    it('reuses exact baseline and contract trees while freshly exporting an omitted smoke role', async () => {
+      const baselinePath = 'postman/collections/core-payments';
+      const smokePath = 'postman/collections/[Smoke] core-payments';
+      const contractPath = 'postman/collections/[Contract] core-payments';
+      const baseline = writeCanonicalV3Tree(baselinePath);
+      const contract = writeCanonicalV3Tree(contractPath);
+      writeCanonicalV3Tree(smokePath);
+      writeFileSync(join(smokePath, 'StaleSmokeOnly.request.yaml'), '$kind: http-request\nmethod: GET\n', 'utf8');
+      const freshSmoke = createCollectionFixture('[Smoke] core-payments');
+      freshSmoke.item.push({
+        name: 'Fresh Smoke Only',
+        request: {
+          method: 'GET',
+          url: { raw: 'https://api.example.com/fresh-smoke', query: [] }
+        }
+      });
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn((id: string) => {
+          if (id !== 'col-smoke') throw new Error(`unexpected collection export: ${id}`);
+          return Promise.resolve(freshSmoke);
+        })
+      };
+      const baselineBefore = artifactTreeDigest(baselinePath);
+      const contractBefore = artifactTreeDigest(contractPath);
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: baselinePath,
+              cloudId: 'col-baseline',
+              artifactDigest: baseline.artifactDigest
+            },
+            {
+              role: 'contract',
+              collectionPath: contractPath,
+              cloudId: 'col-contract',
+              artifactDigest: contract.artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(1);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(artifactTreeDigest(baselinePath)).toBe(baselineBefore);
+      expect(artifactTreeDigest(contractPath)).toBe(contractBefore);
+      expect(existsSync(join(smokePath, 'Fresh Smoke Only.request.yaml'))).toBe(true);
+      expect(existsSync(join(smokePath, 'StaleSmokeOnly.request.yaml'))).toBe(false);
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(Object.entries(resources.canonical?.collections ?? {})).toEqual([
+        ['../postman/collections/core-payments', 'col-baseline'],
+        ['../postman/collections/[Smoke] core-payments', 'col-smoke'],
+        ['../postman/collections/[Contract] core-payments', 'col-contract']
+      ]);
+    });
+
     it.each([
       ['legacy filename', 'collection.yaml', '$kind: collection\n'],
       ['missing kind', 'Broken.request.yaml', 'method: GET\n'],
@@ -911,6 +1298,7 @@ describe('repo sync action', () => {
 
     it('cloud-exports when digest, path, role name, or cloud ID mismatches', async () => {
       const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
+      writeFileSync('postman/collections/core-payments/Stale.request.yaml', '$kind: http-request\nmethod: GET\n', 'utf8');
       writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
       writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
       const postman = createExportPostmanStub();
@@ -950,6 +1338,8 @@ describe('repo sync action', () => {
       expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
       expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
       expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
+      expect(existsSync('postman/collections/core-payments/Stale.request.yaml')).toBe(false);
+      expect(readFileSync('postman/collections/core-payments/.resources/definition.yaml', 'utf8')).toContain('$kind: collection');
     });
 
     it.each([
@@ -1235,7 +1625,33 @@ describe('repo sync action', () => {
       expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
     }, 60_000);
 
-    it('accepts >64 nested depth when the host permits', async () => {
+    it('rejects prebuilt trees over the 10,000 directory-and-file traversal-entry budget before cloud export', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      for (let index = 0; index < 10_000; index += 1) {
+        mkdirSync(join(root, `entry-${index}`));
+      }
+      const postman = createExportPostmanStub();
+
+      await expect(runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([{
+            role: 'baseline',
+            collectionPath: root,
+            cloudId: 'col-baseline',
+            artifactDigest: fixture.artifactDigest
+          }])
+        }),
+        deps(postman)
+      )).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*10000.*traversal-entry/i);
+
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+    }, 120_000);
+
+    it('reuses an exact prebuilt baseline with 70 nested directories and no baseline GET', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
       writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
@@ -1253,8 +1669,6 @@ describe('repo sync action', () => {
         }
         throw error;
       }
-      // Empty nested dirs prove depth acceptance without changing the file digest.
-      const artifactDigest = fixture.artifactDigest;
       const postman = createExportPostmanStub();
 
       await runRepoSync(
@@ -1266,35 +1680,7 @@ describe('repo sync action', () => {
               role: 'baseline',
               collectionPath: root,
               cloudId: 'col-baseline',
-              artifactDigest
-            }
-          ])
-        }),
-        deps(postman)
-      );
-
-      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
-    }, 60_000);
-
-    it('accepts a >25 MiB valid YAML file written in chunks without cloud export', async () => {
-      const root = 'postman/collections/core-payments';
-      writeCanonicalV3Tree(root);
-      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
-      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
-      writeLargeCanonicalRequestYaml(join(root, 'Huge.request.yaml'), 25 * 1024 * 1024 + 1024);
-      const artifactDigest = await digestTreeOnDisk(root);
-      const postman = createExportPostmanStub();
-
-      await runRepoSync(
-        createInputs({
-          environments: ['prod'],
-          generateCiWorkflow: false,
-          prebuiltCollectionsJson: buildPrebuiltManifest([
-            {
-              role: 'baseline',
-              collectionPath: root,
-              cloudId: 'col-baseline',
-              artifactDigest
+              artifactDigest: fixture.artifactDigest
             }
           ])
         }),
@@ -1303,7 +1689,130 @@ describe('repo sync action', () => {
 
       expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
       expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    }, 60_000);
+
+    it('reuses a 25 MiB+1 KiB valid request YAML by streaming its digest without whole-tree buffering', async () => {
+      const root = 'postman/collections/core-payments';
+      writeCanonicalV3Tree(root);
+      writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
+      writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+      writeLargeCanonicalRequestYaml(join(root, 'Huge.request.yaml'), 25 * 1024 * 1024 + 1024);
+      const artifactDigest = await digestTreeOnDisk(root);
+      const postman = createExportPostmanStub();
+      const beforeHeap = process.memoryUsage().heapUsed;
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest
+            }
+          ])
+        }),
+        deps(postman)
+      );
+
+      const heapDelta = process.memoryUsage().heapUsed - beforeHeap;
+      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(heapDelta).toBeLessThan(32 * 1024 * 1024);
     }, 180_000);
+
+    it('rejects prebuilt trees deeper than 128 before cloud export or artifact mutation', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      let current = root;
+      try {
+        for (let depth = 0; depth < 129; depth += 1) {
+          current = join(current, 'n');
+          mkdirSync(current);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENAMETOOLONG' || code === 'ENOENT') {
+          return;
+        }
+        throw error;
+      }
+      const postman = createExportPostmanStub();
+
+      await expect(runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([{
+            role: 'baseline',
+            collectionPath: root,
+            cloudId: 'col-baseline',
+            artifactDigest: fixture.artifactDigest
+          }])
+        }),
+        deps(postman)
+      )).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*128.*depth/i);
+
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+    }, 60_000);
+
+    it('rejects an individual prebuilt file over 32 MiB before cloud export or artifact mutation', async () => {
+      const root = 'postman/collections/core-payments';
+      writeCanonicalV3Tree(root);
+      writeLargeCanonicalRequestYaml(join(root, 'Huge.request.yaml'), 32 * 1024 * 1024 + 1024);
+      const postman = createExportPostmanStub();
+
+      await expect(runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([
+            {
+              role: 'baseline',
+              collectionPath: root,
+              cloudId: 'col-baseline',
+              artifactDigest: sha256Hex('oversized-file')
+            }
+          ])
+        }),
+        deps(postman)
+      )).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*32 MiB/i);
+
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+    }, 180_000);
+
+    it('rejects prebuilt trees over the 100 MiB aggregate budget before reading their sparse files', async () => {
+      const root = 'postman/collections/core-payments';
+      const fixture = writeCanonicalV3Tree(root);
+      const sparseFileBytes = Math.floor(9.5 * 1024 * 1024);
+      for (let index = 0; index < 11; index += 1) {
+        const file = join(root, `aggregate-${index}.request.yaml`);
+        const fd = openSync(file, 'w');
+        writeSync(fd, Buffer.from('x'), 0, 1, sparseFileBytes - 1);
+        closeSync(fd);
+      }
+      const postman = createExportPostmanStub();
+
+      await expect(runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          prebuiltCollectionsJson: buildPrebuiltManifest([{
+            role: 'baseline',
+            collectionPath: root,
+            cloudId: 'col-baseline',
+            artifactDigest: fixture.artifactDigest
+          }])
+        }),
+        deps(postman)
+      )).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID:.*100 MiB.*total-byte/i);
+
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+    });
 
     it('accepts a >64 KiB semantically valid prebuilt manifest', async () => {
       const root = 'postman/collections/core-payments';
@@ -1923,9 +2432,9 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED.*smoke.*col-smoke/);
 
       assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
-      expect(postman.getCollection).toHaveBeenCalledTimes(1);
+      expect(postman.getCollection).toHaveBeenCalledTimes(2);
       expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
-      expect(postman.getCollection).not.toHaveBeenCalledWith('col-contract');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
       expect(commitAndPush).not.toHaveBeenCalled();
       expect(existsSync('.postman/resources.yaml')).toBe(false);
       expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);

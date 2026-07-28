@@ -194,6 +194,20 @@ describe('postman-repo-sync-action contract', () => {
     expect(readme).toContain('Use this for customer-managed PR workflows.');
   });
 
+  it('documents the canonical Collection v3 artifact and state-v2 layouts', () => {
+    const artifactLayout = readFileSync(resolve(repoRoot, 'docs/artifact-layout.md'), 'utf8');
+
+    expect(artifactLayout).toContain('`.resources/definition.yaml`');
+    expect(artifactLayout).toContain('`$kind:`');
+    expect(artifactLayout).toContain('legacy `collection.yaml`');
+    expect(artifactLayout).toContain('version: 2');
+    expect(artifactLayout).toContain('`canonical.collections`');
+    expect(artifactLayout).toContain('`canonical.environments`');
+    expect(artifactLayout).toContain('`canonical.specs`');
+    expect(artifactLayout).not.toContain('localResources');
+    expect(artifactLayout).not.toContain('cloudResources');
+  });
+
   it('keeps action metadata aligned with the contract surface', () => {
     const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
       inputs: Record<string, { default?: string }>;
@@ -302,6 +316,8 @@ describe('postman-repo-sync-action contract', () => {
 
   it('defines prebuilt-collections-json semantic contract schema and default behavior', () => {
     const inputDef = postmanRepoSyncActionContract.inputs['prebuilt-collections-json'];
+    const contractsSource = readFileSync(resolve(repoRoot, 'src/contracts.ts'), 'utf8');
+    const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
     expect(inputDef).toBeDefined();
     expect(inputDef.required).toBe(false);
     expect(inputDef.default).toBe('');
@@ -322,6 +338,16 @@ describe('postman-repo-sync-action contract', () => {
     );
     expect(inputDef.description).toContain(
       'optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate)'
+    );
+    expect(contractsSource).toContain(
+      'SHA-256 digest of the canonical v2 payload (optional; format-validated provenance only, not the reuse gate)'
+    );
+    expect(contractsSource).not.toContain('payload (optional; verified when present)');
+    expect(actionInput?.description).toContain(
+      'payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate)'
+    );
+    expect(readme).toContain(
+      'payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate)'
     );
     expect(inputDef.description).toContain('canonical cloud ID');
     expect(inputDef.description).not.toMatch(/depth|length|threshold|limit|cap/i);
