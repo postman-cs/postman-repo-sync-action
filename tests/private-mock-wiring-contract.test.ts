@@ -41,11 +41,11 @@ const packageRoot = resolve(import.meta.dirname, '..');
 const indexPath = resolve(packageRoot, 'src/index.ts');
 const indexSource = readFileSync(indexPath, 'utf8');
 
-function exportCollectionArtifactSource(): string {
+function collectionAcquisitionSource(): string {
   const match = indexSource.match(
-    /async function exportCollectionArtifact\([\s\S]*?\n\}(?=\n\n(?:async )?function |\nexport )/
+    /async function acquireCollectionArtifact\([\s\S]*?\n\}(?=\n\n(?:async )?function |\nexport )/
   );
-  expect(match?.[0], 'exportCollectionArtifact must exist in src/index.ts').toBeTruthy();
+  expect(match?.[0], 'acquireCollectionArtifact must exist in src/index.ts').toBeTruthy();
   return match![0];
 }
 
@@ -79,23 +79,21 @@ describe('private-mock export cleanup wiring contract', () => {
     );
   });
 
-  it('threads privateMockAuth into exportCollectionArtifact from orchestration', () => {
-    expect(exportCollectionArtifactSource()).toMatch(/\bprivateMockAuth\b/);
-    expect(indexSource).toMatch(/exportCollectionArtifact\(\{[\s\S]*?\bprivateMockAuth\b/);
+  it('threads privateMockAuth into collection acquisition from orchestration', () => {
+    expect(collectionAcquisitionSource()).toMatch(/\bprivateMockAuth\b/);
+    expect(indexSource).toMatch(/acquireCollectionArtifact\(\{[\s\S]*?\bprivateMockAuth\b/);
   });
 
   it('invokes applyPrivateMockExportCleanup on the cloud export path before YAML conversion', () => {
-    const exportFn = exportCollectionArtifactSource();
-    expect(exportFn).toMatch(
-      /applyPrivateMockExportCleanup[\s\S]*await convertAndSplitAnyCollection/
-    );
+    const exportFn = collectionAcquisitionSource();
+    expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toMatch(
       /async function preparePrivateMockCloudCollection[\s\S]*applyPrivateMockExportCleanup/
     );
   });
 
   it('forces smoke/contract cloud export when private-mock auth is active', () => {
-    const exportFn = exportCollectionArtifactSource();
+    const exportFn = collectionAcquisitionSource();
     expect(exportFn).toMatch(/\bprivateMockAuth\b/);
     expect(exportFn).toMatch(/['"]smoke['"]/);
     expect(exportFn).toMatch(/['"]contract['"]/);
@@ -106,8 +104,8 @@ describe('private-mock export cleanup wiring contract', () => {
   });
 
   it('fails before repo mutation when the managed root hook is absent from export IR', () => {
-    const exportFn = exportCollectionArtifactSource();
-    expect(exportFn).toMatch(/verifyPrivateMockRootHook/);
+    const exportFn = collectionAcquisitionSource();
+    expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toContain('PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED');
     expect(indexSource).toMatch(
       /async function preparePrivateMockCloudCollection[\s\S]*verifyPrivateMockRootHook/
@@ -317,7 +315,8 @@ function installManagedRootHook(collection: Record<string, unknown>): void {
 
 function createStatefulPrivateMockPostman(
   cloudCollections: Map<string, Record<string, unknown>>,
-  events: string[]
+  events: string[],
+  metrics?: { active: number; peak: number }
 ) {
   return {
     createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -348,6 +347,12 @@ function createStatefulPrivateMockPostman(
     }),
     getCollection: vi.fn(async (collectionUid: string) => {
       events.push(`export:${collectionUid}`);
+      if (metrics) {
+        metrics.active += 1;
+        metrics.peak = Math.max(metrics.peak, metrics.active);
+        await Promise.resolve();
+        metrics.active -= 1;
+      }
       const state = cloudCollections.get(collectionUid);
       if (!state) {
         throw new Error(`missing cloud collection ${collectionUid}`);
@@ -383,6 +388,7 @@ describe('private-mock behavioral ordering regression (C6)', () => {
 
   it('exports smoke and contract only after configure patches the managed root hook into cloud state', async () => {
     const events: string[] = [];
+    const metrics = { active: 0, peak: 0 };
     const cloudCollections = new Map<string, Record<string, unknown>>([
       [
         'col-smoke',
@@ -409,7 +415,7 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       };
     });
 
-    const postman = createStatefulPrivateMockPostman(cloudCollections, events);
+    const postman = createStatefulPrivateMockPostman(cloudCollections, events, metrics);
     const { core } = createCoreStub();
     const dependencies = {
       core,
@@ -488,6 +494,8 @@ describe('private-mock behavioral ordering regression (C6)', () => {
 
     expect(existsSync('postman/collections/core-payments/.resources/definition.yaml')).toBe(true);
     expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    expect(metrics.peak).toBeGreaterThan(1);
+    expect(metrics.peak).toBeLessThanOrEqual(2);
     expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
     expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
     expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
