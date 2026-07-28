@@ -894,8 +894,14 @@ describe('repo sync action', () => {
       pending.get('col-contract')!.resolve(createCollectionFixture('[Contract] core-payments'));
       await sync;
 
-      expect(readdirSync('postman/collections')).toEqual([
+      expect(readdirSync('postman/collections').sort()).toEqual([
         '[Contract] core-payments', '[Smoke] core-payments', 'core-payments'
+      ].sort());
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(Object.keys(resources.canonical?.collections ?? {})).toEqual([
+        '../postman/collections/core-payments',
+        '../postman/collections/[Smoke] core-payments',
+        '../postman/collections/[Contract] core-payments'
       ]);
       expect(infos.some((line) => /collection-acquisition.*count=3.*width=2.*ms=.*status=success/.test(line))).toBe(true);
     });
