@@ -121,7 +121,7 @@ function createCommandMap(
       stdout: '',
       stderr: ''
     },
-    'git rebase FETCH_HEAD': {
+    'git rebase -X theirs FETCH_HEAD': {
       exitCode: 0,
       stdout: 'Current branch is up to date.\n',
       stderr: ''
@@ -592,13 +592,18 @@ describe('repo mutation helpers', () => {
     });
 
     expect(result.pushed).toBe(true);
-    expect(execute).not.toHaveBeenCalledWith('git', ['rebase', 'FETCH_HEAD']);
+    expect(execute).not.toHaveBeenCalledWith('git', [
+      'rebase',
+      '-X',
+      'theirs',
+      'FETCH_HEAD'
+    ]);
   });
 
-  it('aborts and fails closed when generated files conflict with the target branch', async () => {
+  it('aborts and fails closed when a generated conflict remains unresolved', async () => {
     const execute = createExecuteMock(
       createCommandMap({
-        'git rebase FETCH_HEAD': {
+        'git rebase -X theirs FETCH_HEAD': {
           exitCode: 1,
           stdout: '',
           stderr: 'CONFLICT (content): Merge conflict in postman/collection.yaml\n'
@@ -771,8 +776,14 @@ describe('repo mutation helpers', () => {
       await execFileAsync('git', ['clone', remoteRoot, peerRoot]);
       await execFileAsync('git', ['config', 'user.name', 'Peer'], { cwd: peerRoot });
       await execFileAsync('git', ['config', 'user.email', 'peer@example.com'], { cwd: peerRoot });
+      await mkdir(path.join(peerRoot, 'postman'), { recursive: true });
       await writeFile(path.join(peerRoot, 'peer.txt'), 'remote advance\n', 'utf8');
-      await execFileAsync('git', ['add', 'peer.txt'], { cwd: peerRoot });
+      await writeFile(
+        path.join(peerRoot, 'postman', 'collection.yaml'),
+        'name: previous export\n',
+        'utf8'
+      );
+      await execFileAsync('git', ['add', 'peer.txt', 'postman/collection.yaml'], { cwd: peerRoot });
       await execFileAsync('git', ['commit', '-m', 'peer advance'], { cwd: peerRoot });
       await execFileAsync('git', ['push', 'origin', 'main'], { cwd: peerRoot });
 
@@ -824,6 +835,12 @@ describe('repo mutation helpers', () => {
       expect(remoteLog.stdout).toContain('chore: sync Postman artifacts and metadata');
       expect(remoteLog.stdout).toContain('late peer advance');
       expect(remoteLog.stdout).toContain('peer advance');
+      const remoteCollection = await execFileAsync(
+        'git',
+        ['--git-dir', remoteRoot, 'show', 'main:postman/collection.yaml'],
+        { encoding: 'utf8' }
+      );
+      expect(remoteCollection.stdout).toBe('name: demo\n');
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
