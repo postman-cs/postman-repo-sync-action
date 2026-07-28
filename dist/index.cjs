@@ -114507,7 +114507,7 @@ var RepoMutationService = class {
       "-m",
       "chore: sync Postman artifacts and metadata"
     ]);
-    const commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
+    let commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
     if (options.repoWriteMode !== "commit-and-push") {
       return {
         commitSha,
@@ -114519,6 +114519,7 @@ var RepoMutationService = class {
     let pushed = false;
     let lastError = "";
     let remoteChanged = false;
+    let stopCandidates = false;
     const isNonRetryablePushError = (message) => /workflow|permission/i.test(message);
     try {
       const pushCandidates = usePersistedCredentials ? [null] : tokens;
@@ -114538,18 +114539,54 @@ var RepoMutationService = class {
           ]);
           remoteChanged = true;
         }
-        const push = await this.execute("git", [
-          ...resetConfigArgs,
-          "push",
-          "origin",
-          `HEAD:refs/heads/${resolvedCurrentRef}`
-        ]);
-        if (push.exitCode === 0) {
-          pushed = true;
-          break;
+        for (let pushAttempt = 0; pushAttempt < 2; pushAttempt += 1) {
+          const fetch2 = await this.execute("git", [
+            ...resetConfigArgs,
+            "fetch",
+            "--no-tags",
+            "origin",
+            `refs/heads/${resolvedCurrentRef}`
+          ]);
+          const fetchError = fetch2.stderr || fetch2.stdout || "";
+          const targetBranchDoesNotExist = /couldn't find remote ref|remote ref .* not found/i.test(
+            fetchError
+          );
+          if (fetch2.exitCode !== 0 && !targetBranchDoesNotExist) {
+            lastError = fetchError;
+            stopCandidates = isNonRetryablePushError(lastError);
+            break;
+          }
+          if (fetch2.exitCode === 0) {
+            const rebase = await this.execute("git", ["rebase", "FETCH_HEAD"]);
+            if (rebase.exitCode !== 0) {
+              await this.execute("git", ["rebase", "--abort"]);
+              const cause = rebase.stderr || rebase.stdout || "Failed to rebase generated changes";
+              throw new Error(
+                secretMasker(
+                  `REPO_PUSH_RECONCILE_FAILED: Could not rebase generated changes onto ${resolvedCurrentRef}: ${cause}`
+                )
+              );
+            }
+            commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
+          }
+          const push = await this.execute("git", [
+            ...resetConfigArgs,
+            "push",
+            "origin",
+            `HEAD:refs/heads/${resolvedCurrentRef}`
+          ]);
+          if (push.exitCode === 0) {
+            pushed = true;
+            break;
+          }
+          lastError = push.stderr || push.stdout || "";
+          stopCandidates = isNonRetryablePushError(lastError);
+          const targetAdvanced = /non-fast-forward|fetch first|remote contains work/i.test(lastError);
+          if (stopCandidates || !targetAdvanced) {
+            break;
+          }
         }
-        lastError = push.stderr || push.stdout || "";
-        if (isNonRetryablePushError(lastError)) {
+        if (pushed || stopCandidates) {
           break;
         }
       }
