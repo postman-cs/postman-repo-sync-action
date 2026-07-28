@@ -110,6 +110,27 @@ function createCommandMap(
         stdout: '',
         stderr: ''
       },
+    'git -c http.https://github.com/.extraheader= fetch --no-tags origin refs/heads/feature/sync-artifacts':
+      {
+        exitCode: 0,
+        stdout: '',
+        stderr: ''
+      },
+    'git fetch --no-tags origin refs/heads/feature/sync-artifacts': {
+      exitCode: 0,
+      stdout: '',
+      stderr: ''
+    },
+    'git rebase FETCH_HEAD': {
+      exitCode: 0,
+      stdout: 'Current branch is up to date.\n',
+      stderr: ''
+    },
+    'git rebase --abort': {
+      exitCode: 0,
+      stdout: '',
+      stderr: ''
+    },
     'git push origin HEAD:refs/heads/feature/sync-artifacts': {
       exitCode: 0,
       stdout: '',
@@ -452,6 +473,12 @@ describe('repo mutation helpers', () => {
             stdout: '',
             stderr: ''
         },
+        'git -c http.https://dev.azure.com/postman/.extraheader= -c http.https://dev.azure.com/postman/CSE/_git/repo-sync-demo.extraheader= fetch --no-tags origin refs/heads/feature/sync-artifacts':
+          {
+            exitCode: 0,
+            stdout: '',
+            stderr: ''
+          },
         [`git remote set-url origin ${adoRemote}`]: {
           exitCode: 0,
           stdout: '',
@@ -537,6 +564,65 @@ describe('repo mutation helpers', () => {
       'origin',
       expect.stringContaining('@dev.azure.com')
     ]);
+  });
+
+  it('creates a branch when the target ref does not exist on the remote', async () => {
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git -c http.https://github.com/.extraheader= fetch --no-tags origin refs/heads/feature/sync-artifacts':
+          {
+            exitCode: 128,
+            stdout: '',
+            stderr: "fatal: couldn't find remote ref refs/heads/feature/sync-artifacts\n"
+          }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    const result = await repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'feature/sync-artifacts',
+      fallbackToken: 'fallback-token',
+      committerName: 'Postman',
+      committerEmail: 'support@postman.com',
+      stagePaths: ['postman', '.postman', '.github/workflows']
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(execute).not.toHaveBeenCalledWith('git', ['rebase', 'FETCH_HEAD']);
+  });
+
+  it('aborts and fails closed when generated files conflict with the target branch', async () => {
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git rebase FETCH_HEAD': {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'CONFLICT (content): Merge conflict in postman/collection.yaml\n'
+        }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'feature/sync-artifacts',
+        fallbackToken: 'fallback-token',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.postman', '.github/workflows']
+      })
+    ).rejects.toThrow('REPO_PUSH_RECONCILE_FAILED');
+
+    expect(execute).toHaveBeenCalledWith('git', ['rebase', '--abort']);
+    expect(execute).not.toHaveBeenCalledWith('git', expect.arrayContaining(['push']));
   });
 
   it('returns without commit when there are no staged changes', async () => {
@@ -663,6 +749,86 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
+  it('rebases generated changes when the target advances before and during the push', async () => {
+    const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'repo-mutation-stale-checkout-'));
+    const remoteRoot = path.join(fixtureRoot, 'remote.git');
+    const checkoutRoot = path.join(fixtureRoot, 'checkout');
+    const peerRoot = path.join(fixtureRoot, 'peer');
+    try {
+      await execFileAsync('git', ['init', '--bare', '--initial-branch=main', remoteRoot]);
+      await mkdir(checkoutRoot, { recursive: true });
+      await execFileAsync('git', ['init', '--initial-branch=main'], { cwd: checkoutRoot });
+      await execFileAsync('git', ['config', 'user.name', 'Fixture'], { cwd: checkoutRoot });
+      await execFileAsync('git', ['config', 'user.email', 'fixture@example.com'], {
+        cwd: checkoutRoot
+      });
+      await writeFile(path.join(checkoutRoot, 'README.md'), 'initial\n', 'utf8');
+      await execFileAsync('git', ['add', 'README.md'], { cwd: checkoutRoot });
+      await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: checkoutRoot });
+      await execFileAsync('git', ['remote', 'add', 'origin', remoteRoot], { cwd: checkoutRoot });
+      await execFileAsync('git', ['push', '-u', 'origin', 'main'], { cwd: checkoutRoot });
+
+      await execFileAsync('git', ['clone', remoteRoot, peerRoot]);
+      await execFileAsync('git', ['config', 'user.name', 'Peer'], { cwd: peerRoot });
+      await execFileAsync('git', ['config', 'user.email', 'peer@example.com'], { cwd: peerRoot });
+      await writeFile(path.join(peerRoot, 'peer.txt'), 'remote advance\n', 'utf8');
+      await execFileAsync('git', ['add', 'peer.txt'], { cwd: peerRoot });
+      await execFileAsync('git', ['commit', '-m', 'peer advance'], { cwd: peerRoot });
+      await execFileAsync('git', ['push', 'origin', 'main'], { cwd: peerRoot });
+
+      await mkdir(path.join(checkoutRoot, 'postman'), { recursive: true });
+      await writeFile(path.join(checkoutRoot, 'postman', 'collection.yaml'), 'name: demo\n', 'utf8');
+      let advanceRemoteBeforeFirstPush = true;
+      const execute = async (command: string, args: string[]): Promise<CommandResult> => {
+        if (command === 'git' && args.includes('push') && advanceRemoteBeforeFirstPush) {
+          advanceRemoteBeforeFirstPush = false;
+          await writeFile(path.join(peerRoot, 'late-peer.txt'), 'late remote advance\n', 'utf8');
+          await execFileAsync('git', ['add', 'late-peer.txt'], { cwd: peerRoot });
+          await execFileAsync('git', ['commit', '-m', 'late peer advance'], { cwd: peerRoot });
+          await execFileAsync('git', ['push', 'origin', 'main'], { cwd: peerRoot });
+        }
+        try {
+          const result = await execFileAsync(command, args, { cwd: checkoutRoot, encoding: 'utf8' });
+          return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+        } catch (error) {
+          const failure = error as { code?: number; stdout?: string; stderr?: string };
+          return {
+            exitCode: typeof failure.code === 'number' ? failure.code : 1,
+            stdout: failure.stdout ?? '',
+            stderr: failure.stderr ?? ''
+          };
+        }
+      };
+      const repoMutation = new RepoMutationService({
+        cwd: checkoutRoot,
+        execute,
+        provider: 'azure-devops',
+        repoUrl: remoteRoot,
+        repository: 'fixture/repository'
+      });
+
+      const result = await repoMutation.commitAndPush({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'main',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman']
+      });
+
+      expect(result.pushed).toBe(true);
+      const remoteLog = await execFileAsync(
+        'git',
+        ['--git-dir', remoteRoot, 'log', '--format=%s', 'main'],
+        { encoding: 'utf8' }
+      );
+      expect(remoteLog.stdout).toContain('chore: sync Postman artifacts and metadata');
+      expect(remoteLog.stdout).toContain('late peer advance');
+      expect(remoteLog.stdout).toContain('peer advance');
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('preserves provision.yml and the index on push preflight failures, then removes it after valid preflight', async () => {
     const repoRoot = await mkdtemp(path.join(tmpdir(), 'repo-mutation-preflight-'));
     try {
@@ -688,7 +854,10 @@ describe('repo mutation helpers', () => {
       await execFileAsync('git', ['commit', '-m', 'test: add provision fixture'], { cwd: repoRoot });
       await execFileAsync('git', ['remote', 'add', 'origin', 'https://dev.azure.com/postman/CSE/_git/repo-sync-demo'], { cwd: repoRoot });
       const execute = async (command: string, args: string[]): Promise<CommandResult> => {
-        if (command === 'git' && args.includes('push')) {
+        if (
+          command === 'git' &&
+          (args.includes('push') || args.includes('fetch') || args[0] === 'rebase')
+        ) {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         try {

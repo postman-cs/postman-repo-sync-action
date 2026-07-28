@@ -32,34 +32,40 @@ type ExecPwshFailure = {
 const PWSH_PATH = process.env.PWSH_PATH?.trim() || 'pwsh';
 
 function execPwsh(command: string, options: ExecPwshOptions = {}): string {
-  return execFileSync(
-    PWSH_PATH,
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
-    {
-      cwd: options.cwd,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        // These bodies only use built-in cmdlets, so the module search path is
-        // dead weight. Pinning it empty keeps the probe hermetic: what the
-        // generated script does must not depend on which modules the machine
-        // running the suite happens to have installed. This is not a latency
-        // fix - pwsh startup stalls on its own roughly one spawn in ten, inside
-        // CLR init, with or without this pin.
-        PSModulePath: '',
-        POWERSHELL_TELEMETRY_OPTOUT: '1',
-        POWERSHELL_UPDATECHECK: 'Off',
-        DOTNET_CLI_TELEMETRY_OPTOUT: '1',
-        ...options.env
-      },
-      // Never inherit stdin: vitest workers keep a pipe open and pwsh can block on read.
-      stdio: ['ignore', 'pipe', 'pipe'],
-      encoding: 'utf8',
-      // pwsh spawn inside vitest workers can stall; scripts themselves finish in <1s.
-      timeout: 60_000,
-      killSignal: 'SIGKILL'
-    }
-  );
+  const run = (): string =>
+    execFileSync(
+      PWSH_PATH,
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+      {
+        cwd: options.cwd,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          // These bodies only use built-in cmdlets, so the module search path is
+          // dead weight. Pinning it empty keeps the probe hermetic: what the
+          // generated script does must not depend on which modules the machine
+          // running the suite happens to have installed.
+          PSModulePath: '',
+          POWERSHELL_TELEMETRY_OPTOUT: '1',
+          POWERSHELL_UPDATECHECK: 'Off',
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+          ...options.env
+        },
+        // Never inherit stdin: vitest workers keep a pipe open and pwsh can block on read.
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        // Scripts finish in <1s; a timeout is a known CLR-startup stall, so retry once.
+        timeout: 15_000,
+        killSignal: 'SIGKILL'
+      }
+    );
+
+  try {
+    return run();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ETIMEDOUT') throw error;
+    return run();
+  }
 }
 
 function buildFakePostmanHarness(exitCode: number): string {
