@@ -23,6 +23,7 @@ const verifyScript = path.join(repoRoot, 'scripts', 'verify-dist-artifact.mjs');
 /** Read-only git must not block on concurrent index.lock under multi-agent host load. */
 const gitReadEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', PATH: process.env.PATH ?? '' };
 const COMMITTED_DIST_PATHS = ['dist', 'package.json', 'action.yml'] as const;
+const SHIPPED_ENTRYPOINTS = ['dist/index.cjs', 'dist/action.cjs', 'dist/cli.cjs'] as const;
 
 type OnTestFinished = (fn: () => void | Promise<void>) => void;
 
@@ -169,6 +170,32 @@ async function runVerify(root: string): Promise<{ code: number; stdout: string; 
 }
 
 describe('verify-dist-artifact canonical contract', () => {
+  it('ships bounded collection and environment acquisition before resources state materialization', async () => {
+    for (const entrypoint of SHIPPED_ENTRYPOINTS) {
+      const bundle = await readFile(path.join(repoRoot, entrypoint), 'utf8');
+      const collectionAcquisition = bundle.indexOf('collection-acquisition count=');
+      const environmentAcquisition = bundle.indexOf('environment-artifact-acquisition count=');
+      const resourcesMaterialization = bundle.indexOf(
+        'writeFileSync)(".postman/resources.yaml", buildResourcesManifest('
+      );
+
+      expect(collectionAcquisition, entrypoint).toBeGreaterThanOrEqual(0);
+      expect(environmentAcquisition, entrypoint).toBeGreaterThan(collectionAcquisition);
+      expect(resourcesMaterialization, entrypoint).toBeGreaterThan(environmentAcquisition);
+      expect(bundle, entrypoint).toContain('var ARTIFACT_ACQUISITION_WIDTH = 2;');
+      expect(bundle, entrypoint).toContain('async function runBoundedInOrder(items, width, worker)');
+      expect(bundle, entrypoint).toContain(
+        'Array.from({ length: Math.min(width, items.length) }, () => runWorker())'
+      );
+      expect(bundle, entrypoint).toContain(
+        'collectionSpecs,\n      ARTIFACT_ACQUISITION_WIDTH,\n      (spec) => acquireCollectionArtifact('
+      );
+      expect(bundle, entrypoint).toContain(
+        'environmentSpecs,\n      ARTIFACT_ACQUISITION_WIDTH,\n      (spec) => dependencies.postman.getEnvironment(spec.envUid)'
+      );
+    }
+  });
+
   it('passes against the committed dist artifact', async ({ onTestFinished }) => {
     const snapshotRoot = await makeTempDir('verify-dist-committed-', onTestFinished);
     await materializeCommittedDistSnapshot(snapshotRoot);
