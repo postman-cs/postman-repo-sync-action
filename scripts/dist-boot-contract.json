@@ -1,0 +1,12 @@
+{
+  "entry": "dist/action.cjs",
+  "env": {
+    "POSTMAN_BRANCH_DECISION": "{\"tier\":\"gated\",\"strategy\":\"single\",\"identity\":{\"provider\":\"github\",\"refKind\":\"branch\"},\"reason\":\"verify-dist gated boot contract\"}",
+    "INPUT_PROJECT-NAME": "verify-dist-boot"
+  },
+  "exitCode": 0,
+  "outputIncludes": [
+    "gated run",
+    "repo-sync skipped"
+  ]
+}
