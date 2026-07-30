@@ -13,6 +13,8 @@ import {
 } from 'node:fs';
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+// @ts-expect-error postman-collection does not declare this internal registry.
+import dynamicVariables from 'postman-collection/lib/superstring/dynamic-variables';
 
 import {
   appendArtifactDigestFileStreaming,
@@ -3988,4 +3990,36 @@ export async function runAction(
   await persistSslSecrets(inputs, actionCore, actionExec, repository);
 
   return runRepoSync(inputs, dependencies);
+}
+
+/**
+ * Observe the bundled postman-collection dynamic-variable registry from the
+ * SHIPPED bytes. Runs every generator once and reports name -> defined-ness,
+ * so the dist-artifact gate can prove the bundled Faker override (not just
+ * the installed node_modules tree) still powers all dynamic variables.
+ * Deterministic-failure surface only: no network, no credentials.
+ */
+export function observeBundledDynamicVariables(): {
+  total: number;
+  generators: number;
+  failures: string[];
+} {
+  const failures: string[] = [];
+  let generators = 0;
+  for (const [name, definition] of Object.entries(
+    dynamicVariables as Record<string, { generator?: () => unknown }>
+  )) {
+    if (typeof definition.generator !== 'function') {
+      continue;
+    }
+    generators += 1;
+    try {
+      if (definition.generator() === undefined) {
+        failures.push(`${name}: generator returned undefined`);
+      }
+    } catch (error) {
+      failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { total: Object.keys(dynamicVariables).length, generators, failures };
 }
