@@ -8,5 +8,9 @@
   "outputIncludes": [
     "gated run",
     "repo-sync skipped"
+  ],
+  "githubOutputIncludes": [
+    "sync-status",
+    "skipped-branch-gate"
   ]
 }
