@@ -12,5 +12,9 @@
   "githubOutputIncludes": [
     "sync-status",
     "skipped-branch-gate"
-  ]
+  ],
+  "dynamicVariableRegistry": {
+    "export": "observeBundledDynamicVariables",
+    "expectedGeneratorCount": 118
+  }
 }
