@@ -3,6 +3,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 const windowsCwdSensitiveTests = [
   'tests/repo-sync-action.test.ts',
   'tests/contract/credential-matrix.test.ts',
+  'tests/contract/cassette-replay.test.ts',
   'tests/cli.test.ts',
   'tests/path-sandboxing.test.ts',
   'tests/create-reconciliation.test.ts',
