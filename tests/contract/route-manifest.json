@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 1,
+  "routes": [
+    {
+      "id": "api-catalog.associate-system-environments",
+      "service": "api-catalog",
+      "method": "POST",
+      "path": "/api/system-envs/associations",
+      "classification": "live-only",
+      "reason": "The WS3 repo-sync cassette disables system-environment association; focused contract tests and live probes cover this route."
+    },
+    {
+      "id": "collection.delete-collection",
+      "service": "collection",
+      "method": "DELETE",
+      "path": "/v3/collections/{param}",
+      "classification": "live-only",
+      "reason": "Collection garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "collection.export-collection",
+      "service": "collection",
+      "method": "GET",
+      "path": "/v3/collections/{param}/export",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "collection.patch-collection",
+      "service": "collection",
+      "method": "PATCH",
+      "path": "/v3/collections/{param}",
+      "classification": "live-only",
+      "reason": "Private-mock root-hook patching is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "app-version.get-update-status",
+      "service": "dl.pstmn.io",
+      "method": "GET",
+      "path": "/update/status?currentVersion=12.0.0&platform=osx_arm64",
+      "classification": "intentionally-unsimulated",
+      "reason": "The non-critical memoized app-version probe is disabled during cassette runs so test order cannot change the recorded wire contract."
+    },
+    {
+      "id": "iapub.get-current-session",
+      "service": "iapub",
+      "method": "GET",
+      "path": "/api/sessions/current",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "identity.create-api-key",
+      "service": "identity",
+      "method": "POST",
+      "path": "/api/keys",
+      "classification": "live-only",
+      "reason": "API-key creation is a credential fallback outside the WS3 cassette scenario; credential-matrix tests and live probes cover this route."
+    },
+    {
+      "id": "mock.delete-mock",
+      "service": "mock",
+      "method": "DELETE",
+      "path": "/mocks/{param}",
+      "classification": "live-only",
+      "reason": "Mock garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "mock.get-mock",
+      "service": "mock",
+      "method": "GET",
+      "path": "/mocks/{param}",
+      "classification": "live-only",
+      "reason": "Explicit mock existence checks are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "mock.list-mocks",
+      "service": "mock",
+      "method": "GET",
+      "path": "/mocks?workspace={param}",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "mock.create-mock",
+      "service": "mock",
+      "method": "POST",
+      "path": "/mocks?workspace={param}",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "monitors.delete-job-template",
+      "service": "monitors",
+      "method": "DELETE",
+      "path": "/jobTemplates/{param}",
+      "classification": "live-only",
+      "reason": "Monitor garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "monitors.get-job-template",
+      "service": "monitors",
+      "method": "GET",
+      "path": "/jobTemplates/{param}?_etc=true",
+      "classification": "live-only",
+      "reason": "Explicit monitor existence checks are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "monitors.list-job-templates",
+      "service": "monitors",
+      "method": "GET",
+      "path": "/jobTemplates?workspace={param}&_etc=true",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "monitors.run-job-template",
+      "service": "monitors",
+      "method": "POST",
+      "path": "/jobTemplates/{param}/jobs",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "monitors.create-job-template",
+      "service": "monitors",
+      "method": "POST",
+      "path": "/jobTemplates?workspace={param}",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "postman-api.mint-service-account-token",
+      "service": "postman-api",
+      "method": "POST",
+      "path": "/service-account-tokens",
+      "classification": "live-only",
+      "reason": "The WS3 cassette supplies a pre-minted access token; token minting remains covered by focused credential tests and live probes."
+    },
+    {
+      "id": "specification.delete-specification",
+      "service": "specification",
+      "method": "DELETE",
+      "path": "/specifications/{param}",
+      "classification": "live-only",
+      "reason": "Specification garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.list-specifications",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications?containerType=workspace&containerId={param}",
+      "classification": "live-only",
+      "reason": "Specification inventory is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.list-collections",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications/{param}/collections",
+      "classification": "live-only",
+      "reason": "Specification collection inventory is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.get-file",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications/{param}/files/{param}",
+      "classification": "live-only",
+      "reason": "Legacy specification content fallback is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.list-files",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications/{param}/files",
+      "classification": "live-only",
+      "reason": "Legacy specification content fallback is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.list-version-tags",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications/{param}/tags",
+      "classification": "live-only",
+      "reason": "Specification version tags are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.get-tree",
+      "service": "specification",
+      "method": "GET",
+      "path": "/specifications/{param}/tree",
+      "classification": "live-only",
+      "reason": "Specification tree reads are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "specification.create-version-tag",
+      "service": "specification",
+      "method": "POST",
+      "path": "/specifications/{param}/tags",
+      "classification": "live-only",
+      "reason": "Specification version tags are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "sync.delete-environment",
+      "service": "sync",
+      "method": "DELETE",
+      "path": "/environment/{param}",
+      "classification": "live-only",
+      "reason": "Environment garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "sync.get-environment",
+      "service": "sync",
+      "method": "GET",
+      "path": "/environment/{param}/sync?since_id=0",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "sync.create-environment",
+      "service": "sync",
+      "method": "POST",
+      "path": "/environment/import?workspace={param}",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "sync.list-environments",
+      "service": "sync",
+      "method": "POST",
+      "path": "/list/environment?workspace={param}",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "sync.update-environment",
+      "service": "sync",
+      "method": "PUT",
+      "path": "/environment/{param}",
+      "classification": "live-only",
+      "reason": "Environment update is outside the fresh-create WS3 cassette scenario; focused client tests and live probes cover this route."
+    },
+    {
+      "id": "ums.list-squads",
+      "service": "ums",
+      "method": "GET",
+      "path": "/api/teams/{param}/squads?settings=true&userRoles=true",
+      "classification": "simulated",
+      "cassettes": [
+        "tests/contract/cassettes/repo-sync-wire.json"
+      ]
+    },
+    {
+      "id": "workspaces.find-filesystem-owner",
+      "service": "workspaces",
+      "method": "GET",
+      "path": "/workspaces/filesystem?repo={param}&path={param}",
+      "classification": "live-only",
+      "reason": "Workspace-link preflight is disabled in the WS3 cassette scenario; focused adapter tests and live probes cover this route."
+    },
+    {
+      "id": "workspaces.get-workspace",
+      "service": "workspaces",
+      "method": "GET",
+      "path": "/workspaces/{param}",
+      "classification": "live-only",
+      "reason": "Workspace-link conflict lookup is disabled in the WS3 cassette scenario; focused adapter tests and live probes cover this route."
+    },
+    {
+      "id": "workspaces.connect-repository",
+      "service": "workspaces",
+      "method": "POST",
+      "path": "/workspaces/{param}/filesystem",
+      "classification": "live-only",
+      "reason": "Workspace linking is disabled in the WS3 cassette scenario; focused adapter tests and live probes cover this route."
+    }
+  ]
+}
