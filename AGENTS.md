@@ -16,7 +16,8 @@ src/
     repo/context.ts                   # CI auto-detect (GitHub/GitLab/Bitbucket/Azure)
     ci-workflow-template.ts        # Generated ci.yml template
     ssl-validation.ts              # mTLS cert validation
-    retry.ts, secrets.ts, http-error.ts
+    secrets.ts                    # Secret handling
+  @postman-cse/automation-core    # Shared gateway transport, retry, and HttpError
   postman-v3/converter.ts          # Collection -> canonical v3 YAML (@postman libs)
 tests/
 ```
