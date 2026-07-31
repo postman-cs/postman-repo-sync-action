@@ -10,6 +10,14 @@
       "reason": "The WS3 repo-sync cassette disables system-environment association; focused contract tests and live probes cover this route."
     },
     {
+      "id": "catalog-admin.associate-system-environments",
+      "service": "catalog-admin",
+      "method": "POST",
+      "path": "/api/internal/system-envs/associate",
+      "classification": "intentionally-unsimulated",
+      "reason": "This explicitly selected legacy worker fallback is disabled in the canonical direct-association cassette scenario."
+    },
+    {
       "id": "collection.delete-collection",
       "service": "collection",
       "method": "DELETE",

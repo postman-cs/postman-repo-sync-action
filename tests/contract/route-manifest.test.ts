@@ -33,7 +33,7 @@ describe('contract: HTTP route manifest', () => {
     const manifest = loadManifest();
     const result = verify(manifest);
 
-    expect(manifest.routes).toHaveLength(34);
+    expect(manifest.routes).toHaveLength(35);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(result.errors).toEqual([]);
   });
