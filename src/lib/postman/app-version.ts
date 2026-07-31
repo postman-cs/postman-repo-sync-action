@@ -19,11 +19,11 @@ export class PostmanAppVersionProvider {
 
   async get(): Promise<string | undefined> {
     if (process.env.POSTMAN_GATEWAY_APP_VERSION === 'off') return undefined;
-    this.pending ??= this.resolve();
+    this.pending ??= this.lookup();
     return this.pending;
   }
 
-  private async resolve(): Promise<string> {
+  private async lookup(): Promise<string> {
     try {
       const response = await this.fetchImpl(UPDATE_URL, {
         signal: AbortSignal.timeout(this.requestTimeoutMs)

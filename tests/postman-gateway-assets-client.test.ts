@@ -2,9 +2,8 @@ import { runInNewContext } from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { HttpError } from '../src/lib/http-error.js';
+import { AccessTokenGatewayClient, HttpError } from '@postman-cse/automation-core';
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
-import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
 import { PostmanGatewayAssetsClient } from '../src/lib/postman/postman-gateway-assets-client.js';
 import {
   PRIVATE_MOCK_AUTH_ROOT_MARKER,

@@ -14,7 +14,7 @@
  *     npx --yes tsx scripts/live-write-probe.ts
  */
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
-import { AccessTokenGatewayClient } from '../src/lib/postman/gateway-client.js';
+import { AccessTokenGatewayClient, HttpError } from '@postman-cse/automation-core';
 import {
   PostmanGatewayAssetsClient,
   requirePublicMock
@@ -25,7 +25,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveInputs, runRepoSync } from '../src/index.js';
-import { HttpError } from '../src/lib/http-error.js';
 
 const API = POSTMAN_ENDPOINT_PROFILES.prod.apiBaseUrl;
 

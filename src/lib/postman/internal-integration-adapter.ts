@@ -1,9 +1,8 @@
-import { HttpError } from '../http-error.js';
+import { HttpError, type AccessTokenGatewayClient } from '@postman-cse/automation-core';
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
 import { POSTMAN_ENDPOINT_PROFILES } from './base-urls.js';
 import { getMemoizedSessionIdentity } from './credential-identity.js';
 import { adviseFromHttpError, type ErrorAdviceContext } from './error-advice.js';
-import type { AccessTokenGatewayClient } from './gateway-client.js';
 import { defaultPostmanAppVersionProvider, type PostmanAppVersionProvider } from './app-version.js';
 
 export interface GovernanceAssociation {

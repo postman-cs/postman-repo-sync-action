@@ -51,8 +51,7 @@ import {
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
-import { HttpError } from './lib/http-error.js';
-import { retry } from './lib/retry.js';
+import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cse/automation-core';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {
@@ -69,7 +68,7 @@ import {
   verifyPrivateMockRootHook
 } from './lib/postman/private-mock-export-cleanup.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
-import { AccessTokenGatewayClient } from './lib/postman/gateway-client.js';
+import { defaultPostmanAppVersionProvider } from './lib/postman/app-version.js';
 import {
   createMutableSecretMasker,
   createSecretMasker,
@@ -3656,6 +3655,13 @@ export async function resolvePostmanApiKeyAndTeamId(
         bifrostBaseUrl: inputs.postmanBifrostBase,
         // No fallback on the org-mode probe: the expected non-org 400 must
         // surface verbatim, not be re-fired against the /_api alias.
+        refreshEmptyToken: false,
+        fallbackOn: 'error',
+        jitterRounding: 'floor',
+        defaultInnerErrorStatus: 502,
+        classifyInnerAuthError: false,
+        refreshOnInnerAuthError: false,
+        appVersionProvider: defaultPostmanAppVersionProvider,
         secretMasker: masker,
         onRetryEvent: (event) => {
           actionCore.info(
@@ -3663,7 +3669,21 @@ export async function resolvePostmanApiKeyAndTeamId(
           );
         }
       });
-      const squads = await gateway.getSquads(teamId);
+      const squadsPayload = await gateway.requestJson<{ data?: unknown }>({
+        service: 'ums',
+        method: 'get',
+        path: `/api/teams/${encodeURIComponent(teamId)}/squads?settings=true&userRoles=true`,
+        fallback: 'none'
+      });
+      const squads = Array.isArray(squadsPayload?.data)
+        ? squadsPayload.data.filter(
+            (squad) =>
+              typeof squad === 'object' &&
+              squad !== null &&
+              'id' in squad &&
+              squad.id != null
+          )
+        : [];
       if (squads.length > 0) {
         inputs.orgMode = true;
         actionCore.info(
@@ -3751,6 +3771,14 @@ export function createRepoSyncDependencies(
     tokenProvider,
     bifrostBaseUrl: inputs.postmanBifrostBase,
     fallbackBaseUrl: inputs.postmanFallbackBase,
+    refreshEmptyToken: false,
+    fallbackOn: 'error',
+    jitterRounding: 'floor',
+    defaultInnerErrorStatus: 502,
+    classifyInnerAuthError: false,
+    refreshOnInnerAuthError: false,
+    includeFallbackStatusInRetryEvent: true,
+    appVersionProvider: defaultPostmanAppVersionProvider,
     teamId: resolved.teamId,
     orgMode: inputs.orgMode,
     secretMasker: masker,
