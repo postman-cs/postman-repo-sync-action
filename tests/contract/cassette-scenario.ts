@@ -52,8 +52,15 @@ export function applyRepeatableReads(cassette: Cassette): Cassette {
   return cassette;
 }
 
+/**
+ * `recordedAt` is provenance metadata, not wire contract, and the recorder stamps
+ * it from the wall clock. Pinning it keeps a re-record with no behavior change a
+ * zero-diff operation, and matches the value the live-capture sanitizer emits.
+ */
+const NORMALIZED_RECORDED_AT = '2000-01-01T00:00:00.000Z';
+
 export function stableCassetteText(cassette: Cassette): string {
-  return `${JSON.stringify(cassette, null, 2)}\n`;
+  return `${JSON.stringify({ ...cassette, recordedAt: NORMALIZED_RECORDED_AT }, null, 2)}\n`;
 }
 
 export interface RepoSyncCassetteScenario {
