@@ -47,7 +47,7 @@
       "id": "app-version.get-update-status",
       "service": "dl.pstmn.io",
       "method": "GET",
-      "path": "/update/status?currentVersion=12.0.0&platform=osx_arm64",
+      "path": "/update/status",
       "classification": "intentionally-unsimulated",
       "reason": "The non-critical memoized app-version probe is disabled during cassette runs so test order cannot change the recorded wire contract."
     },
@@ -89,7 +89,7 @@
       "id": "mock.list-mocks",
       "service": "mock",
       "method": "GET",
-      "path": "/mocks?workspace={param}",
+      "path": "/mocks",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -99,7 +99,7 @@
       "id": "mock.create-mock",
       "service": "mock",
       "method": "POST",
-      "path": "/mocks?workspace={param}",
+      "path": "/mocks",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -117,7 +117,7 @@
       "id": "monitors.get-job-template",
       "service": "monitors",
       "method": "GET",
-      "path": "/jobTemplates/{param}?_etc=true",
+      "path": "/jobTemplates/{param}",
       "classification": "live-only",
       "reason": "Explicit monitor existence checks are outside the WS3 cassette scenario; focused client tests and live probes cover this route."
     },
@@ -125,7 +125,7 @@
       "id": "monitors.list-job-templates",
       "service": "monitors",
       "method": "GET",
-      "path": "/jobTemplates?workspace={param}&_etc=true",
+      "path": "/jobTemplates",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -145,11 +145,19 @@
       "id": "monitors.create-job-template",
       "service": "monitors",
       "method": "POST",
-      "path": "/jobTemplates?workspace={param}",
+      "path": "/jobTemplates",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
       ]
+    },
+    {
+      "id": "postman-api.get-current-user",
+      "service": "postman-api",
+      "method": "GET",
+      "path": "/me",
+      "classification": "live-only",
+      "reason": "The read-only PMAK validity check runs against the live Postman API; focused credential tests cover it and the repo-sync cassette supplies pre-resolved credentials."
     },
     {
       "id": "postman-api.mint-service-account-token",
@@ -171,7 +179,7 @@
       "id": "specification.list-specifications",
       "service": "specification",
       "method": "GET",
-      "path": "/specifications?containerType=workspace&containerId={param}",
+      "path": "/specifications",
       "classification": "live-only",
       "reason": "Specification inventory is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
     },
@@ -235,7 +243,7 @@
       "id": "sync.get-environment",
       "service": "sync",
       "method": "GET",
-      "path": "/environment/{param}/sync?since_id=0",
+      "path": "/environment/{param}/sync",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -245,7 +253,7 @@
       "id": "sync.create-environment",
       "service": "sync",
       "method": "POST",
-      "path": "/environment/import?workspace={param}",
+      "path": "/environment/import",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -255,7 +263,7 @@
       "id": "sync.list-environments",
       "service": "sync",
       "method": "POST",
-      "path": "/list/environment?workspace={param}",
+      "path": "/list/environment",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -273,7 +281,7 @@
       "id": "ums.list-squads",
       "service": "ums",
       "method": "GET",
-      "path": "/api/teams/{param}/squads?settings=true&userRoles=true",
+      "path": "/api/teams/{param}/squads",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
@@ -283,7 +291,7 @@
       "id": "workspaces.find-filesystem-owner",
       "service": "workspaces",
       "method": "GET",
-      "path": "/workspaces/filesystem?repo={param}&path={param}",
+      "path": "/workspaces/filesystem",
       "classification": "live-only",
       "reason": "Workspace-link preflight is disabled in the WS3 cassette scenario; focused adapter tests and live probes cover this route."
     },
