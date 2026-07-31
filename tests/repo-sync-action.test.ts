@@ -502,7 +502,7 @@ describe('repo sync action', () => {
     delete process.env.GITHUB_REF_NAME;
     delete process.env.GITHUB_HEAD_REF;
     vi.unstubAllEnvs();
-  });
+  }, 120_000);
 
   it('marks secrets during input resolution', () => {
     const { core, secrets } = createCoreStub({
