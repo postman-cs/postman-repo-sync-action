@@ -1313,7 +1313,7 @@ var require_util = __commonJS({
         return new BodyAsyncIterable(body);
       } else if (body && isFormDataLike(body)) {
         return body;
-      } else if (body && typeof body !== "string" && !ArrayBuffer.isView(body) && isIterable2(body)) {
+      } else if (body && typeof body !== "string" && !ArrayBuffer.isView(body) && isIterable3(body)) {
         return new BodyAsyncIterable(body);
       } else {
         return body;
@@ -1425,7 +1425,7 @@ var require_util = __commonJS({
     function isAsyncIterable(obj) {
       return !!(obj != null && typeof obj[Symbol.asyncIterator] === "function");
     }
-    function isIterable2(obj) {
+    function isIterable3(obj) {
       return !!(obj != null && (typeof obj[Symbol.iterator] === "function" || typeof obj[Symbol.asyncIterator] === "function"));
     }
     function hasSafeIterator(obj) {
@@ -2087,7 +2087,7 @@ var require_util = __commonJS({
       parseURL,
       getServerName,
       isStream,
-      isIterable: isIterable2,
+      isIterable: isIterable3,
       hasSafeIterator,
       isAsyncIterable,
       isDestroyed,
@@ -2395,7 +2395,7 @@ var require_request = __commonJS({
       destroy,
       isBuffer,
       isFormDataLike,
-      isIterable: isIterable2,
+      isIterable: isIterable3,
       hasSafeIterator,
       isBlobLike,
       serializePathWithQuery,
@@ -2550,7 +2550,7 @@ var require_request = __commonJS({
           this.body = body.byteLength ? Buffer.from(body) : null;
         } else if (typeof body === "string") {
           this.body = body.length ? Buffer.from(body) : null;
-        } else if (isFormDataLike(body) || isIterable2(body) || isBlobLike(body)) {
+        } else if (isFormDataLike(body) || isIterable3(body) || isBlobLike(body)) {
           this.body = body;
         } else {
           throw new InvalidArgumentError("body must be a string, a Buffer, a Readable stream, an iterable, or an async iterable");
@@ -114186,14 +114186,6 @@ var import_node_path = __toESM(require("node:path"), 1);
 
 // src/lib/secrets.ts
 var REDACTED = "[REDACTED]";
-var SENSITIVE_HEADER_NAMES = /* @__PURE__ */ new Set([
-  "authorization",
-  "cookie",
-  "proxy-authorization",
-  "set-cookie",
-  "x-access-token",
-  "x-api-key"
-]);
 function isIterable(value) {
   return value !== null && value !== void 0 && typeof value !== "string" && typeof value[Symbol.iterator] === "function";
 }
@@ -114269,26 +114261,6 @@ function createMutableSecretMasker(initialSecretValues = [], replacement = REDAC
       }
     }
   };
-}
-function headerEntries(headers) {
-  if (headers instanceof Headers) {
-    return Array.from(headers.entries());
-  }
-  if (Array.isArray(headers)) {
-    return headers.map(([name, value]) => [name, String(value)]);
-  }
-  return Object.entries(headers).map(([name, value]) => [name, String(value)]);
-}
-function sanitizeHeaders(headers, secretValues) {
-  if (!headers) {
-    return {};
-  }
-  const sanitized = {};
-  for (const [name, value] of headerEntries(headers)) {
-    const normalizedName = name.toLowerCase();
-    sanitized[normalizedName] = SENSITIVE_HEADER_NAMES.has(normalizedName) ? REDACTED : redactSecrets(value, secretValues);
-  }
-  return sanitized;
 }
 
 // src/lib/github/repo-mutation.ts
@@ -115306,36 +115278,115 @@ function secretsResolverEnvironmentKeys(provider) {
   }
 }
 
-// src/action-version.ts
-var import_node_fs3 = require("node:fs");
-var import_node_path2 = require("node:path");
-function resolveActionVersion2() {
-  if (false) {
-    return void 0;
+// node_modules/@postman-cse/automation-core/dist/http/http-error.js
+var REDACTED2 = "[REDACTED]";
+var SENSITIVE_HEADER_NAMES = /* @__PURE__ */ new Set([
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+  "set-cookie",
+  "x-access-token",
+  "x-api-key"
+]);
+function isIterable2(value) {
+  return value !== null && value !== void 0 && typeof value !== "string" && typeof value[Symbol.iterator] === "function";
+}
+function appendStringSecret2(value, results) {
+  const normalized = value.trim();
+  if (!normalized)
+    return;
+  results.push(normalized);
+  try {
+    const encoded = encodeURIComponent(normalized);
+    if (encoded !== normalized)
+      results.push(encoded);
+  } catch {
   }
   try {
-    const raw = (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(__dirname, "..", "package.json"), "utf8");
-    return JSON.parse(raw).version ?? "unknown";
+    const url = new URL("http://localhost/");
+    url.password = normalized;
+    if (url.password && url.password !== normalized)
+      results.push(url.password);
   } catch {
-    return "unknown";
   }
 }
-
-// src/lib/http-error.ts
-function truncate2(value, limit) {
-  if (value.length <= limit) {
-    return value;
+function appendSecretValues2(value, results) {
+  if (value === null || value === void 0)
+    return;
+  if (typeof value === "string") {
+    appendStringSecret2(value, results);
+    return;
   }
+  if (typeof value === "number" || typeof value === "boolean") {
+    appendStringSecret2(String(value), results);
+    return;
+  }
+  if (Array.isArray(value) || isIterable2(value)) {
+    for (const entry of value)
+      appendSecretValues2(entry, results);
+  }
+}
+function normalizeSecretValues2(secretValues) {
+  const values = [];
+  appendSecretValues2(secretValues, values);
+  return [...new Set(values)].sort((left, right) => right.length - left.length);
+}
+function redactSecrets2(input, secretValues, replacement = REDACTED2) {
+  let output = String(input ?? "");
+  for (const secret of normalizeSecretValues2(secretValues)) {
+    output = output.split(secret).join(replacement);
+  }
+  return output;
+}
+function toOneLine(value) {
+  const source = String(value ?? "");
+  let output = "";
+  let pendingSpace = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    if (code <= 32 || code === 127) {
+      pendingSpace = output.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      output += " ";
+      pendingSpace = false;
+    }
+    output += source.charAt(index);
+  }
+  return output;
+}
+function headerEntries(headers) {
+  if (headers instanceof Headers)
+    return Array.from(headers.entries());
+  if (Array.isArray(headers)) {
+    return headers.map(([name, value]) => [name, String(value)]);
+  }
+  return Object.entries(headers).map(([name, value]) => [name, String(value)]);
+}
+function sanitizeHeaders(headers, secretValues) {
+  if (!headers)
+    return {};
+  const sanitized = {};
+  for (const [name, value] of headerEntries(headers)) {
+    const normalizedName = name.toLowerCase();
+    sanitized[normalizedName] = SENSITIVE_HEADER_NAMES.has(normalizedName) ? REDACTED2 : redactSecrets2(value, secretValues);
+  }
+  return sanitized;
+}
+function truncate2(value, limit) {
+  if (value.length <= limit)
+    return value;
   return `${value.slice(0, limit)}...[truncated]`;
 }
 function buildMessage(init) {
+  if (init.message !== void 0)
+    return init.message;
+  const format = init.oneLine ? toOneLine : String;
   const method = String(init.method || "GET").toUpperCase();
   const status = `${init.status}${init.statusText ? ` ${init.statusText}` : ""}`;
-  const url = redactSecrets(init.url, init.secretValues);
-  const body = truncate2(
-    redactSecrets(init.responseBody || "", init.secretValues),
-    Math.max(0, init.bodyLimit ?? 800)
-  );
+  const url = format(redactSecrets2(init.url, init.secretValues));
+  const body = format(truncate2(redactSecrets2(init.responseBody || "", init.secretValues), Math.max(0, init.bodyLimit ?? 800)));
   return body ? `${method} ${url} failed: ${status} - ${body}` : `${method} ${url} failed: ${status}`;
 }
 var HttpError = class _HttpError extends Error {
@@ -115346,7 +115397,14 @@ var HttpError = class _HttpError extends Error {
   status;
   statusText;
   url;
-  constructor(init) {
+  constructor(initOrMessage, legacyStatus) {
+    const init = typeof initOrMessage === "string" ? {
+      method: "",
+      url: "",
+      status: legacyStatus ?? 0,
+      statusText: "",
+      message: initOrMessage
+    } : initOrMessage;
     super(buildMessage(init));
     this.name = "HttpError";
     this.method = String(init.method || "GET").toUpperCase();
@@ -115371,13 +115429,498 @@ var HttpError = class _HttpError extends Error {
       method: this.method,
       name: this.name,
       requestHeaders: sanitizeHeaders(this.requestHeaders, this.secretValues),
-      responseBody: redactSecrets(this.responseBody, this.secretValues),
+      responseBody: redactSecrets2(this.responseBody, this.secretValues),
       status: this.status,
       statusText: this.statusText,
-      url: redactSecrets(this.url, this.secretValues)
+      url: redactSecrets2(this.url, this.secretValues)
     };
   }
 };
+
+// node_modules/@postman-cse/automation-core/dist/http/retry.js
+function sleep(delayMs) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, delayMs);
+  });
+}
+function normalizeRetryOptions(options) {
+  return {
+    maxAttempts: Math.max(1, options.maxAttempts ?? 3),
+    delayMs: Math.max(0, options.delayMs ?? 2e3),
+    backoffMultiplier: Math.max(1, options.backoffMultiplier ?? 1),
+    maxDelayMs: options.maxDelayMs === void 0 ? Number.POSITIVE_INFINITY : Math.max(0, options.maxDelayMs),
+    onRetry: options.onRetry ?? (async () => void 0),
+    shouldRetry: options.shouldRetry ?? (() => true),
+    sleep: options.sleep ?? sleep
+  };
+}
+async function retry(operation, options = {}) {
+  const normalized = normalizeRetryOptions(options);
+  let nextDelayMs = normalized.delayMs;
+  for (let attempt = 1; attempt <= normalized.maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error2) {
+      const shouldRetry = attempt < normalized.maxAttempts && normalized.shouldRetry(error2, {
+        attempt,
+        maxAttempts: normalized.maxAttempts
+      });
+      if (!shouldRetry)
+        throw error2;
+      await normalized.onRetry({
+        attempt,
+        maxAttempts: normalized.maxAttempts,
+        delayMs: nextDelayMs,
+        error: error2
+      });
+      await normalized.sleep(nextDelayMs);
+      nextDelayMs = Math.min(normalized.maxDelayMs, Math.round(nextDelayMs * normalized.backoffMultiplier));
+    }
+  }
+  throw new Error("Retry exhausted without returning or throwing");
+}
+function fullJitterDelayMs(attempt, baseMs = 400, capMs = 5e3, random = Math.random, rounding = "floor") {
+  const ceiling = Math.max(0, Math.min(Math.max(0, capMs), Math.max(0, baseMs) * 2 ** Math.max(0, attempt)));
+  const delay = random() * ceiling;
+  return rounding === "round" ? Math.round(delay) : Math.floor(delay);
+}
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const trimmed = value?.trim();
+  if (!trimmed)
+    return void 0;
+  if (/^\d+$/.test(trimmed))
+    return Number(trimmed) * 1e3;
+  const dateMs = Date.parse(trimmed);
+  return Number.isNaN(dateMs) ? void 0 : Math.max(0, dateMs - nowMs);
+}
+function isTransientHttpStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+var RETRYABLE_GATEWAY_BODY = /ESOCKETTIMEDOUT|ETIMEDOUT|ECONNRESET|serverError|downstream/i;
+function isRetryableGatewayFailure(status, body = "") {
+  return isTransientHttpStatus(status) || RETRYABLE_GATEWAY_BODY.test(body);
+}
+
+// node_modules/@postman-cse/automation-core/dist/http/gateway-client.js
+var DEFAULT_POSTMAN_BIFROST_BASE_URL = "https://bifrost-premium-https-v4.gw.postman.com";
+function isExpiredAuthError(status, body) {
+  return status === 401 || body.includes("UNAUTHENTICATED") || body.includes("authenticationError");
+}
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function numericStatus(value) {
+  if (typeof value === "number" && Number.isFinite(value))
+    return value;
+  if (typeof value === "string" && /^\d+$/.test(value))
+    return Number(value);
+  return void 0;
+}
+function defaultSleep(ms) {
+  return new Promise((resolve3) => setTimeout(resolve3, ms));
+}
+function normalizedBaseUrl(value) {
+  return value.replace(/\/+$/, "");
+}
+var AccessTokenGatewayClient = class {
+  tokenProvider;
+  bifrostBaseUrl;
+  teamId;
+  orgMode;
+  fetchImpl;
+  secretMasker;
+  maxRetries;
+  fallbackBaseUrl;
+  fallbackOn;
+  retryBaseDelayMs;
+  retryMaxDelayMs;
+  jitterRounding;
+  requestTimeoutMs;
+  sleepImpl;
+  randomImpl;
+  appVersionProvider;
+  onRetry;
+  onRetryEvent;
+  refreshEmptyToken;
+  refreshOnInnerAuthError;
+  classifyInnerAuthError;
+  defaultInnerErrorStatus;
+  includeFallbackStatusInRetryEvent;
+  constructor(options) {
+    this.tokenProvider = options.tokenProvider;
+    this.bifrostBaseUrl = normalizedBaseUrl(String(options.bifrostBaseUrl || DEFAULT_POSTMAN_BIFROST_BASE_URL));
+    this.teamId = String(options.teamId || "").trim();
+    this.orgMode = options.orgMode ?? false;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.secretMasker = options.secretMasker ?? ((input) => redactSecrets2(input, [this.tokenProvider.current()]));
+    this.maxRetries = Math.max(0, options.maxRetries ?? 3);
+    const fallbackDisabled = (options.env ?? process.env).POSTMAN_ITEM_CREATE_FALLBACK === "off";
+    this.fallbackBaseUrl = fallbackDisabled || !options.fallbackBaseUrl ? void 0 : normalizedBaseUrl(options.fallbackBaseUrl);
+    this.fallbackOn = options.fallbackOn ?? "error";
+    this.retryBaseDelayMs = Math.max(0, options.retryBaseDelayMs ?? 400);
+    this.retryMaxDelayMs = Math.max(0, options.retryMaxDelayMs ?? 5e3);
+    this.jitterRounding = options.jitterRounding ?? "floor";
+    this.requestTimeoutMs = Math.max(0, options.requestTimeoutMs ?? 3e4);
+    this.sleepImpl = options.sleepImpl ?? defaultSleep;
+    this.randomImpl = options.randomImpl ?? Math.random;
+    this.appVersionProvider = options.appVersionProvider;
+    this.onRetry = options.onRetry;
+    this.onRetryEvent = options.onRetryEvent;
+    this.refreshEmptyToken = options.refreshEmptyToken ?? true;
+    this.refreshOnInnerAuthError = options.refreshOnInnerAuthError ?? false;
+    this.classifyInnerAuthError = options.classifyInnerAuthError ?? false;
+    this.defaultInnerErrorStatus = options.defaultInnerErrorStatus ?? 502;
+    this.includeFallbackStatusInRetryEvent = options.includeFallbackStatusInRetryEvent ?? true;
+  }
+  configureTeamContext(teamId, orgMode) {
+    this.teamId = String(teamId || "").trim();
+    this.orgMode = orgMode;
+  }
+  async resolveAppVersion() {
+    if (this.appVersionProvider?.resolve)
+      return this.appVersionProvider.resolve();
+    if (this.appVersionProvider?.get)
+      return this.appVersionProvider.get();
+    return void 0;
+  }
+  async buildHeaders(extra) {
+    const headers = {
+      "Content-Type": "application/json",
+      ...extra ?? {}
+    };
+    headers["x-access-token"] = this.tokenProvider.current();
+    if (this.teamId && this.orgMode)
+      headers["x-entity-team-id"] = this.teamId;
+    const appVersion = await this.resolveAppVersion();
+    if (appVersion)
+      headers["x-app-version"] = appVersion;
+    return headers;
+  }
+  errorHeaders(extra) {
+    return {
+      "Content-Type": "application/json",
+      ...extra ?? {},
+      "x-access-token": this.tokenProvider.current(),
+      ...this.teamId && this.orgMode ? { "x-entity-team-id": this.teamId } : {}
+    };
+  }
+  async send(request, baseUrl = this.bifrostBaseUrl) {
+    return this.fetchWithDeadline(`${baseUrl}/ws/proxy`, {
+      method: "POST",
+      headers: await this.buildHeaders(request.headers),
+      body: JSON.stringify({
+        service: request.service,
+        method: request.method,
+        path: request.path,
+        ...request.query !== void 0 ? { query: request.query } : {},
+        ...request.body !== void 0 ? { body: request.body } : {}
+      })
+    });
+  }
+  async sendDirect(request) {
+    const method = request.method ?? "get";
+    return this.fetchWithDeadline(`${this.bifrostBaseUrl}${request.path}`, {
+      method: method.toUpperCase(),
+      headers: await this.buildHeaders(request.headers),
+      ...request.body === void 0 ? {} : { body: JSON.stringify(request.body) }
+    });
+  }
+  async fetchWithDeadline(url, init) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    try {
+      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  detectInnerStatus(body) {
+    const trimmed = body.trim();
+    if (!trimmed)
+      return void 0;
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return void 0;
+    }
+    const envelope = asRecord(parsed);
+    if (!envelope)
+      return void 0;
+    const error2 = envelope.error;
+    const errorRecord = asRecord(error2);
+    const source = errorRecord ?? envelope;
+    const status = numericStatus(source.status) ?? numericStatus(source.statusCode) ?? numericStatus(envelope.status) ?? numericStatus(envelope.statusCode);
+    const hasError = error2 !== void 0 && error2 !== null && !(errorRecord && Object.keys(errorRecord).length === 0) || source.success === false || envelope.success === false || status !== void 0 && status >= 400;
+    if (!hasError)
+      return void 0;
+    if (status !== void 0 && status >= 400)
+      return status;
+    if (this.classifyInnerAuthError && isExpiredAuthError(0, body))
+      return 401;
+    return this.defaultInnerErrorStatus;
+  }
+  async inspect(response) {
+    const body = await response.text().catch(() => "");
+    return {
+      response,
+      body,
+      ...response.ok ? { innerStatus: this.detectInnerStatus(body) } : {}
+    };
+  }
+  resolveRetryMode(request, options) {
+    if (request.retry)
+      return request.retry;
+    if (options.retryTransient !== void 0) {
+      return options.retryTransient ? "safe" : "none";
+    }
+    if (request.maxRetries !== void 0) {
+      return request.maxRetries > 0 ? "safe" : "none";
+    }
+    return request.method === "get" ? "safe" : "none";
+  }
+  shouldRetry(mode, status, body) {
+    if (mode === "rate-limit")
+      return status === 429;
+    return mode === "safe" && isRetryableGatewayFailure(status, body);
+  }
+  retryDelayMs(attempt, retryAfterMs) {
+    if (retryAfterMs !== void 0)
+      return Math.min(this.retryMaxDelayMs, retryAfterMs);
+    return fullJitterDelayMs(attempt, this.retryBaseDelayMs, this.retryMaxDelayMs, this.randomImpl, this.jitterRounding);
+  }
+  emitRetryEvent(event) {
+    this.onRetryEvent?.(event);
+    if (this.onRetry && this.onRetry !== this.onRetryEvent)
+      this.onRetry(event);
+  }
+  fallbackEligible(request, retryMode, transient) {
+    if (!this.fallbackBaseUrl || request.fallback === "none")
+      return false;
+    if (retryMode !== "safe" && request.fallback !== "auto")
+      return false;
+    return this.fallbackOn === "error" || transient;
+  }
+  async attemptFallback(request, retryMode, transient, status) {
+    if (!this.fallbackEligible(request, retryMode, transient))
+      return null;
+    this.emitRetryEvent({
+      class: "fallback",
+      ...this.includeFallbackStatusInRetryEvent && status !== void 0 ? { status } : {},
+      attempt: 1,
+      delay: 0
+    });
+    let inspected;
+    try {
+      inspected = await this.inspect(await this.send(request, this.fallbackBaseUrl));
+    } catch {
+      return null;
+    }
+    const effectiveStatus = inspected.innerStatus ?? inspected.response.status;
+    if (inspected.response.ok && inspected.innerStatus === void 0) {
+      return this.rebuildResponse(inspected.response, inspected.body);
+    }
+    if (isRetryableGatewayFailure(effectiveStatus, inspected.body))
+      return null;
+    if (inspected.innerStatus !== void 0) {
+      throw this.toInnerHttpError(request, inspected.innerStatus, inspected.body);
+    }
+    throw this.toHttpError(request, inspected.response, inspected.body);
+  }
+  async request(request, options = {}) {
+    if (this.refreshEmptyToken && !this.tokenProvider.current() && this.tokenProvider.canRefresh()) {
+      await this.tokenProvider.refresh();
+    }
+    const retryMode = this.resolveRetryMode(request, options);
+    const maxRetries = Math.max(0, request.maxRetries ?? this.maxRetries);
+    let attempt = 0;
+    let authRefreshed = false;
+    for (; ; ) {
+      let inspected;
+      try {
+        inspected = await this.inspect(await this.send(request));
+      } catch (error2) {
+        if (retryMode === "safe" && attempt < maxRetries) {
+          const delay = this.retryDelayMs(attempt);
+          attempt += 1;
+          this.emitRetryEvent({ class: "transport", attempt, delay });
+          await this.sleepImpl(delay);
+          continue;
+        }
+        const fallback2 = await this.attemptFallback(request, retryMode, true);
+        if (fallback2)
+          return fallback2;
+        throw error2;
+      }
+      const effectiveStatus = inspected.innerStatus ?? inspected.response.status;
+      if (inspected.response.ok && inspected.innerStatus === void 0) {
+        return this.rebuildResponse(inspected.response, inspected.body);
+      }
+      const authFailure = isExpiredAuthError(effectiveStatus, inspected.body);
+      const refreshAllowed = inspected.innerStatus === void 0 || this.refreshOnInnerAuthError;
+      if (!authRefreshed && authFailure && refreshAllowed && this.tokenProvider.canRefresh()) {
+        authRefreshed = true;
+        this.emitRetryEvent({
+          class: "auth",
+          status: effectiveStatus,
+          attempt: 1,
+          delay: 0
+        });
+        await this.tokenProvider.refresh();
+        continue;
+      }
+      const transient = isRetryableGatewayFailure(effectiveStatus, inspected.body);
+      if (this.shouldRetry(retryMode, effectiveStatus, inspected.body) && attempt < maxRetries) {
+        const retryAfterMs = inspected.innerStatus === void 0 ? parseRetryAfterMs(inspected.response.headers.get("retry-after")) : void 0;
+        const delay = this.retryDelayMs(attempt, retryAfterMs);
+        attempt += 1;
+        this.emitRetryEvent({
+          class: inspected.innerStatus === void 0 ? "http" : "inner",
+          status: effectiveStatus,
+          attempt,
+          delay
+        });
+        await this.sleepImpl(delay);
+        continue;
+      }
+      const fallback = await this.attemptFallback(request, retryMode, transient, effectiveStatus);
+      if (fallback)
+        return fallback;
+      if (inspected.innerStatus !== void 0) {
+        throw this.toInnerHttpError(request, inspected.innerStatus, inspected.body);
+      }
+      throw this.toHttpError(request, inspected.response, inspected.body);
+    }
+  }
+  async requestJson(request, options = {}) {
+    const response = await this.request(request, options);
+    return this.responseJson(response);
+  }
+  async requestDirectJson(requestOrPath) {
+    const request = typeof requestOrPath === "string" ? { path: requestOrPath, method: "get" } : requestOrPath;
+    if (!request.path.startsWith("/")) {
+      throw new Error(`Direct Bifrost path must start with '/': ${request.path}`);
+    }
+    if (this.refreshEmptyToken && !this.tokenProvider.current() && this.tokenProvider.canRefresh()) {
+      await this.tokenProvider.refresh();
+    }
+    const method = request.method ?? "get";
+    const retryMode = request.retry ?? (method === "get" ? "safe" : "none");
+    const maxRetries = Math.max(0, request.maxRetries ?? this.maxRetries);
+    let attempt = 0;
+    let authRefreshed = false;
+    for (; ; ) {
+      let response;
+      try {
+        response = await this.sendDirect(request);
+      } catch (error2) {
+        if (retryMode === "safe" && attempt < maxRetries) {
+          const delay = this.retryDelayMs(attempt);
+          attempt += 1;
+          this.emitRetryEvent({ class: "transport", attempt, delay });
+          await this.sleepImpl(delay);
+          continue;
+        }
+        throw error2;
+      }
+      const body = await response.text().catch(() => "");
+      if (response.ok)
+        return this.textJson(body);
+      if (!authRefreshed && isExpiredAuthError(response.status, body) && this.tokenProvider.canRefresh()) {
+        authRefreshed = true;
+        this.emitRetryEvent({
+          class: "auth",
+          status: response.status,
+          attempt: 1,
+          delay: 0
+        });
+        await this.tokenProvider.refresh();
+        continue;
+      }
+      if (this.shouldRetry(retryMode, response.status, body) && attempt < maxRetries) {
+        const delay = this.retryDelayMs(attempt, parseRetryAfterMs(response.headers.get("retry-after")));
+        attempt += 1;
+        this.emitRetryEvent({
+          class: "http",
+          status: response.status,
+          attempt,
+          delay
+        });
+        await this.sleepImpl(delay);
+        continue;
+      }
+      throw this.toDirectHttpError(request, response, body);
+    }
+  }
+  async responseJson(response) {
+    return this.textJson(await response.text().catch(() => ""));
+  }
+  textJson(text) {
+    if (!text.trim())
+      return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  rebuildResponse(response, body) {
+    const nullBody = response.status === 204 || response.status === 205 || response.status === 304;
+    return new Response(nullBody ? null : body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  }
+  toHttpError(request, response, body) {
+    return new HttpError({
+      method: request.method.toUpperCase(),
+      url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path})`,
+      status: response.status,
+      statusText: response.statusText,
+      requestHeaders: this.errorHeaders(request.headers),
+      responseBody: this.secretMasker(body),
+      secretValues: [this.tokenProvider.current()]
+    });
+  }
+  toInnerHttpError(request, status, body) {
+    return new HttpError({
+      method: request.method.toUpperCase(),
+      url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path}) [inner]`,
+      status,
+      statusText: "Inner Error",
+      requestHeaders: this.errorHeaders(request.headers),
+      responseBody: this.secretMasker(body),
+      secretValues: [this.tokenProvider.current()]
+    });
+  }
+  toDirectHttpError(request, response, body) {
+    return new HttpError({
+      method: (request.method ?? "get").toUpperCase(),
+      url: `${this.bifrostBaseUrl}${request.path}`,
+      status: response.status,
+      statusText: response.statusText,
+      requestHeaders: this.errorHeaders(request.headers),
+      responseBody: this.secretMasker(body),
+      secretValues: [this.tokenProvider.current()]
+    });
+  }
+};
+
+// src/action-version.ts
+var import_node_fs3 = require("node:fs");
+var import_node_path2 = require("node:path");
+function resolveActionVersion2() {
+  if (false) {
+    return void 0;
+  }
+  try {
+    const raw = (0, import_node_fs3.readFileSync)((0, import_node_path2.join)(__dirname, "..", "package.json"), "utf8");
+    return JSON.parse(raw).version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 // src/lib/postman/pmak-diagnostics.ts
 var memo = /* @__PURE__ */ new Map();
@@ -115442,7 +115985,7 @@ function defaultSessionSleep(ms) {
 function defaultRandom() {
   return Math.random();
 }
-function parseRetryAfterMs(value) {
+function parseRetryAfterMs2(value) {
   const trimmed = value?.trim();
   if (!trimmed) {
     return void 0;
@@ -115470,7 +116013,7 @@ function parseRateLimitResetMs(value) {
 }
 function computeSessionRetryDelayMs(response, attempt, random) {
   const headers = response?.headers;
-  const signal = parseRetryAfterMs(headers?.get("retry-after") ?? null) ?? parseRateLimitResetMs(
+  const signal = parseRetryAfterMs2(headers?.get("retry-after") ?? null) ?? parseRateLimitResetMs(
     headers?.get("ratelimit-reset") ?? headers?.get("x-ratelimit-reset") ?? null
   );
   if (signal !== void 0) {
@@ -115485,7 +116028,7 @@ function getMemoizedSessionIdentity() {
 function getSessionResolutionFailure() {
   return memoizedSessionFailure;
 }
-function asRecord(value) {
+function asRecord2(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return void 0;
   }
@@ -115521,8 +116064,8 @@ async function resolvePmakIdentity(opts) {
 async function probePmakIdentity(baseUrl, apiKey, fetchImpl) {
   try {
     const diagnostic = await inspectPmakIdentity({ apiBaseUrl: baseUrl, apiKey, fetchImpl });
-    const payload = asRecord(diagnostic.payload);
-    const user = asRecord(payload?.user);
+    const payload = asRecord2(diagnostic.payload);
+    const user = asRecord2(payload?.user);
     if (!user) {
       return void 0;
     }
@@ -115563,17 +116106,17 @@ async function resolveSessionIdentity(opts) {
 async function parseSessionResponse(response) {
   let payload;
   try {
-    payload = asRecord(await response.json());
+    payload = asRecord2(await response.json());
   } catch {
     return void 0;
   }
   if (!payload) {
     return void 0;
   }
-  const root = asRecord(payload.session) ?? payload;
-  const identity = asRecord(root.identity);
-  const data = asRecord(root.data);
-  const user = asRecord(data?.user);
+  const root = asRecord2(payload.session) ?? payload;
+  const identity = asRecord2(root.identity);
+  const data = asRecord2(root.data);
+  const user = asRecord2(data?.user);
   const roleEntries = Array.isArray(user?.roles) ? user.roles.map((entry) => coerceText(entry) ?? coerceId(entry)).filter((entry) => Boolean(entry)) : [];
   const singleRole = coerceText(user?.role);
   const roles = roleEntries.length > 0 ? roleEntries : singleRole ? [singleRole] : void 0;
@@ -115843,10 +116386,10 @@ var PostmanAppVersionProvider = class {
   }
   async get() {
     if (process.env.POSTMAN_GATEWAY_APP_VERSION === "off") return void 0;
-    this.pending ??= this.resolve();
+    this.pending ??= this.lookup();
     return this.pending;
   }
-  async resolve() {
+  async lookup() {
     try {
       const response = await this.fetchImpl(UPDATE_URL, {
         signal: AbortSignal.timeout(this.requestTimeoutMs)
@@ -116265,63 +116808,6 @@ function createInternalIntegrationAdapter(options) {
     );
   }
   return new BifrostInternalIntegrationAdapter(options);
-}
-
-// src/lib/retry.ts
-function sleep(delayMs) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, delayMs);
-  });
-}
-function normalizeRetryOptions(options) {
-  return {
-    maxAttempts: Math.max(1, options.maxAttempts ?? 3),
-    delayMs: Math.max(0, options.delayMs ?? 2e3),
-    backoffMultiplier: Math.max(1, options.backoffMultiplier ?? 1),
-    maxDelayMs: options.maxDelayMs === void 0 ? Number.POSITIVE_INFINITY : Math.max(0, options.maxDelayMs),
-    onRetry: options.onRetry ?? (async () => void 0),
-    shouldRetry: options.shouldRetry ?? (() => true),
-    sleep: options.sleep ?? sleep
-  };
-}
-async function retry(operation, options = {}) {
-  const normalized = normalizeRetryOptions(options);
-  let nextDelayMs = normalized.delayMs;
-  for (let attempt = 1; attempt <= normalized.maxAttempts; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error2) {
-      const shouldRetry = attempt < normalized.maxAttempts && normalized.shouldRetry(error2, {
-        attempt,
-        maxAttempts: normalized.maxAttempts
-      });
-      if (!shouldRetry) {
-        throw error2;
-      }
-      await normalized.onRetry({
-        attempt,
-        maxAttempts: normalized.maxAttempts,
-        delayMs: nextDelayMs,
-        error: error2
-      });
-      await normalized.sleep(nextDelayMs);
-      nextDelayMs = Math.min(
-        normalized.maxDelayMs,
-        Math.round(nextDelayMs * normalized.backoffMultiplier)
-      );
-    }
-  }
-  throw new Error("Retry exhausted without returning or throwing");
-}
-function fullJitterDelayMs(attempt, baseMs, capMs, random = Math.random) {
-  return Math.floor(random() * Math.max(0, Math.min(capMs, baseMs * 2 ** Math.max(0, attempt))));
-}
-function parseRetryAfterMs2(value) {
-  const trimmed = value?.trim();
-  if (!trimmed) return void 0;
-  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1e3;
-  const time = Date.parse(trimmed);
-  return Number.isNaN(time) ? void 0 : Math.max(0, time - Date.now());
 }
 
 // src/contracts.ts
@@ -118274,281 +118760,6 @@ async function mintAccessTokenIfNeeded(inputs, log, setSecret2, fetchImpl = fetc
     );
   }
 }
-
-// src/lib/postman/gateway-client.ts
-function isExpiredAuthError(status, body) {
-  return status === 401 || body.includes("UNAUTHENTICATED") || body.includes("authenticationError");
-}
-function isRetryableSafeReadResponse(status) {
-  return status === 408 || status === 429 || status >= 500;
-}
-function defaultSleep(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
-}
-var AccessTokenGatewayClient = class {
-  tokenProvider;
-  bifrostBaseUrl;
-  teamId;
-  orgMode;
-  fetchImpl;
-  secretMasker;
-  maxRetries;
-  fallbackBaseUrl;
-  retryBaseDelayMs;
-  sleepImpl;
-  appVersionProvider;
-  requestTimeoutMs;
-  retryMaxDelayMs;
-  randomImpl;
-  onRetryEvent;
-  constructor(options) {
-    this.tokenProvider = options.tokenProvider;
-    this.bifrostBaseUrl = String(
-      options.bifrostBaseUrl || POSTMAN_ENDPOINT_PROFILES.prod.bifrostBaseUrl
-    ).replace(/\/+$/, "");
-    this.teamId = String(options.teamId || "").trim();
-    this.orgMode = options.orgMode ?? false;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-    this.secretMasker = options.secretMasker ?? createSecretMasker([this.tokenProvider.current()]);
-    this.maxRetries = options.maxRetries ?? 3;
-    const fallbackEnv = typeof process !== "undefined" ? process.env?.POSTMAN_ITEM_CREATE_FALLBACK : void 0;
-    this.fallbackBaseUrl = fallbackEnv === "off" ? void 0 : options.fallbackBaseUrl?.replace(/\/+$/, "");
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 400;
-    this.sleepImpl = options.sleepImpl ?? defaultSleep;
-    this.appVersionProvider = options.appVersionProvider ?? defaultPostmanAppVersionProvider;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 3e4;
-    this.retryMaxDelayMs = options.retryMaxDelayMs ?? 5e3;
-    this.randomImpl = options.randomImpl ?? Math.random;
-    this.onRetryEvent = options.onRetryEvent;
-  }
-  configureTeamContext(teamId, orgMode) {
-    this.teamId = String(teamId || "").trim();
-    this.orgMode = orgMode;
-  }
-  async buildHeaders(extra) {
-    const appVersion = await this.appVersionProvider.get();
-    const headers = {
-      "Content-Type": "application/json",
-      "x-access-token": this.tokenProvider.current(),
-      ...extra || {},
-      ...appVersion ? { "x-app-version": appVersion } : {}
-    };
-    if (this.teamId && this.orgMode) {
-      headers["x-entity-team-id"] = this.teamId;
-    }
-    return headers;
-  }
-  async send(request, baseUrl) {
-    const url = `${baseUrl ?? this.bifrostBaseUrl}/ws/proxy`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    try {
-      return await this.fetchImpl(url, {
-        method: "POST",
-        headers: await this.buildHeaders(request.headers),
-        signal: controller.signal,
-        body: JSON.stringify({
-          service: request.service,
-          method: request.method,
-          path: request.path,
-          ...request.query !== void 0 ? { query: request.query } : {},
-          ...request.body !== void 0 ? { body: request.body } : {}
-        })
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  /**
-   * One cold, serial attempt against the fallback base URL after the primary
-   * budget is exhausted on a transient failure. Never hedged in parallel with
-   * the primary; only fires when the request would otherwise throw. Callers
-   * with `retryTransient: false` still reconcile first — the fallback attempt
-   * here is the resend, so it is only used for requests whose mutation is
-   * known idempotent or already reconciled by the caller's adopt-on-ambiguous
-   * loop.
-   */
-  async tryFallback(request) {
-    if (!this.fallbackBaseUrl) return null;
-    try {
-      return await this.send(request, this.fallbackBaseUrl);
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * Run the fallback attempt and classify its response the same way the
-   * primary path would. Returns the success response, or null when the
-   * fallback also failed transiently (caller then throws the original error).
-   * Non-transient fallback failures (4xx) surface as their own HttpError since
-   * they are the freshest authoritative answer.
-   */
-  fallbackEligible(request, retryTransient) {
-    if (request.fallback === "none") return false;
-    if (!this.fallbackBaseUrl) return false;
-    return retryTransient || request.fallback === "auto";
-  }
-  async attemptFallback(request, retryTransient, status) {
-    if (!this.fallbackEligible(request, retryTransient)) return null;
-    this.emitRetryEvent("fallback", status, 1, 0);
-    const response = await this.tryFallback(request);
-    if (!response) return null;
-    if (response.ok) return response;
-    const body = await response.text().catch(() => "");
-    if (isRetryableSafeReadResponse(response.status)) return null;
-    throw this.toHttpError(request, response, body);
-  }
-  /**
-   * Send a gateway request, refreshing the token once on an auth failure and
-   * optionally retrying transient downstream failures (5xx / Bifrost read
-   * timeouts) with exponential backoff. Safe reads keep transient retries;
-   * unsafe creates pass `{ retryTransient: false }` and reconcile after an
-   * ambiguous response instead of re-POSTing. Auth refresh remains independent
-   * of the transient-retry budget.
-   */
-  async request(request, options = {}) {
-    const retryTransient = options.retryTransient ?? request.method === "get";
-    let attempt = 0;
-    for (; ; ) {
-      let response;
-      try {
-        response = await this.send(request);
-      } catch (error2) {
-        if (retryTransient && attempt < this.maxRetries) {
-          const delay = this.retryDelayMs(attempt);
-          this.emitRetryEvent("transport", void 0, attempt + 1, delay);
-          attempt += 1;
-          await this.sleepImpl(delay);
-          continue;
-        }
-        const fallbackResponse2 = await this.attemptFallback(request, retryTransient);
-        if (fallbackResponse2) return fallbackResponse2;
-        throw error2;
-      }
-      if (response.ok) {
-        const okBody = await response.text().catch(() => "");
-        const inner = this.innerStatus(okBody);
-        if (inner !== void 0) {
-          if (retryTransient && this.isTransient(inner, okBody) && attempt < this.maxRetries) {
-            const delay = this.retryDelayMs(attempt);
-            this.emitRetryEvent("inner", inner, attempt + 1, delay);
-            await this.sleepImpl(delay);
-            attempt += 1;
-            continue;
-          }
-          throw this.toInnerHttpError(request, inner, okBody);
-        }
-        return this.rebuildResponse(response, okBody);
-      }
-      const body = await response.text().catch(() => "");
-      if (isExpiredAuthError(response.status, body) && this.tokenProvider.canRefresh()) {
-        this.emitRetryEvent("auth", response.status, 1, 0);
-        await this.tokenProvider.refresh();
-        response = await this.send(request);
-        if (response.ok) {
-          return response;
-        }
-        const retryBody = await response.text().catch(() => "");
-        throw this.toHttpError(request, response, retryBody);
-      }
-      if (retryTransient && this.isTransient(response.status, body) && attempt < this.maxRetries) {
-        const delay = this.retryDelayMs(attempt, parseRetryAfterMs2(response.headers.get("retry-after")));
-        this.emitRetryEvent("http", response.status, attempt + 1, delay);
-        attempt += 1;
-        await this.sleepImpl(delay);
-        continue;
-      }
-      const fallbackResponse = await this.attemptFallback(request, retryTransient, response.status);
-      if (fallbackResponse) return fallbackResponse;
-      throw this.toHttpError(request, response, body);
-    }
-  }
-  retryDelayMs(attempt, retryAfter) {
-    return retryAfter === void 0 ? fullJitterDelayMs(attempt, this.retryBaseDelayMs, this.retryMaxDelayMs, this.randomImpl) : Math.min(this.retryMaxDelayMs, retryAfter);
-  }
-  emitRetryEvent(retryClass, status, attempt, delay) {
-    this.onRetryEvent?.({
-      class: retryClass,
-      ...status === void 0 ? {} : { status },
-      attempt: Math.max(1, attempt),
-      delay: Math.max(0, delay)
-    });
-  }
-  isTransient(status, body) {
-    return status === 408 || status === 429 || status >= 500 || /ESOCKETTIMEDOUT|ETIMEDOUT|ECONNRESET|serverError|downstream/.test(body);
-  }
-  innerStatus(body) {
-    try {
-      const value = JSON.parse(body);
-      const status = Number(value.status ?? value.statusCode);
-      return value.error || value.success === false || status >= 400 ? status >= 400 ? status : 502 : void 0;
-    } catch {
-      return void 0;
-    }
-  }
-  rebuildResponse(response, body) {
-    return new Response([204, 205, 304].includes(response.status) ? null : body, { status: response.status, statusText: response.statusText, headers: response.headers });
-  }
-  /** Send a gateway request and parse the JSON body, or null when empty. */
-  async requestJson(request, options = {}) {
-    const response = await this.request(request, options);
-    const text = await response.text().catch(() => "");
-    if (!text.trim()) {
-      return null;
-    }
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * Enumerate org-mode sub-teams (squads) for `orgTeamId` via the `ums` service.
-   * Route: `GET /api/teams/:orgTeamId/squads?settings=true&userRoles=true`
-   * (live-proven 200 for org-mode service-account tokens 2026-06-30). This is
-   * the access-token equivalent of PMAK `GET /teams`: a 200 with a non-empty
-   * squad list means the parent account is org-mode; a non-org team answers
-   * `400 "Squad feature is not available for your team."` (mirrors the legacy
-   * PMAK non-org 400). `orgTeamId` is `session.identity.team` from iapub
-   * `/api/sessions/current`. The team id rides in the path; `x-entity-team-id`
-   * is omitted (Bifrost infers team context from the access token), so call
-   * this with a gateway client constructed `orgMode: false`. Throws HttpError
-   * on non-2xx — the caller interprets the 400 as the expected non-org signal.
-   */
-  async getSquads(orgTeamId) {
-    const teamId = encodeURIComponent(String(orgTeamId || "").trim());
-    const payload = await this.requestJson({
-      service: "ums",
-      method: "get",
-      path: `/api/teams/${teamId}/squads?settings=true&userRoles=true`
-    });
-    const squads = Array.isArray(payload?.data) ? payload.data : [];
-    return squads.filter((s) => typeof s === "object" && s !== null && "id" in s && s.id != null).map((s) => ({
-      id: String(s.id),
-      name: String(s.name ?? ""),
-      ...(s.organizationId ?? null) != null ? { organizationId: String(s.organizationId) } : {}
-    }));
-  }
-  toHttpError(request, response, body) {
-    return new HttpError({
-      method: request.method.toUpperCase(),
-      url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path})`,
-      status: response.status,
-      statusText: response.statusText,
-      requestHeaders: {
-        "Content-Type": "application/json",
-        "x-access-token": this.tokenProvider.current(),
-        ...request.headers || {},
-        ...this.teamId && this.orgMode ? { "x-entity-team-id": this.teamId } : {}
-      },
-      responseBody: this.secretMasker(body),
-      secretValues: [this.tokenProvider.current()]
-    });
-  }
-  toInnerHttpError(request, status, body) {
-    return new HttpError({ method: request.method.toUpperCase(), url: `${this.bifrostBaseUrl}/ws/proxy (${request.service}: ${request.method} ${request.path}) [inner]`, status, statusText: "Inner Error", requestHeaders: { "x-access-token": this.tokenProvider.current() }, responseBody: this.secretMasker(body), secretValues: [this.tokenProvider.current()] });
-  }
-};
 
 // src/lib/ssl-validation.ts
 var import_node_crypto2 = require("node:crypto");
@@ -121516,6 +121727,13 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
         bifrostBaseUrl: inputs.postmanBifrostBase,
         // No fallback on the org-mode probe: the expected non-org 400 must
         // surface verbatim, not be re-fired against the /_api alias.
+        refreshEmptyToken: false,
+        fallbackOn: "error",
+        jitterRounding: "floor",
+        defaultInnerErrorStatus: 502,
+        classifyInnerAuthError: false,
+        refreshOnInnerAuthError: false,
+        appVersionProvider: defaultPostmanAppVersionProvider,
         secretMasker: masker,
         onRetryEvent: (event) => {
           actionCore.info(
@@ -121523,7 +121741,15 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
           );
         }
       });
-      const squads = await gateway.getSquads(teamId);
+      const squadsPayload = await gateway.requestJson({
+        service: "ums",
+        method: "get",
+        path: `/api/teams/${encodeURIComponent(teamId)}/squads?settings=true&userRoles=true`,
+        fallback: "none"
+      });
+      const squads = Array.isArray(squadsPayload?.data) ? squadsPayload.data.filter(
+        (squad) => typeof squad === "object" && squad !== null && "id" in squad && squad.id != null
+      ) : [];
       if (squads.length > 0) {
         inputs.orgMode = true;
         actionCore.info(
@@ -121583,6 +121809,14 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     tokenProvider,
     bifrostBaseUrl: inputs.postmanBifrostBase,
     fallbackBaseUrl: inputs.postmanFallbackBase,
+    refreshEmptyToken: false,
+    fallbackOn: "error",
+    jitterRounding: "floor",
+    defaultInnerErrorStatus: 502,
+    classifyInnerAuthError: false,
+    refreshOnInnerAuthError: false,
+    includeFallbackStatusInRetryEvent: true,
+    appVersionProvider: defaultPostmanAppVersionProvider,
     teamId: resolved.teamId,
     orgMode: inputs.orgMode,
     secretMasker: masker,

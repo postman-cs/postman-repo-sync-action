@@ -1,6 +1,9 @@
-import type { AccessTokenGatewayClient } from './gateway-client.js';
-import { HttpError } from '../http-error.js';
-import { retry, sleep as defaultSleep } from '../retry.js';
+import {
+  HttpError,
+  retry,
+  sleep as defaultSleep,
+  type AccessTokenGatewayClient
+} from '@postman-cse/automation-core';
 import {
   isManagedPrivateMockAuthRootHook,
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
