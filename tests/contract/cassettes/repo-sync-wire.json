@@ -1,0 +1,193 @@
+{
+  "version": 2,
+  "interactions": [
+    {
+      "key": "GET https://api.getpostman.com/me",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"Ada Lovelace\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      },
+      "repeatLast": true
+    },
+    {
+      "key": "GET https://iapub.postman.co/api/sessions/current",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"identity\":{\"team\":13347347,\"domain\":\"field-services-v12-demo\"},\"data\":{\"user\":{\"id\":555,\"roles\":[\"admin\"]}},\"consumerType\":\"service_account\"}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      },
+      "repeatLast": true
+    },
+    {
+      "key": "GET https://api.getpostman.com/me",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"Ada Lovelace\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      },
+      "repeatLast": true
+    },
+    {
+      "key": "proxy:ums GET /api/teams/13347347/squads?settings=true&userRoles=true",
+      "requestQuery": "settings=true&userRoles=true",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[{\"id\":132319,\"name\":\"CSE v12\",\"handle\":\"cse-v12\",\"organizationId\":13347347}]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      },
+      "repeatLast": true
+    },
+    {
+      "key": "proxy:sync POST /list/environment?workspace=ws-contract",
+      "requestQuery": "workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:sync POST /list/environment?workspace=ws-contract",
+      "requestQuery": "workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:sync POST /environment/import?workspace=ws-contract #body-sha256=1b6c230f3dd800e419ee620d5732a055d2140b337a5d738b212dcf3bb47f8192",
+      "requestQuery": "workspace=ws-contract",
+      "requestBodySha256": "1b6c230f3dd800e419ee620d5732a055d2140b337a5d738b212dcf3bb47f8192",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"id\":\"env-prod-uid\",\"owner\":\"12345678\"}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:mock GET /mocks?workspace=ws-contract",
+      "requestQuery": "workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:mock GET /mocks?workspace=ws-contract",
+      "requestQuery": "workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:mock POST /mocks?workspace=ws-contract #body-sha256=40845186c74d5386a49ddd645b29bdcf7138859f68135d58490034fc738663bd",
+      "requestQuery": "workspace=ws-contract",
+      "requestBodySha256": "40845186c74d5386a49ddd645b29bdcf7138859f68135d58490034fc738663bd",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"id\":\"mock-123\",\"name\":\"core-payments Mock\",\"collection\":\"12345678-col-baseline\",\"environment\":\"12345678-env-prod-uid\",\"url\":\"https://mock-123.mock.pstmn.io\",\"published\":true}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:monitors GET /jobTemplates?_etc=true&workspace=ws-contract",
+      "requestQuery": "_etc=true&workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:monitors GET /jobTemplates?_etc=true&workspace=ws-contract",
+      "requestQuery": "_etc=true&workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:monitors GET /jobTemplates?_etc=true&workspace=ws-contract",
+      "requestQuery": "_etc=true&workspace=ws-contract",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":[]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:monitors POST /jobTemplates?workspace=ws-contract #body-sha256=b0f8bce99a28f12d1b00d5057c152151afceb4667fbe896bd42ec7da995dee77",
+      "requestQuery": "workspace=ws-contract",
+      "requestBodySha256": "b0f8bce99a28f12d1b00d5057c152151afceb4667fbe896bd42ec7da995dee77",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"id\":\"monitor-123\",\"uid\":\"monitor-123\"}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:monitors POST /jobTemplates/monitor-123/jobs",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"id\":\"monitor-123\",\"uid\":\"monitor-123\"}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:collection GET /v3/collections/12345678-col-baseline/export",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"collection\":{\"info\":{\"name\":\"baseline\"},\"item\":[]}}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:collection GET /v3/collections/12345678-col-smoke/export",
+      "requestQuery": "",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"data\":{\"collection\":{\"info\":{\"name\":\"baseline\"},\"item\":[]}}}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    },
+    {
+      "key": "proxy:sync GET /environment/12345678-env-prod-uid/sync?since_id=0",
+      "requestQuery": "since_id=0",
+      "status": 200,
+      "statusText": "",
+      "body": "{\"entities\":[{\"data\":{\"id\":\"env-prod\",\"name\":\"core-payments - prod\",\"values\":[]}}]}",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      }
+    }
+  ],
+  "recordedAt": "2026-07-31T20:08:07.263Z"
+}
