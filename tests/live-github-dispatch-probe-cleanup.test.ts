@@ -109,4 +109,29 @@ describe('live GitHub dispatch probe cleanup', () => {
     expect(result).toEqual({ allDeleted: true, cleanupComplete: true });
     expect(formatCleanupSummary(result)).toBe('all deleted');
   });
+
+  it('reports incomplete cleanup when scratch removal fails after every repository is verified absent', async () => {
+    const deleteRepository = vi.fn<(repository: string) => Promise<{ status: number }>>(async () => ({ status: 404 }));
+    const repositoryStatus = vi.fn<(repository: string) => Promise<number>>(async () => 404);
+    const removeScratchDir = vi.fn(async (dir: string) => {
+      if (dir === '/tmp/remove-fails') throw new Error('scratch removal failed');
+    });
+    const onError = vi.fn();
+
+    const result = await cleanupDispatchProbe({
+      repositories: ['owner/already-gone', 'owner/also-gone'],
+      scratchDirs: ['/tmp/remove-fails', '/tmp/later'],
+      deleteRepository,
+      repositoryStatus,
+      removeScratchDir,
+      onError
+    });
+
+    expect(deleteRepository.mock.calls.map(([repository]) => repository)).toEqual(['owner/already-gone', 'owner/also-gone']);
+    expect(repositoryStatus.mock.calls.map(([repository]) => repository)).toEqual(['owner/already-gone', 'owner/also-gone']);
+    expect(removeScratchDir.mock.calls.map(([dir]) => dir)).toEqual(['/tmp/remove-fails', '/tmp/later']);
+    expect(onError.mock.calls.flat()).toEqual(expect.arrayContaining([expect.stringContaining('/tmp/remove-fails')]));
+    expect(result).toEqual({ allDeleted: true, cleanupComplete: false });
+    expect(formatCleanupSummary(result)).toBe('cleanup incomplete');
+  });
 });
