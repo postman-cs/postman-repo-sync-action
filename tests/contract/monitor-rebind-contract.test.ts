@@ -252,7 +252,7 @@ describe('monitor rebind: ambiguity fails closed', () => {
 
     expect(result.error).toBeDefined();
     const message = String((result.error as Error).message);
-    expect(message).toContain('Monitor rebind');
+    expect(message).toContain('Monitor discovery');
     expect(message).toContain('Multiple monitors match');
     expect(message).toContain('mon-a');
     expect(message).toContain('mon-b');
@@ -294,6 +294,24 @@ describe('monitor rebind: ambiguity fails closed', () => {
     const message = String((result.error as Error).message);
     expect(message).toContain('Monitor discovery');
     expect(message).toContain('Multiple monitors match');
+    expect(workspace.mutations.filter((entry) => !entry.startsWith('run:'))).toEqual([]);
+    expect(workspace.snapshot()).toEqual(seed);
+  });
+
+  it('fails at discovery when one current and one stale monitor share the requested name and environment', async () => {
+    const seed = [
+      staleMonitor({ id: 'mon-current', collection: CURRENT_COLLECTION }),
+      staleMonitor({ id: 'mon-stale', collection: STALE_COLLECTION })
+    ];
+    const { result, workspace } = await runWithMonitors(seed);
+
+    expect(result.error).toBeDefined();
+    const message = String((result.error as Error).message);
+    expect(message).toContain('Monitor discovery');
+    expect(message).toContain('Multiple monitors match');
+    expect(message).toContain('mon-current');
+    expect(message).toContain('mon-stale');
+    expect(message).toContain(PROD_ENV);
     expect(workspace.mutations.filter((entry) => !entry.startsWith('run:'))).toEqual([]);
     expect(workspace.snapshot()).toEqual(seed);
   });
@@ -395,7 +413,7 @@ describe('monitor rebind: identical assertions through the shared fail-closed ro
 
     expect(result.error).toBeDefined();
     const message = String((result.error as Error).message);
-    expect(message).toContain('Monitor rebind');
+    expect(message).toContain('Monitor discovery');
     expect(message).toContain('Multiple monitors match');
 
     // Same fail-closed guarantee as the override transport: nothing created,

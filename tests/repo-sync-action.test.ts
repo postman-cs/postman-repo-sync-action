@@ -36,6 +36,7 @@ import { join } from 'node:path';
 
 import { load as loadYaml } from 'js-yaml';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HttpError } from '@postman-cse/automation-core';
 
 import type {
   RepoSyncDependencies,
@@ -4099,6 +4100,31 @@ describe('monitor resolution paths', () => {
     expect(absent).toContain('not found in Postman');
     expect(absent).toContain('falling through to discovery');
     expect(absent).toContain('verify monitor IDs/access or set monitor-cron then rerun');
+  });
+
+  it.each([
+    new HttpError({
+      method: 'GET', url: 'https://bifrost.example.com/ws/proxy', status: 403,
+      statusText: 'Forbidden', responseBody: '{"error":{"message":"forbidden"}}'
+    }),
+    new HttpError({
+      method: 'GET', url: 'https://bifrost.example.com/ws/proxy', status: 500,
+      statusText: 'Internal Server Error', responseBody: '{"error":{"message":"server error"}}'
+    })
+  ])('stops before discovery, rebind, or creation when explicit monitor-id lookup is untrusted', async (error) => {
+    const postman = makePostman({ monitorExists: vi.fn().mockRejectedValue(error) });
+    const github = makeGithub();
+
+    await expect(
+      runRepoSync(
+        createInputs({ environments: ['prod'], generateCiWorkflow: false, monitorId: 'explicit-mon' }),
+        makeDeps(postman, github)
+      )
+    ).rejects.toBe(error);
+
+    expect(postman.findMonitorByCollection).not.toHaveBeenCalled();
+    expect(postman.rebindMonitorByName).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
   });
 
   it('discovers existing monitor by smoke collection ID', async () => {
