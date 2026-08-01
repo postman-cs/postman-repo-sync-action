@@ -113648,7 +113648,8 @@ var POSTMAN_ENDPOINT_PROFILES = {
     fallbackBaseUrl: "https://go.postman.co/_api",
     cliInstallUrl: "https://dl-cli.pstmn.io/install/unix.sh",
     cliWindowsInstallUrl: "https://dl-cli.pstmn.io/install/win64.ps1",
-    iapubBaseUrl: "https://iapub.postman.co"
+    iapubBaseUrl: "https://iapub.postman.co",
+    workerBaseUrl: "https://catalog-admin.postman-account2009.workers.dev"
   },
   beta: {
     apiBaseUrl: "https://api.getpostman-beta.com",
@@ -113656,7 +113657,8 @@ var POSTMAN_ENDPOINT_PROFILES = {
     fallbackBaseUrl: "https://go.postman-beta.co/_api",
     cliInstallUrl: "https://dl-cli.pstmn-beta.io/install/unix.sh",
     cliWindowsInstallUrl: "https://dl-cli.pstmn-beta.io/install/win64.ps1",
-    iapubBaseUrl: "https://iapub.postman.co"
+    iapubBaseUrl: "https://iapub.postman.co",
+    workerBaseUrl: "https://catalog-admin.postman-account2009.workers.dev"
   }
 };
 var EMULATOR_PROFILE_ENV = "POSTMAN_TEST_EMULATOR_PROFILE";
@@ -113664,7 +113666,11 @@ var EMULATOR_PROFILE_NAME = "emulator";
 var ENDPOINT_OVERRIDE_ENV = {
   apiBaseUrl: "POSTMAN_TEST_API_BASE_URL",
   bifrostBaseUrl: "POSTMAN_TEST_BIFROST_BASE_URL",
-  iapubBaseUrl: "POSTMAN_TEST_IAPUB_BASE_URL"
+  fallbackBaseUrl: "POSTMAN_TEST_FALLBACK_BASE_URL",
+  iapubBaseUrl: "POSTMAN_TEST_IAPUB_BASE_URL",
+  workerBaseUrl: "POSTMAN_TEST_WORKER_BASE_URL",
+  cliInstallUrl: "POSTMAN_TEST_CLI_INSTALL_URL",
+  cliWindowsInstallUrl: "POSTMAN_TEST_CLI_WINDOWS_INSTALL_URL"
 };
 var OVERRIDE_FIELDS = Object.keys(ENDPOINT_OVERRIDE_ENV);
 function readEndpointEnv(env, name) {
@@ -113741,8 +113747,7 @@ function resolvePostmanEndpointProfile(stack, region = "us", env = process.env) 
   }
   return {
     ...profile,
-    ...resolved,
-    fallbackBaseUrl: resolved.bifrostBaseUrl
+    ...resolved
   };
 }
 
@@ -116421,6 +116426,9 @@ var PostmanAppVersionProvider = class {
   }
   async get() {
     if (process.env.POSTMAN_GATEWAY_APP_VERSION === "off") return void 0;
+    if (String(process.env[EMULATOR_PROFILE_ENV] || "").trim() === EMULATOR_PROFILE_NAME) {
+      return void 0;
+    }
     this.pending ??= this.lookup();
     return this.pending;
   }
@@ -119495,6 +119503,7 @@ function resolveInputs(env = process.env) {
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
     postmanFallbackBase: endpointProfile.fallbackBaseUrl,
+    postmanWorkerBase: endpointProfile.workerBaseUrl,
     postmanCliInstallUrl: endpointProfile.cliInstallUrl,
     postmanCliWindowsInstallUrl: endpointProfile.cliWindowsInstallUrl,
     postmanIapubBase: endpointProfile.iapubBaseUrl
@@ -121680,6 +121689,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
       bifrostBaseUrl: inputs.postmanBifrostBase,
+      workerBaseUrl: inputs.postmanWorkerBase,
       orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
@@ -121946,6 +121956,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     getAccessToken: () => tokenProvider.current(),
     backend: inputs.integrationBackend,
     bifrostBaseUrl: inputs.postmanBifrostBase,
+    workerBaseUrl: inputs.postmanWorkerBase,
     orgMode: inputs.orgMode,
     teamId: resolved.teamId,
     secretMasker: masker,

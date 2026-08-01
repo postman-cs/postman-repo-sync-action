@@ -162,6 +162,7 @@ export interface ResolvedInputs {
   postmanApiBase: string;
   postmanBifrostBase: string;
   postmanFallbackBase: string;
+  postmanWorkerBase?: string;
   postmanCliInstallUrl: string;
   postmanCliWindowsInstallUrl?: string;
   postmanIapubBase: string;
@@ -664,6 +665,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanApiBase: endpointProfile.apiBaseUrl,
     postmanBifrostBase: endpointProfile.bifrostBaseUrl,
     postmanFallbackBase: endpointProfile.fallbackBaseUrl,
+    postmanWorkerBase: endpointProfile.workerBaseUrl,
     postmanCliInstallUrl: endpointProfile.cliInstallUrl,
     postmanCliWindowsInstallUrl: endpointProfile.cliWindowsInstallUrl,
     postmanIapubBase: endpointProfile.iapubBaseUrl
@@ -3526,6 +3528,7 @@ export async function resolvePostmanApiKeyAndTeamId(
       accessToken: inputs.postmanAccessToken,
       backend: inputs.integrationBackend,
       bifrostBaseUrl: inputs.postmanBifrostBase,
+      workerBaseUrl: inputs.postmanWorkerBase,
       orgMode: inputs.orgMode,
       teamId,
       secretMasker: masker
@@ -3860,6 +3863,7 @@ export function createRepoSyncDependencies(
     getAccessToken: () => tokenProvider.current(),
     backend: inputs.integrationBackend,
     bifrostBaseUrl: inputs.postmanBifrostBase,
+    workerBaseUrl: inputs.postmanWorkerBase,
     orgMode: inputs.orgMode,
     teamId: resolved.teamId,
     secretMasker: masker,
