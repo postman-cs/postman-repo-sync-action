@@ -114582,7 +114582,8 @@ var RepoMutationService = class {
     let lastError = "";
     let remoteChanged = false;
     let stopCandidates = false;
-    const isNonRetryablePushError = (message) => /workflow|permission/i.test(message);
+    const isCredentialDenial = (message) => /permission to .+ denied to/i.test(message) || /authentication failed/i.test(message) || /the requested url returned error: 40[13]/i.test(message);
+    const isNonRetryablePushError = (message) => !isCredentialDenial(message) && /workflow|permission/i.test(message);
     try {
       const pushCandidates = usePersistedCredentials ? [null] : tokens;
       for (const token of pushCandidates) {

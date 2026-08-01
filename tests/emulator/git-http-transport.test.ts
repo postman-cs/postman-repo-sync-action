@@ -266,4 +266,32 @@ describe('git smart-HTTP transport', () => {
     // The commit exists locally but the remote never moved.
     expect(await fixture.revParse(repo, 'refs/heads/main')).not.toBe('');
   });
+
+  it('advances the cascade past a GitHub-style 403 credential denial', async () => {
+    // Real GitHub rejects an authenticated but under-scoped token with
+    // HTTP 403 + "Permission to <repo> denied to <user>". That denial is
+    // specific to the credential, not the push: the next candidate must
+    // still be offered (live-proved by the dispatch lane's token-order case).
+    const repo = await fixture.createRemoteRepo('cred-denied', {
+      acceptTokens: ['ambient-token'],
+      deny403Tokens: ['limited-token']
+    });
+    const clone = await cloneWorkRepo(repo, 'ws10-git-cred-denied');
+    await stageGeneratedFile(clone, 'generated.json', '{"v":7}\n');
+
+    const result = await service(repo, clone).commitAndPush({
+      ...PUSH_DEFAULTS,
+      fallbackToken: 'limited-token',
+      githubToken: 'ambient-token'
+    });
+
+    expect(result.pushed).toBe(true);
+    // The denied credential was offered first, then the cascade advanced.
+    const offered = fixture.authAttempts
+      .filter((a) => a.token !== CLONE_BOOTSTRAP_TOKEN && a.token !== '')
+      .map((a) => a.token);
+    expect(offered).toContain('limited-token');
+    expect(offered[offered.length - 1]).toBe('ambient-token');
+    expect(await fixture.revParse(repo, 'refs/heads/main')).toBe(result.commitSha);
+  });
 });

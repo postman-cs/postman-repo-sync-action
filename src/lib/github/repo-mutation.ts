@@ -403,8 +403,19 @@ export class RepoMutationService {
     let remoteChanged = false;
     let stopCandidates = false;
 
+    // Credential-level denials (this token cannot write to the repo) must
+    // advance the candidate cascade: real GitHub rejects an under-scoped
+    // token with "Permission to <repo> denied to <user>" over HTTP 403,
+    // which is specific to the offered credential, not to the push itself.
+    const isCredentialDenial = (message: string): boolean =>
+      /permission to .+ denied to/i.test(message) ||
+      /authentication failed/i.test(message) ||
+      /the requested url returned error: 40[13]/i.test(message);
+
+    // Policy-level denials (any token would be rejected: branch policy,
+    // pre-receive hooks, workflow-scope refusals) stop the whole cascade.
     const isNonRetryablePushError = (message: string): boolean =>
-      /workflow|permission/i.test(message);
+      !isCredentialDenial(message) && /workflow|permission/i.test(message);
 
     try {
       const pushCandidates = usePersistedCredentials ? [null] : tokens;
