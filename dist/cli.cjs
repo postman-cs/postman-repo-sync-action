@@ -112514,10 +112514,18 @@ function resolveCurrentRef(context) {
     return "";
   }
   const currentRef = String(context.currentRef || "").trim();
+  if (currentRef.startsWith("refs/heads/")) {
+    return normalizeBranchRef(currentRef);
+  }
   if (currentRef.startsWith("refs/pull/")) {
     return normalizeBranchRef(context.githubHeadRef);
   }
-  return normalizeBranchRef(currentRef) || normalizeBranchRef(context.githubHeadRef) || normalizeBranchRef(context.githubRefName);
+  if (currentRef.startsWith("refs/")) {
+    return "";
+  }
+  const githubRefName = normalizeBranchRef(context.githubRefName);
+  const isPullMergeShorthand = /^\d+\/merge$/.test(githubRefName);
+  return normalizeBranchRef(currentRef) || normalizeBranchRef(context.githubHeadRef) || (isPullMergeShorthand ? "" : githubRefName);
 }
 function hasControlCharacter(value) {
   for (let index = 0; index < value.length; index += 1) {
@@ -117197,9 +117205,35 @@ function parseBranchDecision(raw) {
   } catch {
     throw new ContractError("CONTRACT_BRANCH_DECISION_INVALID", "POSTMAN_BRANCH_DECISION is not valid JSON");
   }
+  if (!parsed || typeof parsed !== "object") {
+    throw new ContractError("CONTRACT_BRANCH_DECISION_INVALID", "POSTMAN_BRANCH_DECISION does not carry a valid BranchDecision");
+  }
   const candidate = parsed;
   const tiers = ["canonical", "channel", "preview", "gated", "legacy"];
-  if (!candidate || typeof candidate !== "object" || !tiers.includes(candidate.tier) || !candidate.identity) {
+  const strategies = ["legacy", "publish-gate", "preview"];
+  const providers = ["github", "gitlab", "bitbucket", "azure-devops", "unknown"];
+  const refKinds = ["default-branch", "branch", "tag", "unknown"];
+  const optionalStrings = [
+    candidate.canonicalBranch,
+    candidate.identity?.headBranch,
+    candidate.identity?.rawRef,
+    candidate.identity?.defaultBranch,
+    candidate.identity?.headSha
+  ];
+  const channel = candidate.channel;
+  const validChannel = channel === void 0 || typeof channel === "object" && channel !== null && typeof channel.pattern === "string" && channel.pattern.length > 0 && typeof channel.code === "string" && /^[A-Z][A-Z0-9_-]{0,15}$/.test(channel.code);
+  const validIdentity = candidate.identity && typeof candidate.identity === "object" && providers.includes(candidate.identity.provider) && refKinds.includes(candidate.identity.refKind) && typeof candidate.identity.isPrContext === "boolean" && typeof candidate.identity.isForkPr === "boolean" && optionalStrings.every((field) => field === void 0 || typeof field === "string");
+  const identity = candidate.identity;
+  const coherent = candidate.strategy === "legacy" ? candidate.tier === "legacy" : candidate.tier !== "legacy" && (candidate.tier !== "preview" || candidate.strategy === "preview");
+  const hasCanonicalBranch = Boolean(clean(candidate.canonicalBranch));
+  const hasEligibleBranchIdentity = validIdentity && Boolean(clean(identity?.headBranch)) && (identity?.refKind === "branch" || identity?.refKind === "default-branch") && !identity?.isForkPr;
+  const channelMatchesTier = candidate.tier === "channel" === (channel !== void 0);
+  const canonicalTierValid = candidate.tier !== "canonical" || hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch;
+  const channelTierValid = candidate.tier !== "channel" || hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch && channel !== void 0 && identity?.headBranch !== void 0 && matchChannel(identity.headBranch, [channel]) !== void 0;
+  const previewTierValid = candidate.tier !== "preview" || candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch;
+  const forcedGated = !hasEligibleBranchIdentity;
+  const gatedTierValid = candidate.tier !== "gated" || !(candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch);
+  if (!tiers.includes(candidate.tier) || !strategies.includes(candidate.strategy) || typeof candidate.reason !== "string" || candidate.reason.trim().length === 0 || !validIdentity || !validChannel || !coherent || !hasCanonicalBranch && candidate.strategy !== "legacy" || !channelMatchesTier || !canonicalTierValid || !channelTierValid || !previewTierValid || candidate.strategy !== "legacy" && forcedGated && candidate.tier !== "gated" || candidate.strategy !== "legacy" && hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch && candidate.tier !== "canonical" || !gatedTierValid) {
     throw new ContractError("CONTRACT_BRANCH_DECISION_INVALID", "POSTMAN_BRANCH_DECISION does not carry a valid BranchDecision");
   }
   return candidate;

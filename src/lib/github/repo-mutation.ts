@@ -181,14 +181,23 @@ export function resolveCurrentRef(context: RepoMutationContext): string {
   }
 
   const currentRef = String(context.currentRef || '').trim();
+  if (currentRef.startsWith('refs/heads/')) {
+    return normalizeBranchRef(currentRef);
+  }
   if (currentRef.startsWith('refs/pull/')) {
     return normalizeBranchRef(context.githubHeadRef);
   }
+  if (currentRef.startsWith('refs/')) {
+    return '';
+  }
+
+  const githubRefName = normalizeBranchRef(context.githubRefName);
+  const isPullMergeShorthand = /^\d+\/merge$/.test(githubRefName);
 
   return (
     normalizeBranchRef(currentRef) ||
     normalizeBranchRef(context.githubHeadRef) ||
-    normalizeBranchRef(context.githubRefName)
+    (isPullMergeShorthand ? '' : githubRefName)
   );
 }
 

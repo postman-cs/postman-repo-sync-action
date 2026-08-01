@@ -413,6 +413,154 @@ describe('serialized decision hand-off', () => {
     expect(() => parseBranchDecision('{not json')).toThrowError(/CONTRACT_BRANCH_DECISION_INVALID/);
     expect(() => parseBranchDecision('{"tier":"nope"}')).toThrowError(/CONTRACT_BRANCH_DECISION_INVALID/);
   });
+
+  describe('inherited decision contract rejection', () => {
+    const valid = {
+      tier: 'gated',
+      strategy: 'publish-gate',
+      identity: {
+        provider: 'github',
+        refKind: 'branch',
+        isPrContext: false,
+        isForkPr: false,
+        headBranch: 'feature/x',
+        defaultBranch: 'main'
+      },
+      canonicalBranch: 'main',
+      reason: 'branch feature/x under branch-strategy publish-gate'
+    };
+    const invalid = [
+      { name: 'invalid strategy', decision: { ...valid, strategy: 'single' } },
+      { name: 'missing identity fields', decision: { ...valid, identity: { provider: 'github', refKind: 'branch' } } },
+      { name: 'non-boolean fork identity field', decision: { ...valid, identity: { ...valid.identity, isForkPr: 'false' } } },
+      { name: 'invalid identity provider', decision: { ...valid, identity: { ...valid.identity, provider: 'jenkins' } } },
+      { name: 'invalid identity ref kind', decision: { ...valid, identity: { ...valid.identity, refKind: 'merge' } } },
+      { name: 'non-string identity head branch', decision: { ...valid, identity: { ...valid.identity, headBranch: 42 } } },
+      { name: 'blank reason', decision: { ...valid, reason: '   ' } },
+      { name: 'invalid channel shape', decision: { ...valid, channel: { pattern: 'release/**', code: 'rc' } } },
+      { name: 'legacy tier with nonlegacy strategy', decision: { ...valid, tier: 'legacy' } },
+      { name: 'preview tier with publish-gate strategy', decision: { ...valid, tier: 'preview', strategy: 'publish-gate' } },
+      { name: 'canonical tier with legacy strategy', decision: { ...valid, tier: 'canonical', strategy: 'legacy' } },
+      {
+        name: 'canonical tier from a fork PR',
+        decision: {
+          ...valid,
+          tier: 'canonical',
+          identity: { ...valid.identity, headBranch: 'main', isPrContext: true, isForkPr: true }
+        }
+      },
+      {
+        name: 'channel tier missing channel',
+        decision: { ...valid, tier: 'channel' }
+      },
+      {
+        name: 'channel tier whose pattern does not match its head branch',
+        decision: {
+          ...valid,
+          tier: 'channel',
+          channel: { pattern: 'staging', code: 'STAGE' }
+        }
+      },
+      {
+        name: 'nonlegacy decision missing canonical branch',
+        decision: { ...valid, canonicalBranch: undefined }
+      },
+      {
+        name: 'canonical tier whose head differs from canonical branch',
+        decision: {
+          ...valid,
+          tier: 'canonical',
+          identity: { ...valid.identity, headBranch: 'trunk' }
+        }
+      },
+      {
+        name: 'preview tier from a fork PR',
+        decision: {
+          ...valid,
+          tier: 'preview',
+          strategy: 'preview',
+          identity: { ...valid.identity, isPrContext: true, isForkPr: true }
+        }
+      },
+      {
+        name: 'preview tier from a tag',
+        decision: {
+          ...valid,
+          tier: 'preview',
+          strategy: 'preview',
+          identity: { ...valid.identity, refKind: 'tag', headBranch: undefined }
+        }
+      },
+      {
+        name: 'preview tier without a head branch',
+        decision: {
+          ...valid,
+          tier: 'preview',
+          strategy: 'preview',
+          identity: { ...valid.identity, headBranch: undefined }
+        }
+      },
+      {
+        name: 'otherwise eligible preview branch falsely marked gated',
+        decision: { ...valid, strategy: 'preview' }
+      }
+    ];
+
+    it.each(invalid)('rejects $name', ({ decision }) => {
+      expect(() => parseBranchDecision(JSON.stringify(decision))).toThrowError(/CONTRACT_BRANCH_DECISION_INVALID/);
+    });
+
+    it('rejects null', () => {
+    expect(() => parseBranchDecision('null')).toThrowError(/CONTRACT_BRANCH_DECISION_INVALID/);
+    });
+  });
+
+  it('accepts every resolver-produced tier shape', () => {
+    const decisions = [
+      resolveBranchDecision({
+        strategy: 'legacy',
+        identity: identity({ headBranch: 'feature/x', defaultBranch: 'main' })
+      }),
+      resolveBranchDecision({
+        strategy: 'publish-gate',
+        identity: identity({ headBranch: 'main', defaultBranch: 'main', refKind: 'default-branch' })
+      }),
+      resolveBranchDecision({
+        strategy: 'publish-gate',
+        identity: identity({ headBranch: 'develop', defaultBranch: 'main' }),
+        channels: parseChannelRules('develop=DEV')
+      }),
+      resolveBranchDecision({
+        strategy: 'preview',
+        identity: identity({ headBranch: 'feature/x', defaultBranch: 'main' })
+      }),
+      resolveBranchDecision({
+        strategy: 'publish-gate',
+        identity: identity({ headBranch: 'feature/x', defaultBranch: 'main' })
+      })
+    ];
+
+    expect(decisions.map((decision) => decision.tier)).toEqual([
+      'legacy', 'canonical', 'channel', 'preview', 'gated'
+    ]);
+    for (const decision of decisions) {
+      expect(parseBranchDecision(serializeBranchDecision(decision))).toEqual(decision);
+    }
+  });
+
+  it('round-trips a resolver-produced wildcard channel decision', () => {
+    const decision = resolveBranchDecision({
+      strategy: 'publish-gate',
+      identity: identity({ headBranch: 'feature/x', defaultBranch: 'main' }),
+      channels: parseChannelRules('*=ALL')
+    });
+
+    expect(decision).toMatchObject({
+      tier: 'channel',
+      channel: { pattern: '*', code: 'ALL' }
+    });
+    expect(parseBranchDecision(serializeBranchDecision(decision))).toEqual(decision);
+  });
 });
 
 describe('preview slug + naming', () => {
