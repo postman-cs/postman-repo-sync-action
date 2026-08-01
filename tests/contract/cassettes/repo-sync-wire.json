@@ -50,7 +50,7 @@
       "requestQuery": "workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -60,7 +60,7 @@
       "requestQuery": "workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -81,7 +81,7 @@
       "requestQuery": "workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -91,7 +91,7 @@
       "requestQuery": "workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -112,7 +112,7 @@
       "requestQuery": "_etc=true&workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -122,7 +122,7 @@
       "requestQuery": "_etc=true&workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -132,7 +132,7 @@
       "requestQuery": "_etc=true&workspace=ws-contract",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":[]}",
+      "body": "{\"data\":[],\"meta\":{\"cursor\":{\"next\":\"\"}}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -153,7 +153,7 @@
       "requestQuery": "",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":{\"id\":\"monitor-123\",\"uid\":\"monitor-123\"}}",
+      "body": "{\"data\":{\"id\":\"monitor-123\"}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
@@ -183,7 +183,7 @@
       "requestQuery": "since_id=0",
       "status": 200,
       "statusText": "",
-      "body": "{\"entities\":[{\"data\":{\"id\":\"env-prod\",\"name\":\"core-payments - prod\",\"values\":[]}}]}",
+      "body": "{\"entities\":[{\"data\":{\"id\":\"env-prod-uid\",\"name\":\"core-payments - prod\",\"values\":[{\"key\":\"baseUrl\",\"value\":\"https://api.example.com\",\"type\":\"default\",\"enabled\":true},{\"key\":\"CI\",\"value\":\"false\",\"type\":\"default\",\"enabled\":true},{\"key\":\"RESPONSE_TIME_THRESHOLD\",\"value\":\"2000\",\"type\":\"default\",\"enabled\":true}]}}]}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
