@@ -167,6 +167,46 @@ describe('contract: platform fake routing', () => {
     expect(platform.state.paginationCursorsIssued).toBe(2);
   });
 
+  it('rejects malformed, mismatched, and expired list cursors', async () => {
+    const platform = createPlatform();
+    const opaqueCursor = (payload: string) => Buffer.from(payload, 'utf8').toString('base64url');
+    const cases = [
+      { name: 'malformed base64 payload', cursor: 'not-a-valid-cursor', error: 'Invalid mock-list cursor' },
+      { name: 'malformed JSON payload', cursor: opaqueCursor('{not-json'), error: 'Invalid mock-list cursor' },
+      {
+        name: 'wrong cursor kind',
+        cursor: opaqueCursor('{"kind":"monitor-list","sequence":1,"offset":0}'),
+        error: 'Invalid mock-list cursor'
+      },
+      {
+        name: 'non-integer offset',
+        cursor: opaqueCursor('{"kind":"mock-list","sequence":1,"offset":1.5}'),
+        error: 'Invalid mock-list cursor'
+      },
+      {
+        name: 'negative offset',
+        cursor: opaqueCursor('{"kind":"mock-list","sequence":1,"offset":-1}'),
+        error: 'Invalid mock-list cursor'
+      },
+      {
+        name: 'unknown snapshot',
+        cursor: opaqueCursor('{"kind":"mock-list","sequence":999,"offset":0}'),
+        error: 'Expired mock-list cursor'
+      }
+    ];
+
+    for (const testCase of cases) {
+      await expect(
+        proxy(platform, {
+          service: 'mock',
+          method: 'get',
+          path: '/mocks?workspace=ws-contract',
+          query: { cursor: testCase.cursor }
+        })
+      ).rejects.toThrow(testCase.error);
+    }
+  });
+
   it('returns 403 instead of deleting a collection owned by another user', async () => {
     const platform = createPlatform({
       userId: 123,

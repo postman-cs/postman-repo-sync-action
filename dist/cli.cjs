@@ -116462,8 +116462,11 @@ var PostmanGatewayAssetsClient = class {
         path: `/jobTemplates/${uid}?_etc=true`
       });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        return false;
+      }
+      throw error;
     }
   }
   async findMonitorByCollection(collectionUid, environmentUid, name) {
@@ -116471,6 +116474,22 @@ var PostmanGatewayAssetsClient = class {
     const environment = String(environmentUid ?? "").trim();
     const monitorName = String(name ?? "").trim();
     const monitors = await this.listMonitors();
+    const sameNameMatches = monitors.filter((monitor) => monitor.name === monitorName);
+    const sameNameEnvironmentMatches = sameNameMatches.filter((monitor) => monitor.environmentUid === environment);
+    try {
+      this.selectExactMatch(
+        "monitor",
+        `workspace ${this.workspaceId}, name "${monitorName}", and environment ${environment || "(none)"}`,
+        sameNameEnvironmentMatches
+      );
+    } catch (error) {
+      const environments = [...new Set(sameNameMatches.map((monitor) => monitor.environmentUid || "(none)"))];
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `${message} Same-name monitor(s) also exist on environment(s): ${environments.join(", ")}.`,
+        { cause: error }
+      );
+    }
     const matches = monitors.filter(
       (monitor) => monitor.collectionUid === want && monitor.environmentUid === environment && monitor.name === monitorName
     );

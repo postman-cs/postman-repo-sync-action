@@ -792,6 +792,42 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(parseEnvelope(fetchImpl.mock.calls[0]).path).toBe('/jobTemplates?workspace=ws-1&_etc=true');
   });
 
+  it('monitorExists returns false only when the explicit monitor lookup is a 404', async () => {
+    const requestJson = vi.fn().mockRejectedValue(
+      new HttpError({
+        method: 'GET',
+        url: 'https://bifrost.example.com/ws/proxy',
+        status: 404,
+        statusText: 'Not Found',
+        responseBody: '{"error":{"message":"not found"}}'
+      })
+    );
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws-1' });
+
+    await expect(assets.monitorExists('missing-monitor')).resolves.toBe(false);
+    expect(requestJson).toHaveBeenCalledWith({
+      service: 'monitors', method: 'get', path: '/jobTemplates/missing-monitor?_etc=true'
+    });
+  });
+
+  it.each([
+    new HttpError({
+      method: 'GET', url: 'https://bifrost.example.com/ws/proxy', status: 403,
+      statusText: 'Forbidden', responseBody: '{"error":{"message":"forbidden"}}'
+    }),
+    new HttpError({
+      method: 'GET', url: 'https://bifrost.example.com/ws/proxy', status: 500,
+      statusText: 'Internal Server Error', responseBody: '{"error":{"message":"server error"}}'
+    }),
+    new Error('transport failed'),
+    new SyntaxError('Unexpected token in monitor response')
+  ])('monitorExists rethrows untrusted lookup failures', async (error) => {
+    const requestJson = vi.fn().mockRejectedValue(error);
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws-1' });
+
+    await expect(assets.monitorExists('untrusted-monitor')).rejects.toBe(error);
+  });
+
   it('runMonitor posts to the jobTemplates jobs path', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({}));
     const { assets } = buildClient(fetchImpl);
