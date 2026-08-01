@@ -1,3 +1,5 @@
+import { resolveCurrentRef as resolveRepoMutationCurrentRef } from './lib/github/repo-mutation.js';
+
 export type ActionInputDefinition = {
   description: string;
   required: boolean;
@@ -428,24 +430,12 @@ export const postmanRepoSyncActionContract: {
 };
 
 export function resolveCurrentRef(options: ExecutionPlanOptions): string {
-  if (String(options.repoWriteMode ?? '').trim() !== 'commit-and-push') {
-    return '';
-  }
-
-  const candidates = [
-    options.currentRef,
-    options.githubHeadRef,
-    options.githubRefName
-  ];
-
-  for (const candidate of candidates) {
-    const trimmed = String(candidate ?? '').trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-
-  return '';
+  return resolveRepoMutationCurrentRef({
+    currentRef: options.currentRef,
+    githubHeadRef: options.githubHeadRef,
+    githubRefName: options.githubRefName,
+    repoWriteMode: options.repoWriteMode ?? ''
+  });
 }
 
 export function createExecutionPlan(

@@ -312,6 +312,39 @@ describe('postman-repo-sync-action contract', () => {
         githubRefName: 'feature/no-push'
       }).resolvedCurrentRef
     ).toBe('');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/tags/v1.2.3',
+        githubRefName: 'v1.2.3'
+      }).resolvedCurrentRef
+    ).toBe('');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/pull/42/merge',
+        githubHeadRef: 'refs/heads/feature/customer-sync',
+        githubRefName: '42/merge'
+      }).resolvedCurrentRef
+    ).toBe('feature/customer-sync');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/pull/42/merge',
+        githubHeadRef: 'refs/tags/v1.2.3',
+        githubRefName: 'feature/customer-sync'
+      }).resolvedCurrentRef
+    ).toBe('');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
+        githubRefName: '42/merge'
+      }).resolvedCurrentRef
+    ).toBe('');
   });
 
   it('defines prebuilt-collections-json semantic contract schema and default behavior', () => {
