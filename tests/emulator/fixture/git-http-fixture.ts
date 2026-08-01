@@ -36,13 +36,23 @@ export interface RemoteRepo {
   url: string;
   /** Tokens the server accepts for this repo (mutable per test). */
   acceptTokens: Set<string>;
+  /**
+   * Tokens denied with GitHub's credential-denial shape (HTTP 403 +
+   * "Permission to <repo> denied to <user>") instead of a 401 challenge.
+   * Models an authenticated-but-under-scoped token; the service must advance
+   * its candidate cascade past these.
+   */
+  deny403Tokens: Set<string>;
 }
 
 export interface GitHttpFixture {
   baseUrl: string;
   authAttempts: AuthAttempt[];
   /** Create a bare repo seeded with one commit on `main`, served over HTTP. */
-  createRemoteRepo(name: string, options: { acceptTokens: string[] }): Promise<RemoteRepo>;
+  createRemoteRepo(
+    name: string,
+    options: { acceptTokens: string[]; deny403Tokens?: string[] }
+  ): Promise<RemoteRepo>;
   /** Install a pre-receive hook that rejects every push with the message. */
   installRejectingPreReceiveHook(repo: RemoteRepo, message: string): Promise<void>;
   /** Advance `main` on the server by one commit (filesystem path, not HTTP). */
@@ -123,6 +133,12 @@ export async function startGitHttpFixture(): Promise<GitHttpFixture> {
     const token = separator >= 0 ? decoded.slice(separator + 1) : '';
     const accepted = username === 'x-access-token' && repo.acceptTokens.has(token);
     authAttempts.push({ pathname: url.pathname, service, username, token, accepted });
+    if (!accepted && repo.deny403Tokens.has(token)) {
+      // GitHub's shape for an authenticated but under-scoped credential.
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end(`remote: Permission to ${repo.name} denied to probe-user.\n`);
+      return;
+    }
     if (!accepted) {
       res.writeHead(401, {
         'www-authenticate': 'Basic realm="ws10-git-fixture"',
@@ -218,7 +234,8 @@ export async function startGitHttpFixture(): Promise<GitHttpFixture> {
         name,
         barePath,
         url: `${baseUrl}/${bareName}`,
-        acceptTokens: new Set([...options.acceptTokens, CLONE_BOOTSTRAP_TOKEN])
+        acceptTokens: new Set([...options.acceptTokens, CLONE_BOOTSTRAP_TOKEN]),
+        deny403Tokens: new Set(options.deny403Tokens ?? [])
       };
       repos.set(bareName, repo);
       return repo;

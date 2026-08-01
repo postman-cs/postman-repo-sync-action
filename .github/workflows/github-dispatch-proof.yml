@@ -1,0 +1,40 @@
+name: GitHub Dispatch Proof
+
+# WS10 dispatch lane: proves RepoMutationService push policy against REAL
+# GitHub -- disposable repos, real branch protection, real repository
+# rulesets, real token capability enforcement. Manual dispatch only; never a
+# PR gate. Containers prove transport (test:emulator:git); this lane proves
+# policy.
+#
+# Secrets (operator-supplied at dispatch time; short-lived PATs are fine and
+# preferred -- mint fresh ones per run and revoke after):
+#   WS10_DISPATCH_WRITE_TOKEN    classic PAT: repo + delete_repo
+#   WS10_DISPATCH_READONLY_TOKEN classic PAT: no scopes
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Run live dispatch probe
+        env:
+          WS10_DISPATCH_WRITE_TOKEN: ${{ secrets.WS10_DISPATCH_WRITE_TOKEN }}
+          WS10_DISPATCH_READONLY_TOKEN: ${{ secrets.WS10_DISPATCH_READONLY_TOKEN }}
+        run: npx --yes tsx scripts/live-github-dispatch-probe.ts
