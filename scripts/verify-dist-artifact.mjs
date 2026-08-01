@@ -35,7 +35,18 @@ const defaultRoot = path.resolve(scriptDir, '..');
 const root = path.resolve(process.argv[2] ?? defaultRoot);
 const distDir = path.join(root, 'dist');
 const SHEBANG = '#!/usr/bin/env node\n';
-const CLI_PROBE_TIMEOUT_MS = 5_000;
+// Each probe cold-starts the multi-megabyte bundled CLI; keep the bound finite
+// to catch a hung/never-returning process, not to measure startup speed.
+// VERIFY_DIST_CLI_PROBE_TIMEOUT_MS overrides the default so hang-detection tests
+// can pin a short bound without weakening the generous release-gate default.
+const parsedCliProbeTimeoutMs = Number.parseInt(
+  process.env.VERIFY_DIST_CLI_PROBE_TIMEOUT_MS ?? '',
+  10
+);
+const CLI_PROBE_TIMEOUT_MS =
+  Number.isFinite(parsedCliProbeTimeoutMs) && parsedCliProbeTimeoutMs > 0
+    ? parsedCliProbeTimeoutMs
+    : 60_000;
 
 // Optional third-party peers that bundled runtimes (e.g. node-fetch) try to
 // require and swallow on failure. These are NOT runtime dependencies of the
