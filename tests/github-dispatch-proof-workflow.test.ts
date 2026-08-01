@@ -85,8 +85,9 @@ describe('github-dispatch-proof workflow contract', () => {
     expect(probeSource).toMatch(/if \(!cleanupResult\.cleanupComplete\) process\.exitCode = 1/);
   });
 
-  it('formats cleanup summaries truthfully for both deletion outcomes', () => {
+  it('formats cleanup summaries truthfully for complete and incomplete cleanup outcomes', () => {
     expect(formatCleanupSummary({ allDeleted: true, cleanupComplete: true })).toBe('all deleted');
+    expect(formatCleanupSummary({ allDeleted: true, cleanupComplete: false })).toBe('cleanup incomplete');
     expect(formatCleanupSummary({ allDeleted: false, cleanupComplete: false })).toBe('cleanup incomplete');
   });
 

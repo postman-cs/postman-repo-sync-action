@@ -115,5 +115,5 @@ export async function cleanupDispatchProbe(
 }
 
 export function formatCleanupSummary(result: DispatchProbeCleanupResult): string {
-  return result.allDeleted ? 'all deleted' : 'cleanup incomplete';
+  return result.cleanupComplete ? 'all deleted' : 'cleanup incomplete';
 }
