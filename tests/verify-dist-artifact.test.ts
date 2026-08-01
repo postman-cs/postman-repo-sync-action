@@ -5,7 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { vi, describe, expect, it } from 'vitest';
+
+// Every test in this file execs real node child processes; the default 5s
+// vitest timeout flakes under full-suite load, so raise it file-wide.
+vi.setConfig({ testTimeout: 60_000 });
 
 interface RepoConfig {
   pkgName: string;

@@ -54,16 +54,13 @@ function normalizeBranchRef(value: string | undefined): string {
   if (!trimmed) {
     return '';
   }
-  if (trimmed.startsWith('refs/heads/')) {
-    return trimmed.slice('refs/heads/'.length);
-  }
-  if (trimmed.startsWith('refs/tags/') || trimmed.startsWith('refs/pull/')) {
+  const branch = trimmed.startsWith('refs/heads/')
+    ? trimmed.slice('refs/heads/'.length)
+    : trimmed;
+  if (branch.startsWith('refs/')) {
     return '';
   }
-  if (trimmed.startsWith('refs/')) {
-    return '';
-  }
-  return trimmed;
+  return branch;
 }
 
 export function buildPushTokenOrder(

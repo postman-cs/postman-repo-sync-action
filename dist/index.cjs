@@ -114333,16 +114333,11 @@ function normalizeBranchRef(value) {
   if (!trimmed) {
     return "";
   }
-  if (trimmed.startsWith("refs/heads/")) {
-    return trimmed.slice("refs/heads/".length);
-  }
-  if (trimmed.startsWith("refs/tags/") || trimmed.startsWith("refs/pull/")) {
+  const branch = trimmed.startsWith("refs/heads/") ? trimmed.slice("refs/heads/".length) : trimmed;
+  if (branch.startsWith("refs/")) {
     return "";
   }
-  if (trimmed.startsWith("refs/")) {
-    return "";
-  }
-  return trimmed;
+  return branch;
 }
 function buildPushTokenOrder(options) {
   const ordered = [options.adoToken, options.fallbackToken, options.githubToken].map((entry) => String(entry || "").trim()).filter(Boolean);
@@ -121106,18 +121101,18 @@ function createRepoSummary(outputs, envUids, pushed) {
 async function commitAndPushGeneratedFiles(inputs, dependencies) {
   if (inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs);
+    assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
     const parts = inputs.ciWorkflowPath.split("/");
     if (parts.length > 1) {
       const dir = parts.slice(0, -1).join("/");
       ensureDir(dir);
     }
-    assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
     (0, import_node_fs5.writeFileSync)(inputs.ciWorkflowPath, ciWorkflow);
     if (inputs.provider === "github" || inputs.provider === "unknown") {
       const gcPath = ".github/workflows/postman-preview-gc.yml";
       if (inputs.ciWorkflowPath.endsWith(".github/workflows/ci.yml") || inputs.ciWorkflowPath === ".github/workflows/ci.yml") {
-        ensureDir(".github/workflows");
         assertPathWithinCwd(gcPath, "preview GC workflow path");
+        ensureDir(".github/workflows");
         (0, import_node_fs5.writeFileSync)(gcPath, renderGcWorkflowTemplate());
       }
     }

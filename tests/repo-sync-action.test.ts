@@ -2966,9 +2966,13 @@ describe('repo sync action', () => {
 
   it('rejects unsafe CI workflow paths in repo-write-mode=none before writing', async () => {
     const outsideRoot = mkdtempSync(join(tmpdir(), 'repo-sync-ci-outside-'));
+    const missingOutsideParentName = `repo-sync-ci-missing-parent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const missingOutsideParent = join(tmpdir(), missingOutsideParentName);
+    const missingOutsideFile = join(missingOutsideParent, 'nested', 'escaped-ci.yml');
     symlinkSync(outsideRoot, '.workflow-link', 'dir');
     const invalidPaths = [
       '../escaped-ci.yml',
+      `../${missingOutsideParentName}/nested/escaped-ci.yml`,
       join(outsideRoot, 'absolute-ci.yml'),
       '.workflow-link/symlink-ci.yml'
     ];
@@ -2999,8 +3003,11 @@ describe('repo sync action', () => {
 
       expect(existsSync(join(outsideRoot, 'absolute-ci.yml'))).toBe(false);
       expect(existsSync(join(outsideRoot, 'symlink-ci.yml'))).toBe(false);
+      expect(existsSync(missingOutsideParent)).toBe(false);
+      expect(existsSync(missingOutsideFile)).toBe(false);
     } finally {
       rmSync(outsideRoot, { recursive: true, force: true });
+      rmSync(missingOutsideParent, { recursive: true, force: true });
     }
   });
 
