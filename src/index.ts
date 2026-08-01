@@ -583,7 +583,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   const envRuntimeUrls = parseJsonMap(getInput('env-runtime-urls-json', env) || '{}');
   const postmanRegion = parsePostmanRegion(getInput('postman-region', env));
   const postmanStack = parsePostmanStack(getInput('postman-stack', env));
-  const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion);
+  const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion, env);
 
   return {
     projectName: getInput('project-name', env),
