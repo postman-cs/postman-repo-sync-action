@@ -54,18 +54,24 @@ function execPwsh(command: string, options: ExecPwshOptions = {}): string {
         // Never inherit stdin: vitest workers keep a pipe open and pwsh can block on read.
         stdio: ['ignore', 'pipe', 'pipe'],
         encoding: 'utf8',
-        // Scripts finish in <1s; a timeout is a known CLR-startup stall, so retry once.
-        timeout: 15_000,
+        // Scripts finish in <1s; the generous bound absorbs CLR-startup stalls under full-suite load.
+        timeout: 60_000,
         killSignal: 'SIGKILL'
       }
     );
 
-  try {
-    return run();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ETIMEDOUT') throw error;
-    return run();
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return run();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ETIMEDOUT') throw error;
+      lastError = error;
+    }
   }
+
+  throw lastError;
 }
 
 function buildFakePostmanHarness(exitCode: number): string {
