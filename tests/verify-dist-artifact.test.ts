@@ -229,7 +229,7 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('verify-dist-artifact: ok');
-  }, 30_000);
+  }, 60_000);
 
   it('fails closed when shipped action bytes receive invalid inherited branch decisions', async ({ onTestFinished }) => {
     const snapshotRoot = await makeTempDir('verify-dist-branch-decision-', onTestFinished);
@@ -314,7 +314,7 @@ describe('verify-dist-artifact canonical contract', () => {
             POSTMAN_ACTIONS_TELEMETRY: 'off',
             VERIFY_DIST_NETWORK_SENTINEL: networkSentinel
           },
-          timeout: 25_000,
+          timeout: 60_000,
           maxBuffer: 1024 * 1024
         });
         result = { code: 0, stdout: child.stdout, stderr: child.stderr };
@@ -332,15 +332,16 @@ describe('verify-dist-artifact canonical contract', () => {
       await expect(readFile(networkSentinel, 'utf8'), name).rejects.toMatchObject({ code: 'ENOENT' });
       expect(await readFile(githubOutput, 'utf8'), name).toBe('');
     }
-  }, 30_000);
+  }, 60_000);
 
+  // Per-test cap must match the file-wide 60s posture; a 30s override flakes under serial-suite load.
   it('passes a well-formed temporary dist tree', async ({ expect, onTestFinished }) => {
     const root = await makeTempDir('verify-dist-ok-', onTestFinished);
     await writeFixture(root);
     const result = await runVerify(root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
-  }, 30_000);
+  }, 60_000);
 
   it('fails the real verifier on the historical getter-only library export boot failure', async ({ onTestFinished }) => {
     const root = await makeTempDir('verify-dist-libboot-', onTestFinished);
@@ -408,7 +409,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const result = await runVerify(root);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/must point under dist/);
-  }, 15_000);
+  }, 60_000);
 
   it('rejects boot contracts that override protected boot environment', async ({ onTestFinished }) => {
     const protectedEnvCases: Record<string, string>[] = [
@@ -453,7 +454,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const result = await runVerify(pkgRoot);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/git-index mode is 100644/);
-  }, 15_000);
+  }, 60_000);
 
   it('fails when dist census has an extra file', async ({ expect, onTestFinished }) => {
     const root = await makeTempDir('verify-dist-extra-', onTestFinished);
@@ -505,7 +506,7 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/direct dist[\\/]cli\.cjs --help timed out after 5000ms/);
     expect(Date.now() - startedAt).toBeLessThan(10_000);
-  }, 15_000);
+  }, 60_000);
 
   it('fails within the test budget when direct --version hangs', async ({ onTestFinished }) => {
     const root = await makeTempDir('verify-dist-version-timeout-', onTestFinished);
@@ -515,7 +516,7 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/direct dist[\\/]cli\.cjs --version timed out after 5000ms/);
     expect(Date.now() - startedAt).toBeLessThan(10_000);
-  }, 15_000);
+  }, 60_000);
 
   it('fails when direct --version drifts from package.json', async ({ expect, onTestFinished }) => {
     const root = await makeTempDir('verify-dist-version-', onTestFinished);

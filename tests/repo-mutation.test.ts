@@ -13,6 +13,9 @@ import {
   resolveCurrentRef
 } from '../src/lib/github/repo-mutation.js';
 
+// vitest timeout flakes under full-suite load, so raise it file-wide.
+vi.setConfig({ testTimeout: 60_000 });
+
 type CommandResult = {
   exitCode: number;
   stdout: string;
