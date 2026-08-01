@@ -227,6 +227,61 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stdout).toContain('verify-dist-artifact: ok');
   }, 30_000);
 
+  it('fails closed when shipped action bytes receive an impossible inherited canonical fork decision', async ({ onTestFinished }) => {
+    const snapshotRoot = await makeTempDir('verify-dist-branch-decision-', onTestFinished);
+    const githubOutput = path.join(snapshotRoot, 'github-output');
+    await materializeCommittedDistSnapshot(snapshotRoot);
+    await writeFile(githubOutput, '', 'utf8');
+    const invalidDecision = JSON.stringify({
+      tier: 'canonical',
+      strategy: 'publish-gate',
+      identity: {
+        provider: 'github',
+        headBranch: 'main',
+        rawRef: 'refs/heads/main',
+        defaultBranch: 'main',
+        refKind: 'default-branch',
+        isPrContext: true,
+        isForkPr: true,
+        headSha: '0123456789abcdef0123456789abcdef01234567'
+      },
+      canonicalBranch: 'main',
+      reason: 'semantically impossible fork canonical writer'
+    });
+    let result: { code: number; stdout: string; stderr: string };
+    try {
+      const child = await execFileAsync(process.execPath, [path.join(snapshotRoot, 'dist', 'action.cjs')], {
+        cwd: snapshotRoot,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: process.env.HOME ?? '',
+          TMPDIR: process.env.TMPDIR ?? '',
+          GITHUB_OUTPUT: githubOutput,
+          'INPUT_PROJECT-NAME': 'branch-decision-contract-test',
+          POSTMAN_BRANCH_DECISION: invalidDecision,
+          POSTMAN_ACTIONS_TELEMETRY: 'off'
+        },
+        timeout: 25_000,
+        maxBuffer: 1024 * 1024
+      });
+      result = { code: 0, stdout: child.stdout, stderr: child.stderr };
+    } catch (error) {
+      const execError = error as { code?: number; stdout?: string; stderr?: string };
+      result = {
+        code: typeof execError.code === 'number' ? execError.code : 1,
+        stdout: String(execError.stdout ?? ''),
+        stderr: String(execError.stderr ?? '')
+      };
+    }
+
+    expect(result.code).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('CONTRACT_BRANCH_DECISION_INVALID');
+    const output = await readFile(githubOutput, 'utf8');
+    expect(output).not.toMatch(/^(?:sync-status|repo-sync-summary-json)<</m);
+    expect(output).not.toContain('synced');
+  }, 30_000);
+
   it('passes a well-formed temporary dist tree', async ({ expect, onTestFinished }) => {
     const root = await makeTempDir('verify-dist-ok-', onTestFinished);
     await writeFixture(root);
