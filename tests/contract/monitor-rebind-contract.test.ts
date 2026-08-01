@@ -339,6 +339,126 @@ describe('monitor rebind: an already-bound monitor is reused without writes', ()
   });
 });
 
+describe('monitor rebind: identical assertions through the shared fail-closed router', () => {
+  /**
+   * The cases above install a monitors slice through the `override` seam, which
+   * short-circuits BEFORE the shared router's route table. That is the right
+   * boundary for owning this state machine, but on its own it would leave the
+   * router's own monitors routes -- notably DELETE /jobTemplates/{id} and
+   * GET /jobTemplates/{id} -- declared but never exercised, because a rebind is
+   * the only flow that reaches them.
+   *
+   * These cases therefore re-run the same state machine against the SHARED
+   * router via `existingMonitors`, with the same assertions, so both transports
+   * are held to one contract and the router's monitors routes are proven on the
+   * real code path.
+   */
+  async function runOnSharedRouter(existingMonitors: PlatformOptions['existingMonitors']) {
+    const platform = createPlatform({ org: true, existingMonitors });
+    const result = await runContractAction({
+      inputs: baseInputs(),
+      env: CASSETTE_ENV,
+      fetchImpl: platform.fetch
+    });
+    return { result, platform };
+  }
+
+  it('replaces the sole stale same-name monitor, leaving exactly one on the current collection', async () => {
+    const { result, platform } = await runOnSharedRouter([
+      { id: 'mon-stale', name: MONITOR_NAME, collection: STALE_COLLECTION, environment: PROD_ENV }
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.outputs['monitor-id']).toBe('monitor-123');
+
+    const final = platform.state.monitors;
+    expect(final).toHaveLength(1);
+    expect(final[0]).toMatchObject({
+      id: 'monitor-123',
+      name: MONITOR_NAME,
+      collection: CURRENT_COLLECTION,
+      environment: PROD_ENV
+    });
+
+    // Proves the router's DELETE /jobTemplates/{id} route ran and was accepted.
+    expect(platform.state.deletionLedger).toEqual([
+      expect.objectContaining({ service: 'monitors', id: 'mon-stale', status: 200 })
+    ]);
+  });
+
+  it('refuses to guess and writes nothing when several same-name monitors share the environment', async () => {
+    const seed = [
+      { id: 'mon-a', name: MONITOR_NAME, collection: STALE_COLLECTION, environment: PROD_ENV },
+      { id: 'mon-b', name: MONITOR_NAME, collection: STALE_COLLECTION, environment: PROD_ENV }
+    ];
+    const { result, platform } = await runOnSharedRouter(seed);
+
+    expect(result.error).toBeDefined();
+    const message = String((result.error as Error).message);
+    expect(message).toContain('Monitor rebind');
+    expect(message).toContain('Multiple monitors match');
+
+    // Same fail-closed guarantee as the override transport: nothing created,
+    // nothing deleted, both seeded monitors intact.
+    expect(platform.state.deletionLedger).toEqual([]);
+    expect(platform.state.monitors.map((monitor) => monitor.id).sort()).toEqual(['mon-a', 'mon-b']);
+    expect(platform.state.monitors.every((monitor) => monitor.collection === STALE_COLLECTION)).toBe(true);
+  });
+
+  it('never rebinds across environments', async () => {
+    const { result, platform } = await runOnSharedRouter([
+      { id: 'mon-other-env', name: MONITOR_NAME, collection: STALE_COLLECTION, environment: OTHER_ENV }
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(platform.state.deletionLedger).toEqual([]);
+
+    const final = platform.state.monitors;
+    expect(final).toHaveLength(2);
+    expect(final.find((monitor) => monitor.id === 'mon-other-env')).toMatchObject({
+      collection: STALE_COLLECTION,
+      environment: OTHER_ENV
+    });
+    expect(final.find((monitor) => monitor.id === 'monitor-123')).toMatchObject({
+      collection: CURRENT_COLLECTION,
+      environment: PROD_ENV
+    });
+  });
+
+  it('adopts an already-bound monitor without creating a duplicate', async () => {
+    const { result, platform } = await runOnSharedRouter([
+      { id: 'mon-current', name: MONITOR_NAME, collection: CURRENT_COLLECTION, environment: PROD_ENV }
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.outputs['monitor-id']).toBe('mon-current');
+    expect(platform.state.monitors).toHaveLength(1);
+    expect(platform.state.deletionLedger).toEqual([]);
+  });
+
+  it('surfaces a rejected stale-monitor deletion and reports both monitors left behind', async () => {
+    /**
+     * Ownership-verified deletion: the stale monitor belongs to another user, so
+     * the DELETE is refused with 403. Because the replacement is created BEFORE
+     * the delete -- the ordering that keeps a failed create from leaving the
+     * workspace monitor-less -- a refused delete necessarily leaves BOTH
+     * monitors in place. The run must fail loudly rather than report success
+     * over a duplicated monitor.
+     */
+    const { result, platform } = await runOnSharedRouter([
+      { id: 'mon-foreign', name: MONITOR_NAME, collection: STALE_COLLECTION, environment: PROD_ENV, ownerId: 99999999 }
+    ]);
+
+    expect(result.error).toBeDefined();
+    expect(String((result.error as Error).message)).toContain('Monitor rebind');
+
+    expect(platform.state.deletionLedger).toEqual([
+      expect.objectContaining({ service: 'monitors', id: 'mon-foreign', status: 403 })
+    ]);
+    expect(platform.state.monitors.map((monitor) => monitor.id).sort()).toEqual(['mon-foreign', 'monitor-123']);
+  });
+});
+
 describe('monitor rebind: the monitors fake is fail-closed', () => {
   it('throws and names an unmatched monitors request instead of answering permissively', () => {
     const workspace = createMonitorWorkspace([]);
