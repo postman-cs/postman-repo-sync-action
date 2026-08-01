@@ -10,6 +10,7 @@ export interface PostmanEndpointProfile {
   cliInstallUrl: string;
   cliWindowsInstallUrl: string;
   iapubBaseUrl: string;
+  workerBaseUrl: string;
 }
 
 export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProfile> = {
@@ -19,7 +20,8 @@ export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProf
     fallbackBaseUrl: 'https://go.postman.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
     cliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
-    iapubBaseUrl: 'https://iapub.postman.co'
+    iapubBaseUrl: 'https://iapub.postman.co',
+    workerBaseUrl: 'https://catalog-admin.postman-account2009.workers.dev'
   },
   beta: {
     apiBaseUrl: 'https://api.getpostman-beta.com',
@@ -27,7 +29,8 @@ export const POSTMAN_ENDPOINT_PROFILES: Record<PostmanStack, PostmanEndpointProf
     fallbackBaseUrl: 'https://go.postman-beta.co/_api',
     cliInstallUrl: 'https://dl-cli.pstmn-beta.io/install/unix.sh',
     cliWindowsInstallUrl: 'https://dl-cli.pstmn-beta.io/install/win64.ps1',
-    iapubBaseUrl: 'https://iapub.postman.co'
+    iapubBaseUrl: 'https://iapub.postman.co',
+    workerBaseUrl: 'https://catalog-admin.postman-account2009.workers.dev'
   }
 };
 
@@ -45,7 +48,11 @@ export const EMULATOR_PROFILE_NAME = 'emulator';
 export const ENDPOINT_OVERRIDE_ENV = {
   apiBaseUrl: 'POSTMAN_TEST_API_BASE_URL',
   bifrostBaseUrl: 'POSTMAN_TEST_BIFROST_BASE_URL',
-  iapubBaseUrl: 'POSTMAN_TEST_IAPUB_BASE_URL'
+  fallbackBaseUrl: 'POSTMAN_TEST_FALLBACK_BASE_URL',
+  iapubBaseUrl: 'POSTMAN_TEST_IAPUB_BASE_URL',
+  workerBaseUrl: 'POSTMAN_TEST_WORKER_BASE_URL',
+  cliInstallUrl: 'POSTMAN_TEST_CLI_INSTALL_URL',
+  cliWindowsInstallUrl: 'POSTMAN_TEST_CLI_WINDOWS_INSTALL_URL'
 } as const;
 
 export type EndpointEnvironment = Record<string, string | undefined>;
@@ -148,7 +155,6 @@ export function resolvePostmanEndpointProfile(
 
   return {
     ...profile,
-    ...resolved,
-    fallbackBaseUrl: resolved.bifrostBaseUrl
+    ...resolved
   };
 }

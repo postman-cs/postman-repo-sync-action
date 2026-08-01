@@ -1,3 +1,5 @@
+import { EMULATOR_PROFILE_ENV, EMULATOR_PROFILE_NAME } from './base-urls.js';
+
 const UPDATE_URL = 'https://dl.pstmn.io/update/status?currentVersion=12.0.0&platform=osx_arm64';
 const FLOOR_VERSION = '12.0.0';
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -19,6 +21,9 @@ export class PostmanAppVersionProvider {
 
   async get(): Promise<string | undefined> {
     if (process.env.POSTMAN_GATEWAY_APP_VERSION === 'off') return undefined;
+    if (String(process.env[EMULATOR_PROFILE_ENV] || '').trim() === EMULATOR_PROFILE_NAME) {
+      return undefined;
+    }
     this.pending ??= this.lookup();
     return this.pending;
   }

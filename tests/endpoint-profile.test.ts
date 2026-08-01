@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   EMULATOR_PROFILE_ENV,
@@ -7,6 +7,7 @@ import {
   POSTMAN_ENDPOINT_PROFILES,
   resolvePostmanEndpointProfile
 } from '../src/lib/postman/base-urls.js';
+import { readActionInputs } from '../src/index.js';
 
 function armed(overrides: Record<string, string>): Record<string, string | undefined> {
   return { [EMULATOR_PROFILE_ENV]: EMULATOR_PROFILE_NAME, ...overrides };
@@ -15,7 +16,11 @@ function armed(overrides: Record<string, string>): Record<string, string | undef
 const COMPLETE_OVERRIDES = {
   [ENDPOINT_OVERRIDE_ENV.apiBaseUrl]: 'http://127.0.0.1:8081/api',
   [ENDPOINT_OVERRIDE_ENV.bifrostBaseUrl]: 'http://127.0.0.1:8082/bifrost',
-  [ENDPOINT_OVERRIDE_ENV.iapubBaseUrl]: 'http://127.0.0.1:8083/iapub'
+  [ENDPOINT_OVERRIDE_ENV.fallbackBaseUrl]: 'http://127.0.0.1:8083/fallback',
+  [ENDPOINT_OVERRIDE_ENV.iapubBaseUrl]: 'http://127.0.0.1:8084/iapub',
+  [ENDPOINT_OVERRIDE_ENV.workerBaseUrl]: 'http://127.0.0.1:8085/worker',
+  [ENDPOINT_OVERRIDE_ENV.cliInstallUrl]: 'https://127.0.0.1:8086/install/unix.sh',
+  [ENDPOINT_OVERRIDE_ENV.cliWindowsInstallUrl]: 'https://127.0.0.1:8087/install/win64.ps1'
 };
 
 describe('repo-sync endpoint profile defaults', () => {
@@ -24,7 +29,10 @@ describe('repo-sync endpoint profile defaults', () => {
       apiBaseUrl: 'https://api.getpostman.com',
       bifrostBaseUrl: 'https://bifrost-premium-https-v4.gw.postman.com',
       fallbackBaseUrl: 'https://go.postman.co/_api',
-      iapubBaseUrl: 'https://iapub.postman.co'
+      iapubBaseUrl: 'https://iapub.postman.co',
+      cliInstallUrl: 'https://dl-cli.pstmn.io/install/unix.sh',
+      cliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
+      workerBaseUrl: 'https://catalog-admin.postman-account2009.workers.dev'
     });
   });
 
@@ -49,19 +57,18 @@ describe('repo-sync endpoint profile defaults', () => {
 });
 
 describe('repo-sync emulator endpoint profile', () => {
-  it('atomically redirects API, Bifrost, iapub, and the cold fallback hosts', () => {
-    expect(resolvePostmanEndpointProfile('prod', 'us', armed(COMPLETE_OVERRIDES))).toMatchObject({
+  it('atomically redirects every reachable Postman host', () => {
+    const profile = resolvePostmanEndpointProfile('prod', 'us', armed(COMPLETE_OVERRIDES));
+    expect(profile).toMatchObject({
       apiBaseUrl: 'http://127.0.0.1:8081/api',
       bifrostBaseUrl: 'http://127.0.0.1:8082/bifrost',
-      fallbackBaseUrl: 'http://127.0.0.1:8082/bifrost',
-      iapubBaseUrl: 'http://127.0.0.1:8083/iapub'
+      fallbackBaseUrl: 'http://127.0.0.1:8083/fallback',
+      iapubBaseUrl: 'http://127.0.0.1:8084/iapub',
+      workerBaseUrl: 'http://127.0.0.1:8085/worker',
+      cliInstallUrl: 'https://127.0.0.1:8086/install/unix.sh',
+      cliWindowsInstallUrl: 'https://127.0.0.1:8087/install/win64.ps1'
     });
-  });
-
-  it('keeps the CLI install URLs on their live hosts (never fetched at runtime by tests)', () => {
-    const profile = resolvePostmanEndpointProfile('prod', 'us', armed(COMPLETE_OVERRIDES));
-    expect(profile.cliInstallUrl).toBe('https://dl-cli.pstmn.io/install/unix.sh');
-    expect(profile.cliWindowsInstallUrl).toBe('https://dl-cli.pstmn.io/install/win64.ps1');
+    expect(Object.values(profile).every((url) => url.includes('127.0.0.1'))).toBe(true);
   });
 
   it('normalizes trailing slashes and ignores the selected live stack', () => {
@@ -73,9 +80,28 @@ describe('repo-sync emulator endpoint profile', () => {
     expect(resolvePostmanEndpointProfile('beta', 'us', env)).toMatchObject({
       apiBaseUrl: 'http://127.0.0.1:8081/api',
       bifrostBaseUrl: 'http://127.0.0.1:8082/bifrost',
-      fallbackBaseUrl: 'http://127.0.0.1:8082/bifrost',
-      iapubBaseUrl: 'http://127.0.0.1:8083/iapub'
+      fallbackBaseUrl: 'http://127.0.0.1:8083/fallback',
+      iapubBaseUrl: 'http://127.0.0.1:8084/iapub',
+      workerBaseUrl: 'http://127.0.0.1:8085/worker',
+      cliInstallUrl: 'https://127.0.0.1:8086/install/unix.sh',
+      cliWindowsInstallUrl: 'https://127.0.0.1:8087/install/win64.ps1'
     });
+  });
+
+  it('propagates the emulator worker and CLI URLs through action input resolution', () => {
+    vi.stubEnv(EMULATOR_PROFILE_ENV, EMULATOR_PROFILE_NAME);
+    for (const [name, value] of Object.entries(COMPLETE_OVERRIDES)) vi.stubEnv(name, value);
+    const inputs = readActionInputs({
+      getInput: (name) => (name === 'project-name' ? 'emulator-test' : ''),
+      setSecret: vi.fn()
+    });
+
+    expect(inputs).toMatchObject({
+      postmanWorkerBase: COMPLETE_OVERRIDES[ENDPOINT_OVERRIDE_ENV.workerBaseUrl],
+      postmanCliInstallUrl: COMPLETE_OVERRIDES[ENDPOINT_OVERRIDE_ENV.cliInstallUrl],
+      postmanCliWindowsInstallUrl: COMPLETE_OVERRIDES[ENDPOINT_OVERRIDE_ENV.cliWindowsInstallUrl]
+    });
+    vi.unstubAllEnvs();
   });
 });
 
