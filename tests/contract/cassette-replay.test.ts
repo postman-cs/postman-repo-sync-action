@@ -15,7 +15,8 @@
 import { describe, expect, it } from 'vitest';
 import { createReplayFetch } from '@postman-cse/automation-core/cassette';
 
-import { runContractAction } from './harness.js';
+import { runContractAction, type ContractRunResult } from './harness.js';
+import { createPlatform } from './platform-fake.js';
 import {
   CASSETTE_ENV,
   countKeys,
@@ -23,6 +24,17 @@ import {
   readCassette,
   REPO_SYNC_CASSETTE
 } from './cassette-scenario.js';
+
+function expectScenarioOutputs(result: ContractRunResult): void {
+  expect(result.error).toBeUndefined();
+  expect(result.outputs['mock-url']).toBe('https://mock-123.mock.pstmn.io');
+  expect(result.outputs['monitor-id']).toBe('monitor-123');
+  const environmentUids = JSON.parse(result.outputs['environment-uids-json'] || '{}') as Record<
+    string,
+    string
+  >;
+  expect(environmentUids.prod).toBe('12345678-env-prod-uid');
+}
 
 describe('contract: repo-sync cassette replay (offline)', () => {
   it(REPO_SYNC_CASSETTE.description, async () => {
@@ -43,18 +55,22 @@ describe('contract: repo-sync cassette replay (offline)', () => {
       fetchImpl: countedReplay
     });
 
-    expect(result.error).toBeUndefined();
+    const platform = createPlatform(REPO_SYNC_CASSETTE.fake);
+    const fakeResult = await runContractAction({
+      inputs: REPO_SYNC_CASSETTE.inputs,
+      env: CASSETTE_ENV,
+      fetchImpl: platform.fetch
+    });
 
-    // Final state a caller depends on, reconstructed entirely from the cassette.
-    expect(result.outputs['mock-url']).toBe('https://mock-123.mock.pstmn.io');
-    expect(result.outputs['monitor-id']).toBe('monitor-123');
-    const environmentUids = JSON.parse(result.outputs['environment-uids-json'] || '{}') as Record<
-      string,
-      string
-    >;
-    // The output carries the PUBLIC uid (`<owner>-<model id>`), not the bare id
-    // the Sync service returns.
-    expect(environmentUids.prod).toBe('12345678-env-prod-uid');
+    // The exact same assertions must hold against the stateful fake and the
+    // sampled cassette. This prevents either proof surface from drifting weaker.
+    expectScenarioOutputs(result);
+    expectScenarioOutputs(fakeResult);
+    expect(fakeResult.outputs).toMatchObject({
+      'mock-url': result.outputs['mock-url'],
+      'monitor-id': result.outputs['monitor-id'],
+      'environment-uids-json': result.outputs['environment-uids-json']
+    });
 
     // Every byte of platform state this run observed came from the cassette.
     expect(replayedCalls).toBeGreaterThan(5);
