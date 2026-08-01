@@ -230,8 +230,22 @@ describe('verify-dist-artifact canonical contract', () => {
   it('fails closed when shipped action bytes receive an impossible inherited canonical fork decision', async ({ onTestFinished }) => {
     const snapshotRoot = await makeTempDir('verify-dist-branch-decision-', onTestFinished);
     const githubOutput = path.join(snapshotRoot, 'github-output');
+    const networkSentinel = path.join(snapshotRoot, 'network-attempted');
+    const networkPreload = path.join(snapshotRoot, 'network-guard.cjs');
     await materializeCommittedDistSnapshot(snapshotRoot);
     await writeFile(githubOutput, '', 'utf8');
+    await writeFile(networkPreload, [
+      "const { appendFileSync } = require('node:fs');",
+      "const sentinel = process.env.VERIFY_DIST_NETWORK_SENTINEL;",
+      "function block(kind) { appendFileSync(sentinel, kind + '\\n'); throw new Error('VERIFY_DIST_NETWORK_FORBIDDEN ' + kind); }",
+      "function patch(mod, names) { const target = require(mod); for (const name of names) { if (typeof target[name] === 'function') target[name] = (...args) => block(mod + '.' + name); } }",
+      "patch('node:net', ['connect', 'createConnection']);",
+      "const net = require('node:net'); if (net.Socket && net.Socket.prototype) net.Socket.prototype.connect = (...args) => block('node:net.Socket.connect');",
+      "patch('node:tls', ['connect']);",
+      "patch('node:http', ['request', 'get']);",
+      "patch('node:https', ['request', 'get']);",
+      "globalThis.fetch = (...args) => block('global.fetch');"
+    ].join('\n'), 'utf8');
     const invalidDecision = JSON.stringify({
       tier: 'canonical',
       strategy: 'publish-gate',
@@ -259,8 +273,10 @@ describe('verify-dist-artifact canonical contract', () => {
           TMPDIR: process.env.TMPDIR ?? '',
           GITHUB_OUTPUT: githubOutput,
           'INPUT_PROJECT-NAME': 'branch-decision-contract-test',
+          NODE_OPTIONS: `--require=${networkPreload}`,
           POSTMAN_BRANCH_DECISION: invalidDecision,
-          POSTMAN_ACTIONS_TELEMETRY: 'off'
+          POSTMAN_ACTIONS_TELEMETRY: 'off',
+          VERIFY_DIST_NETWORK_SENTINEL: networkSentinel
         },
         timeout: 25_000,
         maxBuffer: 1024 * 1024
@@ -277,9 +293,9 @@ describe('verify-dist-artifact canonical contract', () => {
 
     expect(result.code).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain('CONTRACT_BRANCH_DECISION_INVALID');
+    await expect(readFile(networkSentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     const output = await readFile(githubOutput, 'utf8');
-    expect(output).not.toMatch(/^(?:sync-status|repo-sync-summary-json)<</m);
-    expect(output).not.toContain('synced');
+    expect(output).toBe('');
   }, 30_000);
 
   it('passes a well-formed temporary dist tree', async ({ expect, onTestFinished }) => {
