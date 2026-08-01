@@ -16,19 +16,27 @@
  * printed sanitized: token values never appear (asserted before exit).
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { RepoMutationService } from '../src/lib/github/repo-mutation.js';
 import type { ExecuteFn, ExecuteResult } from '../src/lib/github/repo-mutation.js';
+import {
+  cleanupDispatchProbe,
+  createProbeReceiptEmitter,
+  formatCleanupSummary,
+  type DeleteAttempt
+} from './live-github-dispatch-probe-support.js';
 
 const execFileAsync = promisify(execFile);
 
 const API = 'https://api.github.com';
 const WRITE_TOKEN = process.env.WS10_DISPATCH_WRITE_TOKEN ?? '';
 const READONLY_TOKEN = process.env.WS10_DISPATCH_READONLY_TOKEN ?? '';
+const API_TIMEOUT_MS = 30_000;
+const GIT_TIMEOUT_MS = 60_000;
 
 if (!WRITE_TOKEN) {
   console.error('WS10_DISPATCH_WRITE_TOKEN is required (classic PAT: repo + delete_repo)');
@@ -50,13 +58,18 @@ interface CaseResult {
 const results: CaseResult[] = [];
 const scratchDirs: string[] = [];
 const createdRepos: string[] = [];
+const receipts = createProbeReceiptEmitter([WRITE_TOKEN, READONLY_TOKEN]);
 
 function sanitize(text: string): string {
-  let out = text;
-  for (const secret of [WRITE_TOKEN, READONLY_TOKEN]) {
-    if (secret) out = out.split(secret).join('***');
-  }
-  return out;
+  return receipts.sanitize(text);
+}
+
+function logReceipt(text: string): void {
+  receipts.emit(text, console.log);
+}
+
+function errorReceipt(text: string): void {
+  receipts.emit(text, console.error);
 }
 
 async function gh(
@@ -66,6 +79,7 @@ async function gh(
   body?: JsonRecord | JsonRecord[]
 ): Promise<{ status: number; json: unknown }> {
   const response = await fetch(`${API}${route}`, {
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
     method,
     headers: {
       Authorization: `token ${token}`,
@@ -116,7 +130,7 @@ function realGitExecute(cwd: string, env: NodeJS.ProcessEnv, executed: string[][
         cwd,
         env,
         encoding: 'utf8',
-        timeout: 60_000
+        timeout: GIT_TIMEOUT_MS
       });
       return { exitCode: 0, stdout, stderr };
     } catch (error) {
@@ -157,9 +171,13 @@ async function createDisposableRepo(caseName: string): Promise<{ fullName: strin
   return { fullName, url: `https://github.com/${fullName}.git`, defaultBranch };
 }
 
-async function deleteRepo(fullName: string): Promise<number> {
-  const res = await gh(WRITE_TOKEN, 'DELETE', `/repos/${fullName}`);
-  return res.status;
+async function deleteRepo(fullName: string): Promise<DeleteAttempt> {
+  try {
+    const res = await gh(WRITE_TOKEN, 'DELETE', `/repos/${fullName}`);
+    return { status: res.status };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 }
 
 interface WorkClone {
@@ -175,10 +193,15 @@ async function cloneWorkRepo(url: string, name: string, branch?: string): Promis
   const env = hermeticGitEnv(home);
   const authedUrl = url.replace('https://', `https://x-access-token:${WRITE_TOKEN}@`);
   const cloneArgs = ['clone', ...(branch ? ['--branch', branch] : []), authedUrl, dir];
-  await execFileAsync('git', cloneArgs, { env, encoding: 'utf8', timeout: 60_000 });
+  await execFileAsync('git', cloneArgs, { env, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
   // Restore the anonymous URL so every pushed credential comes from the
   // service's own buildAuthenticatedRemoteUrl rewrite, exactly as in CI.
-  await execFileAsync('git', ['remote', 'set-url', 'origin', url], { cwd: dir, env, encoding: 'utf8' });
+  await execFileAsync('git', ['remote', 'set-url', 'origin', url], {
+    cwd: dir,
+    env,
+    encoding: 'utf8',
+    timeout: GIT_TIMEOUT_MS
+  });
   const executed: string[][] = [];
   return { dir, execute: realGitExecute(dir, env, executed), executed };
 }
@@ -214,13 +237,14 @@ function service(clone: WorkClone, fullName: string, url: string): RepoMutationS
 
 async function seedChange(clone: WorkClone, fileName = 'postman/collection.yaml'): Promise<void> {
   const target = path.join(clone.dir, fileName);
-  await execFileAsync('mkdir', ['-p', path.dirname(target)]);
+  await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, `# probe payload ${Date.now()}\n`, 'utf8');
 }
 
 function record(name: string, ok: boolean, detail: string): void {
-  results.push({ name, ok, detail: sanitize(detail) });
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${name} -- ${sanitize(detail)}`);
+  const sanitized = sanitize(detail);
+  results.push({ name, ok, detail: sanitized });
+  logReceipt(`${ok ? 'PASS' : 'FAIL'} ${name} -- ${sanitized}`);
 }
 
 async function caseDefaultBranch(): Promise<void> {
@@ -281,12 +305,27 @@ async function caseSameRepoPr(): Promise<void> {
     // (currentRef=refs/pull/N/merge, githubHeadRef=<head branch>).
     const setup = await cloneWorkRepo(repo.url, `${name}-setup`);
     const env = hermeticGitEnv(path.join(setup.dir, '..', 'home'));
-    await execFileAsync('git', ['checkout', '-b', 'feature/probe'], { cwd: setup.dir, env, encoding: 'utf8' });
+    await execFileAsync('git', ['checkout', '-b', 'feature/probe'], {
+      cwd: setup.dir,
+      env,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS
+    });
     await writeFile(path.join(setup.dir, 'seed.txt'), 'pr seed\n', 'utf8');
-    await execFileAsync('git', ['add', 'seed.txt'], { cwd: setup.dir, env, encoding: 'utf8' });
-    await execFileAsync('git', ['commit', '-m', 'seed: pr head'], { cwd: setup.dir, env, encoding: 'utf8' });
+    await execFileAsync('git', ['add', 'seed.txt'], { cwd: setup.dir, env, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    await execFileAsync('git', ['commit', '-m', 'seed: pr head'], {
+      cwd: setup.dir,
+      env,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS
+    });
     const authed = repo.url.replace('https://', `https://x-access-token:${WRITE_TOKEN}@`);
-    await execFileAsync('git', ['push', authed, 'HEAD:refs/heads/feature/probe'], { cwd: setup.dir, env, encoding: 'utf8' });
+    await execFileAsync('git', ['push', authed, 'HEAD:refs/heads/feature/probe'], {
+      cwd: setup.dir,
+      env,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS
+    });
     const pr = await gh(WRITE_TOKEN, 'POST', `/repos/${repo.fullName}/pulls`, {
       title: 'WS10 dispatch probe PR',
       head: 'feature/probe',
@@ -329,6 +368,7 @@ async function caseReadOnlyToken(): Promise<void> {
   const name = 'read-only-token';
   const repo = await createDisposableRepo(name);
   try {
+    const before = await remoteBranchSha(repo.fullName, repo.defaultBranch);
     const clone = await cloneWorkRepo(repo.url, name);
     await seedChange(clone);
     try {
@@ -345,9 +385,10 @@ async function caseReadOnlyToken(): Promise<void> {
       const message = (error as Error).message;
       // GitHub denies scopeless-token pushes with 403; the service must
       // surface the denial (never silently claim success).
-      const ok = /403|denied|permission|not found/i.test(message);
+      const denied = /403|denied|permission|not found/i.test(message);
       const after = await remoteBranchSha(repo.fullName, repo.defaultBranch);
-      record(name, ok, `denied: ${message.slice(0, 140)} remoteHead=${after.slice(0, 7)}`);
+      const unchanged = after === before;
+      record(name, denied && unchanged, `denied: ${message.slice(0, 140)} headUnchanged=${unchanged}`);
     }
   } finally {
     await deleteRepo(repo.fullName);
@@ -478,11 +519,11 @@ async function caseRulesetPush(): Promise<void> {
 async function main(): Promise<void> {
   const who = await gh(WRITE_TOKEN, 'GET', '/user');
   if (who.status !== 200) {
-    console.error(`write token rejected by /user (${who.status})`);
+    errorReceipt(`write token rejected by /user (${who.status})`);
     process.exit(2);
   }
   ownerLogin = String((who.json as JsonRecord).login);
-  console.log(`probe identity: ${ownerLogin}`);
+  logReceipt(`probe identity: ${ownerLogin}`);
 
   const cases: Array<[string, () => Promise<void>]> = [
     ['default-branch', caseDefaultBranch],
@@ -503,42 +544,31 @@ async function main(): Promise<void> {
   }
 }
 
-async function cleanup(): Promise<void> {
-  // Delete every repo we created (delete is idempotent-ish: 204 or 404).
-  for (const fullName of createdRepos) {
-    const status = await deleteRepo(fullName);
-    if (status !== 204 && status !== 404) {
-      console.error(`cleanup: DELETE /repos/${fullName} -> ${status}`);
-    }
-  }
-  // Verify none survive.
-  for (const fullName of createdRepos) {
-    const res = await gh(WRITE_TOKEN, 'GET', `/repos/${fullName}`);
-    if (res.status !== 404) {
-      console.error(`cleanup verification FAILED: ${fullName} still resolves (${res.status})`);
-      process.exitCode = 1;
-    }
-  }
-  for (const dir of scratchDirs) {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
 main()
   .catch((error) => {
-    console.error(sanitize(`probe crashed: ${(error as Error).stack ?? String(error)}`));
+    errorReceipt(`probe crashed: ${(error as Error).stack ?? String(error)}`);
     process.exitCode = 1;
   })
   .finally(async () => {
-    await cleanup();
+    const cleanupResult = await cleanupDispatchProbe({
+      repositories: createdRepos,
+      scratchDirs,
+      deleteRepository: deleteRepo,
+      repositoryStatus: async (fullName) => (await gh(WRITE_TOKEN, 'GET', `/repos/${fullName}`)).status,
+      removeScratchDir: async (dir) => rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 250 }),
+      onError: errorReceipt
+    });
     const failed = results.filter((r) => r.ok === false);
-    console.log(`\nsummary: ${results.length - failed.length}/${results.length} cases passed; repos created=${createdRepos.length}, all deleted`);
-    // Receipt hygiene: no token bytes may have leaked into any recorded detail.
-    for (const r of results) {
-      if (r.detail.includes(WRITE_TOKEN) || r.detail.includes(READONLY_TOKEN)) {
-        console.error('SECRET LEAK in receipts -- failing loudly');
-        process.exitCode = 1;
-      }
+    const cleanupSummary = formatCleanupSummary(cleanupResult);
+    logReceipt(
+      `\nsummary: ${results.length - failed.length}/${results.length} cases passed; repos created=${createdRepos.length}, ${cleanupSummary}`
+    );
+    // Receipt hygiene must inspect what was actually emitted, against every
+    // recognized representation of both tokens.
+    if (!receipts.check().safe) {
+      errorReceipt('SECRET LEAK in receipts -- failing loudly');
+      process.exitCode = 1;
     }
+    if (!cleanupResult.cleanupComplete) process.exitCode = 1;
     if (failed.length > 0) process.exitCode = 1;
   });
