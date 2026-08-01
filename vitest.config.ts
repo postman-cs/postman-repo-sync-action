@@ -44,7 +44,7 @@ export default defineConfig({
                 ...testEnvironment,
                 pool: 'threads',
                 include: ['tests/**/*.test.ts'],
-                exclude: [...configDefaults.exclude, ...windowsCwdSensitiveTests]
+                exclude: [...configDefaults.exclude, 'tests/emulator/**', ...windowsCwdSensitiveTests]
               }
             }
           ]
@@ -54,6 +54,7 @@ export default defineConfig({
           // Telemetry is fire-and-forget; keep it disabled in unit tests so no run
           // ever attempts a network call. Enabled-path tests pass an explicit env.
           env: { POSTMAN_ACTIONS_TELEMETRY: 'off' },
-          include: ['tests/**/*.test.ts']
+          include: ['tests/**/*.test.ts'],
+          exclude: [...configDefaults.exclude, 'tests/emulator/**']
         }
 });

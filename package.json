@@ -26,6 +26,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run --exclude tests/ci-workflow-template.test.ts && vitest run tests/ci-workflow-template.test.ts && node --test .github/scripts/dispatch-e2e-monitor.test.mjs",
+  "test:emulator:git": "vitest run --config vitest.emulator.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "record:cassettes": "RECORD_FAKE_CASSETTES=1 vitest run tests/contract/record-fake-cassettes.test.ts"
   },
