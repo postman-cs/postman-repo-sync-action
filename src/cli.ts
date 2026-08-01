@@ -644,7 +644,7 @@ export async function runCli(
   }
 
   const result = await timedStage(reporter, 'runRepoSync finalize', () =>
-    (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies)
+    (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies, { branchDecision })
   );
 
   writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));

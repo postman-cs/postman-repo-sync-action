@@ -227,7 +227,7 @@ describe('verify-dist-artifact canonical contract', () => {
     expect(result.stdout).toContain('verify-dist-artifact: ok');
   }, 30_000);
 
-  it('fails closed when shipped action bytes receive an impossible inherited canonical fork decision', async ({ onTestFinished }) => {
+  it('fails closed when shipped action bytes receive invalid inherited branch decisions', async ({ onTestFinished }) => {
     const snapshotRoot = await makeTempDir('verify-dist-branch-decision-', onTestFinished);
     const githubOutput = path.join(snapshotRoot, 'github-output');
     const networkSentinel = path.join(snapshotRoot, 'network-attempted');
@@ -246,56 +246,88 @@ describe('verify-dist-artifact canonical contract', () => {
       "patch('node:https', ['request', 'get']);",
       "globalThis.fetch = (...args) => block('global.fetch');"
     ].join('\n'), 'utf8');
-    const invalidDecision = JSON.stringify({
-      tier: 'canonical',
-      strategy: 'publish-gate',
-      identity: {
-        provider: 'github',
-        headBranch: 'main',
-        rawRef: 'refs/heads/main',
-        defaultBranch: 'main',
-        refKind: 'default-branch',
-        isPrContext: true,
-        isForkPr: true,
-        headSha: '0123456789abcdef0123456789abcdef01234567'
-      },
-      canonicalBranch: 'main',
-      reason: 'semantically impossible fork canonical writer'
-    });
-    let result: { code: number; stdout: string; stderr: string };
-    try {
-      const child = await execFileAsync(process.execPath, [path.join(snapshotRoot, 'dist', 'action.cjs')], {
+    const invalidDecisions = [
+      {
+        name: 'impossible canonical fork decision',
+        actionPath: path.join(snapshotRoot, 'dist', 'action.cjs'),
         cwd: snapshotRoot,
-        encoding: 'utf8',
-        env: {
-          PATH: process.env.PATH ?? '',
-          HOME: process.env.HOME ?? '',
-          TMPDIR: process.env.TMPDIR ?? '',
-          GITHUB_OUTPUT: githubOutput,
-          'INPUT_PROJECT-NAME': 'branch-decision-contract-test',
-          NODE_OPTIONS: `--require=${networkPreload}`,
-          POSTMAN_BRANCH_DECISION: invalidDecision,
-          POSTMAN_ACTIONS_TELEMETRY: 'off',
-          VERIFY_DIST_NETWORK_SENTINEL: networkSentinel
-        },
-        timeout: 25_000,
-        maxBuffer: 1024 * 1024
-      });
-      result = { code: 0, stdout: child.stdout, stderr: child.stderr };
-    } catch (error) {
-      const execError = error as { code?: number; stdout?: string; stderr?: string };
-      result = {
-        code: typeof execError.code === 'number' ? execError.code : 1,
-        stdout: String(execError.stdout ?? ''),
-        stderr: String(execError.stderr ?? '')
-      };
-    }
+        decision: {
+          tier: 'canonical',
+          strategy: 'publish-gate',
+          identity: {
+            provider: 'github',
+            headBranch: 'main',
+            rawRef: 'refs/heads/main',
+            defaultBranch: 'main',
+            refKind: 'default-branch',
+            isPrContext: true,
+            isForkPr: true,
+            headSha: '0123456789abcdef0123456789abcdef01234567'
+          },
+          canonicalBranch: 'main',
+          reason: 'semantically impossible fork canonical writer'
+        }
+      },
+      {
+        name: 'whitespace-canonical preview decision',
+        actionPath: path.join(repoRoot, 'dist', 'action.cjs'),
+        cwd: repoRoot,
+        decision: {
+          tier: 'preview',
+          strategy: 'preview',
+          identity: {
+            provider: 'github',
+            headBranch: 'main',
+            rawRef: 'refs/heads/main',
+            defaultBranch: 'main',
+            refKind: 'default-branch',
+            isPrContext: false,
+            isForkPr: false,
+            headSha: '0123456789abcdef0123456789abcdef01234567'
+          },
+          canonicalBranch: ' main ',
+          reason: 'whitespace-decorated canonical branch claims preview'
+        }
+      }
+    ];
 
-    expect(result.code).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toContain('CONTRACT_BRANCH_DECISION_INVALID');
-    await expect(readFile(networkSentinel, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    const output = await readFile(githubOutput, 'utf8');
-    expect(output).toBe('');
+    for (const { name, actionPath, cwd, decision } of invalidDecisions) {
+      await writeFile(githubOutput, '', 'utf8');
+      await rm(networkSentinel, { force: true });
+      let result: { code: number; stdout: string; stderr: string };
+      try {
+        const child = await execFileAsync(process.execPath, [actionPath], {
+          cwd,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH ?? '',
+            HOME: process.env.HOME ?? '',
+            TMPDIR: process.env.TMPDIR ?? '',
+            GITHUB_OUTPUT: githubOutput,
+            'INPUT_PROJECT-NAME': 'branch-decision-contract-test',
+            NODE_OPTIONS: `--require=${networkPreload}`,
+            POSTMAN_BRANCH_DECISION: JSON.stringify(decision),
+            POSTMAN_ACTIONS_TELEMETRY: 'off',
+            VERIFY_DIST_NETWORK_SENTINEL: networkSentinel
+          },
+          timeout: 25_000,
+          maxBuffer: 1024 * 1024
+        });
+        result = { code: 0, stdout: child.stdout, stderr: child.stderr };
+      } catch (error) {
+        const execError = error as { code?: number; stdout?: string; stderr?: string };
+        result = {
+          code: typeof execError.code === 'number' ? execError.code : 1,
+          stdout: String(execError.stdout ?? ''),
+          stderr: String(execError.stderr ?? '')
+        };
+      }
+
+      expect(result.code, name).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`, name).toContain('CONTRACT_BRANCH_DECISION_INVALID');
+      await expect(readFile(networkSentinel, 'utf8'), name).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(githubOutput, 'utf8'), name).toBe('');
+    }
   }, 30_000);
 
   it('passes a well-formed temporary dist tree', async ({ expect, onTestFinished }) => {
@@ -304,7 +336,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const result = await runVerify(root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
-  });
+  }, 30_000);
 
   it('fails the real verifier on the historical getter-only library export boot failure', async ({ onTestFinished }) => {
     const root = await makeTempDir('verify-dist-libboot-', onTestFinished);

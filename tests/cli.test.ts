@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConsoleReporter, parseCliArgs, runCli, toDotenv, writeOptionalFileAtomic } from '../src/cli.js';
-import { resolveInputs, runRepoSync } from '../src/index.js';
+import { decideBranchTier, resolveInputs, runRepoSync } from '../src/index.js';
 import { __resetIdentityMemo } from '../src/lib/postman/credential-identity.js';
 
 type RepoSyncResult = Awaited<ReturnType<typeof runRepoSync>>;
@@ -316,6 +316,7 @@ describe('runCli credential preflight seam', () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     __resetIdentityMemo();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -429,6 +430,81 @@ describe('runCli credential preflight seam', () => {
     expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"credential preflight","ms":\d+(?:\.\d+)?,"status":"success"\}/);
     expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"API-key\/team resolution","ms":\d+(?:\.\d+)?,"status":"success"\}/);
     expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"runRepoSync finalize","ms":\d+(?:\.\d+)?,"status":"success"\}/);
+  });
+
+  it.each([
+    {
+      name: 'preview',
+      branch: 'feature/cli-preview',
+      ambientBranch: 'main',
+      flags: ['--branch-strategy', 'preview', '--canonical-branch', 'main'],
+      tier: 'preview',
+      ambientTier: 'canonical'
+    },
+    {
+      name: 'channel',
+      branch: 'develop',
+      ambientBranch: 'feature/ambient-preview',
+      flags: [
+        '--branch-strategy', 'preview',
+        '--canonical-branch', 'main',
+        '--channels', 'develop=DEV'
+      ],
+      tier: 'channel',
+      ambientTier: 'preview'
+    },
+    {
+      name: 'canonical',
+      branch: 'main',
+      ambientBranch: 'feature/ambient-preview',
+      flags: ['--branch-strategy', 'preview', '--canonical-branch', 'main'],
+      tier: 'canonical',
+      ambientTier: 'preview'
+    }
+  ])('passes the flag-derived $name decision through execution without ambient drift', async ({
+    branch,
+    ambientBranch,
+    flags,
+    tier,
+    ambientTier
+  }) => {
+    stubIdentityFetch(333, 333);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubEnv('GITHUB_ACTIONS', 'true');
+    vi.stubEnv('GITHUB_REF', `refs/heads/${ambientBranch}`);
+    vi.stubEnv('GITHUB_REF_NAME', ambientBranch);
+    vi.stubEnv('POSTMAN_BRANCH_DECISION', '');
+
+    const env: NodeJS.ProcessEnv = {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_REF: `refs/heads/${branch}`,
+      GITHUB_REF_NAME: branch
+    };
+    const args = [
+      '--project-name', 'branch-decision-handoff',
+      '--postman-api-key', 'pmak-ok',
+      '--postman-access-token', 'tok-ok',
+      '--credential-preflight', 'warn',
+      '--org-mode', 'true',
+      '--repo-write-mode', 'none',
+      ...flags
+    ];
+    const config = parseCliArgs(args, env);
+    const expected = decideBranchTier(resolveInputs(config.inputEnv), config.inputEnv);
+    let received: Parameters<typeof runRepoSync>[2];
+    const executeRepoSync: typeof runRepoSync = async (inputs, _dependencies, executionContext) => {
+      received = executionContext;
+      expect(decideBranchTier(inputs).tier).toBe(ambientTier);
+      return fullRepoSyncOutputs();
+    };
+
+    await withTempCwd(async () => {
+      await runCli(args, { env, executeRepoSync, writeStdout: () => undefined });
+    });
+
+    expect(expected.tier).toBe(tier);
+    expect(received?.branchDecision).toEqual(expected);
+    expect(received?.branchDecision?.tier).not.toBe(ambientTier);
   });
 
   it('persists partial ownership outputs when a later repo-sync step fails', async () => {

@@ -114449,6 +114449,47 @@ function normalizeStagePaths(stagePaths) {
   }
   return normalized;
 }
+function isContainedPath(root, candidate) {
+  return candidate === root || candidate.startsWith(`${root}${import_node_path.default.sep}`);
+}
+function throwUnsafeMutationPath() {
+  throw new Error("Unsafe repository mutation path: resolved path escapes the working directory");
+}
+function assertMutationPathsAreContained(cwd, paths) {
+  let realCwd;
+  try {
+    realCwd = (0, import_node_fs2.realpathSync)(cwd);
+  } catch {
+    throwUnsafeMutationPath();
+  }
+  const normalizedCwd = import_node_path.default.resolve(cwd);
+  for (const mutationPath of paths) {
+    let candidate = import_node_path.default.resolve(normalizedCwd, mutationPath);
+    while (true) {
+      try {
+        const resolvedCandidate = (0, import_node_fs2.realpathSync)(candidate);
+        if (!isContainedPath(realCwd, resolvedCandidate)) {
+          throwUnsafeMutationPath();
+        }
+      } catch {
+        try {
+          (0, import_node_fs2.lstatSync)(candidate);
+        } catch {
+          if (candidate === normalizedCwd) {
+            throwUnsafeMutationPath();
+          }
+          candidate = import_node_path.default.dirname(candidate);
+          continue;
+        }
+        throwUnsafeMutationPath();
+      }
+      if (candidate === normalizedCwd) {
+        break;
+      }
+      candidate = import_node_path.default.dirname(candidate);
+    }
+  }
+}
 var RepoMutationService = class {
   cwd;
   execute;
@@ -114468,6 +114509,8 @@ var RepoMutationService = class {
     const resolvedCurrentRef = resolveCurrentRef(options);
     const removePaths = normalizeStagePaths(options.removePaths ?? []);
     const stagePaths = normalizeStagePaths([...options.stagePaths, ...removePaths]);
+    assertMutationPathsAreContained(this.cwd, stagePaths);
+    assertMutationPathsAreContained(this.cwd, removePaths);
     const tokens = this.provider === "azure-devops" ? buildPushTokenOrder({ adoToken: options.adoToken }) : buildPushTokenOrder({
       fallbackToken: options.fallbackToken,
       githubToken: options.githubToken
@@ -119065,8 +119108,18 @@ function matchChannel(branch, rules) {
   }
   return void 0;
 }
+function canonicalizeBranchIdentity(identity) {
+  return {
+    ...identity,
+    headBranch: clean(identity.headBranch),
+    rawRef: clean(identity.rawRef),
+    defaultBranch: clean(identity.defaultBranch),
+    headSha: clean(identity.headSha)
+  };
+}
 function resolveBranchDecision(options) {
-  const { strategy, identity } = options;
+  const { strategy } = options;
+  const identity = canonicalizeBranchIdentity(options.identity);
   const channels = options.channels ?? [];
   if (strategy === "legacy") {
     return {
@@ -119160,7 +119213,7 @@ function parseBranchDecision(raw) {
   const strategies = ["legacy", "publish-gate", "preview"];
   const providers = ["github", "gitlab", "bitbucket", "azure-devops", "unknown"];
   const refKinds = ["default-branch", "branch", "tag", "unknown"];
-  const optionalStrings = [
+  const resolverStrings = [
     candidate.canonicalBranch,
     candidate.identity?.headBranch,
     candidate.identity?.rawRef,
@@ -119169,18 +119222,19 @@ function parseBranchDecision(raw) {
   ];
   const channel = candidate.channel;
   const validChannel = channel === void 0 || typeof channel === "object" && channel !== null && typeof channel.pattern === "string" && channel.pattern.length > 0 && typeof channel.code === "string" && /^[A-Z][A-Z0-9_-]{0,15}$/.test(channel.code);
-  const validIdentity = candidate.identity && typeof candidate.identity === "object" && providers.includes(candidate.identity.provider) && refKinds.includes(candidate.identity.refKind) && typeof candidate.identity.isPrContext === "boolean" && typeof candidate.identity.isForkPr === "boolean" && optionalStrings.every((field) => field === void 0 || typeof field === "string");
+  const validIdentity = candidate.identity && typeof candidate.identity === "object" && providers.includes(candidate.identity.provider) && refKinds.includes(candidate.identity.refKind) && typeof candidate.identity.isPrContext === "boolean" && typeof candidate.identity.isForkPr === "boolean" && resolverStrings.every((field) => field === void 0 || typeof field === "string" && field === clean(field));
   const identity = candidate.identity;
+  const canonicalBranch = clean(candidate.canonicalBranch);
   const coherent = candidate.strategy === "legacy" ? candidate.tier === "legacy" : candidate.tier !== "legacy" && (candidate.tier !== "preview" || candidate.strategy === "preview");
-  const hasCanonicalBranch = Boolean(clean(candidate.canonicalBranch));
+  const hasCanonicalBranch = Boolean(canonicalBranch);
   const hasEligibleBranchIdentity = validIdentity && Boolean(clean(identity?.headBranch)) && (identity?.refKind === "branch" || identity?.refKind === "default-branch") && !identity?.isForkPr;
   const channelMatchesTier = candidate.tier === "channel" === (channel !== void 0);
-  const canonicalTierValid = candidate.tier !== "canonical" || hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch;
-  const channelTierValid = candidate.tier !== "channel" || hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch && channel !== void 0 && identity?.headBranch !== void 0 && matchChannel(identity.headBranch, [channel]) !== void 0;
-  const previewTierValid = candidate.tier !== "preview" || candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch;
+  const canonicalTierValid = candidate.tier !== "canonical" || hasEligibleBranchIdentity && identity?.headBranch === canonicalBranch;
+  const channelTierValid = candidate.tier !== "channel" || hasEligibleBranchIdentity && identity?.headBranch !== canonicalBranch && channel !== void 0 && identity?.headBranch !== void 0 && matchChannel(identity.headBranch, [channel]) !== void 0;
+  const previewTierValid = candidate.tier !== "preview" || candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== canonicalBranch;
   const forcedGated = !hasEligibleBranchIdentity;
-  const gatedTierValid = candidate.tier !== "gated" || !(candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== candidate.canonicalBranch);
-  if (!tiers.includes(candidate.tier) || !strategies.includes(candidate.strategy) || typeof candidate.reason !== "string" || candidate.reason.trim().length === 0 || !validIdentity || !validChannel || !coherent || !hasCanonicalBranch && candidate.strategy !== "legacy" || !channelMatchesTier || !canonicalTierValid || !channelTierValid || !previewTierValid || candidate.strategy !== "legacy" && forcedGated && candidate.tier !== "gated" || candidate.strategy !== "legacy" && hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch && candidate.tier !== "canonical" || !gatedTierValid) {
+  const gatedTierValid = candidate.tier !== "gated" || !(candidate.strategy === "preview" && hasEligibleBranchIdentity && identity?.headBranch !== canonicalBranch);
+  if (!tiers.includes(candidate.tier) || !strategies.includes(candidate.strategy) || typeof candidate.reason !== "string" || candidate.reason.trim().length === 0 || !validIdentity || !validChannel || !coherent || !hasCanonicalBranch && candidate.strategy !== "legacy" || !channelMatchesTier || !canonicalTierValid || !channelTierValid || !previewTierValid || candidate.strategy !== "legacy" && forcedGated && candidate.tier !== "gated" || candidate.strategy !== "legacy" && hasEligibleBranchIdentity && identity?.headBranch === canonicalBranch && candidate.tier !== "canonical" || !gatedTierValid) {
     throw new ContractError("CONTRACT_BRANCH_DECISION_INVALID", "POSTMAN_BRANCH_DECISION does not carry a valid BranchDecision");
   }
   return candidate;
@@ -121090,7 +121144,7 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     resolvedCurrentRef: result.resolvedCurrentRef
   };
 }
-async function runRepoSync(inputs, dependencies) {
+async function runRepoSync(inputs, dependencies, executionContext) {
   const telemetry = createTelemetryContext({ action: "postman-repo-sync-action", actionVersion: resolveActionVersion2(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
   const logger = resolveRepoSyncLogger(dependencies);
@@ -121114,7 +121168,7 @@ async function runRepoSync(inputs, dependencies) {
     team_id: dependencies.teamId || void 0
   });
   try {
-    const result = await runRepoSyncInner(inputs, { ...dependencies, logger });
+    const result = await runRepoSyncInner(inputs, { ...dependencies, logger }, executionContext);
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion("success");
     return result;
@@ -121125,10 +121179,10 @@ async function runRepoSync(inputs, dependencies) {
     throw error2;
   }
 }
-async function runRepoSyncInner(inputs, dependencies) {
+async function runRepoSyncInner(inputs, dependencies, executionContext) {
   const mask = resolveRepoSyncMasker(dependencies);
   const logger = resolveRepoSyncLogger(dependencies);
-  const branchDecision = decideBranchTier(inputs);
+  const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
   assertBranchAssetIds(inputs, branchDecision);
   const isCanonicalWriter = branchDecision.tier === "legacy" || branchDecision.tier === "canonical";
   if (!isCanonicalWriter) {
@@ -121672,10 +121726,9 @@ async function runRepoSyncInner(inputs, dependencies) {
       }
     }
   }
-  if (inputs.branchStrategy !== "legacy" || process.env[BRANCH_DECISION_ENV]) {
-    const decision = decideBranchTier(inputs);
+  if (inputs.branchStrategy !== "legacy" || branchDecision.reason === "inherited") {
     outputs["sync-status"] = "synced";
-    outputs["branch-decision"] = serializeBranchDecision(decision);
+    outputs["branch-decision"] = serializeBranchDecision(branchDecision);
   }
   for (const [name, value] of Object.entries(outputs)) {
     dependencies.core.setOutput(name, value);
@@ -122102,7 +122155,7 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
     );
   }
   await persistSslSecrets(inputs, actionCore, actionExec, repository);
-  return runRepoSync(inputs, dependencies);
+  return runRepoSync(inputs, dependencies, { branchDecision });
 }
 
 // src/main.ts

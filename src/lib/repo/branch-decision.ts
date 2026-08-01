@@ -300,12 +300,23 @@ export interface ResolveDecisionOptions {
   channels?: ChannelRule[];
 }
 
+function canonicalizeBranchIdentity(identity: BranchIdentity): BranchIdentity {
+  return {
+    ...identity,
+    headBranch: clean(identity.headBranch),
+    rawRef: clean(identity.rawRef),
+    defaultBranch: clean(identity.defaultBranch),
+    headSha: clean(identity.headSha)
+  };
+}
+
 /**
  * Classify the run. Throws CONTRACT_DEFAULT_BRANCH_UNRESOLVED when a
  * non-legacy strategy cannot resolve the canonical branch.
  */
 export function resolveBranchDecision(options: ResolveDecisionOptions): BranchDecision {
-  const { strategy, identity } = options;
+  const { strategy } = options;
+  const identity = canonicalizeBranchIdentity(options.identity);
   const channels = options.channels ?? [];
 
   if (strategy === 'legacy') {
@@ -390,7 +401,7 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
   const strategies: BranchStrategy[] = ['legacy', 'publish-gate', 'preview'];
   const providers: IdentityProvider[] = ['github', 'gitlab', 'bitbucket', 'azure-devops', 'unknown'];
   const refKinds: RefKind[] = ['default-branch', 'branch', 'tag', 'unknown'];
-  const optionalStrings = [
+  const resolverStrings = [
     candidate.canonicalBranch,
     candidate.identity?.headBranch,
     candidate.identity?.rawRef,
@@ -412,23 +423,26 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
     refKinds.includes(candidate.identity.refKind) &&
     typeof candidate.identity.isPrContext === 'boolean' &&
     typeof candidate.identity.isForkPr === 'boolean' &&
-    optionalStrings.every((field) => field === undefined || typeof field === 'string');
+    resolverStrings.every((field) => field === undefined || (
+      typeof field === 'string' && field === clean(field)
+    ));
   const identity = candidate.identity;
+  const canonicalBranch = clean(candidate.canonicalBranch);
   const coherent = candidate.strategy === 'legacy'
     ? candidate.tier === 'legacy'
     : candidate.tier !== 'legacy' && (candidate.tier !== 'preview' || candidate.strategy === 'preview');
-  const hasCanonicalBranch = Boolean(clean(candidate.canonicalBranch));
+  const hasCanonicalBranch = Boolean(canonicalBranch);
   const hasEligibleBranchIdentity = validIdentity &&
     Boolean(clean(identity?.headBranch)) &&
     (identity?.refKind === 'branch' || identity?.refKind === 'default-branch') &&
     !identity?.isForkPr;
   const channelMatchesTier = (candidate.tier === 'channel') === (channel !== undefined);
   const canonicalTierValid = candidate.tier !== 'canonical' || (
-    hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch
+    hasEligibleBranchIdentity && identity?.headBranch === canonicalBranch
   );
   const channelTierValid = candidate.tier !== 'channel' || (
     hasEligibleBranchIdentity &&
-    identity?.headBranch !== candidate.canonicalBranch &&
+    identity?.headBranch !== canonicalBranch &&
     channel !== undefined &&
     identity?.headBranch !== undefined &&
     matchChannel(identity.headBranch, [channel]) !== undefined
@@ -436,13 +450,13 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
   const previewTierValid = candidate.tier !== 'preview' || (
     candidate.strategy === 'preview' &&
     hasEligibleBranchIdentity &&
-    identity?.headBranch !== candidate.canonicalBranch
+    identity?.headBranch !== canonicalBranch
   );
   const forcedGated = !hasEligibleBranchIdentity;
   const gatedTierValid = candidate.tier !== 'gated' || !(
     candidate.strategy === 'preview' &&
     hasEligibleBranchIdentity &&
-    identity?.headBranch !== candidate.canonicalBranch
+    identity?.headBranch !== canonicalBranch
   );
   if (
     !tiers.includes(candidate.tier as BranchTier) ||
@@ -458,7 +472,7 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
     !channelTierValid ||
     !previewTierValid ||
     (candidate.strategy !== 'legacy' && forcedGated && candidate.tier !== 'gated') ||
-    (candidate.strategy !== 'legacy' && hasEligibleBranchIdentity && identity?.headBranch === candidate.canonicalBranch && candidate.tier !== 'canonical') ||
+    (candidate.strategy !== 'legacy' && hasEligibleBranchIdentity && identity?.headBranch === canonicalBranch && candidate.tier !== 'canonical') ||
     !gatedTierValid
   ) {
     throw new ContractError('CONTRACT_BRANCH_DECISION_INVALID', 'POSTMAN_BRANCH_DECISION does not carry a valid BranchDecision');
