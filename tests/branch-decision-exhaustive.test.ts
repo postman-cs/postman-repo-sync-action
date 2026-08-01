@@ -127,21 +127,23 @@ function unrealizableReason(tuple: Tuple): string | null {
  *
  *   legacy   branch-blind pre-v2 behavior, unconditional under strategy legacy
  *   gated    tag/unknown refs and missing head branches are never write-eligible;
- *            also every non-canonical branch under publish-gate, and fork PRs
- *            under preview
- *   canonical the head branch IS the canonical branch
- *   channel  a channel rule claims the head branch
+ *            every fork PR under any non-legacy strategy; also every
+ *            non-canonical branch under publish-gate
+ *   canonical the head branch IS the canonical branch (same-repo head only)
+ *   channel  a channel rule claims the head branch (same-repo head only)
  *   preview  any other branch under preview
  *
  * Ordering matters and is part of the contract: the ref-kind guard precedes the
- * canonical check, which precedes channel matching, which precedes the fork gate.
+ * fork gate, which precedes the canonical check, which precedes channel
+ * matching. A fork head can never reach a write-eligible tier.
  */
 function expectedTier(tuple: Tuple): BranchTier {
   if (tuple.strategy === 'legacy') return 'legacy';
   if (tuple.refKind === 'tag' || tuple.refKind === 'unknown' || tuple.head === 'absent') return 'gated';
+  if (tuple.isForkPr) return 'gated';
   if (tuple.head === 'equals-canonical') return 'canonical';
   if (tuple.channels === 'matches-head') return 'channel';
-  if (tuple.strategy === 'preview') return tuple.isForkPr ? 'gated' : 'preview';
+  if (tuple.strategy === 'preview') return 'preview';
   return 'gated';
 }
 
@@ -490,31 +492,24 @@ describe('branch decision: unresolved canonical branch is outside the tier table
 });
 
 describe('branch decision: fork-PR write gate coverage across the table', () => {
-  it('gates every fork PR under preview strategy when no channel rule claims the branch', () => {
-    const forkPreviewTuples = REALIZABLE.filter(
-      (tuple) => tuple.strategy === 'preview' && tuple.isForkPr && tuple.channels !== 'matches-head'
-    );
-    expect(forkPreviewTuples.length).toBeGreaterThan(0);
-    for (const tuple of forkPreviewTuples) {
+  it('gates every fork PR under every non-legacy strategy, regardless of channel rules', () => {
+    const forkTuples = REALIZABLE.filter((tuple) => tuple.strategy !== 'legacy' && tuple.isForkPr);
+    expect(forkTuples.length).toBeGreaterThan(0);
+    for (const tuple of forkTuples) {
       for (const realization of realizationsFor(tuple)) {
         const decision = resolveBranchDecision(realization.options);
-        expect(decision.tier, `${tupleKey(tuple)} let a fork PR reach ${decision.tier}`).not.toBe('preview');
+        expect(decision.tier, `${tupleKey(tuple)} let a fork PR reach ${decision.tier}`).toBe('gated');
       }
     }
   });
 
-  it('KNOWN GAP: a fork PR whose head branch matches a channel rule reaches channel tier', () => {
+  it('REGRESSION: a fork PR whose head branch matches a channel rule stays gated', () => {
     /**
-     * `matchChannel` is evaluated at branch-decision.ts:335, BEFORE the fork gate
-     * at :344. A fork PR therefore only loses write eligibility when its head
-     * branch fails to match a channel rule. Because `parseChannelRules` always
-     * appends `release/*=RC`, a fork branch named `release/anything` classifies
-     * as channel tier and becomes eligible to write the shared `[RC]` asset set.
-     *
-     * This test pins the CURRENT behavior so the gap is explicit and cannot be
-     * mistaken for coverage. Closing it is a product change (move the fork gate
-     * above channel matching) and is deliberately out of scope for this test
-     * lane -- changing it here would silently alter shipped classification.
+     * The fork gate used to sit AFTER channel matching, so a fork branch named
+     * `release/anything` classified as channel tier (parseChannelRules always
+     * appends `release/*=RC`) and became eligible to write the shared `[RC]`
+     * asset set. The gate now precedes the canonical and channel checks; this
+     * test pins the closed gap so the ordering cannot silently regress.
      */
     const decision = resolveBranchDecision({
       strategy: 'preview',
@@ -531,9 +526,30 @@ describe('branch decision: fork-PR write gate coverage across the table', () => 
       channels: [{ pattern: 'release/*', code: 'RC' }]
     });
 
-    expect(decision.tier).toBe('channel');
-    expect(decision.channel).toEqual({ pattern: 'release/*', code: 'RC' });
+    expect(decision.tier).toBe('gated');
+    expect(decision.channel).toBeUndefined();
     expect(decision.identity.isForkPr).toBe(true);
+  });
+
+  it('REGRESSION: a fork PR whose head branch equals the canonical branch stays gated', () => {
+    // A fork can name its head branch anything, including the canonical name.
+    // The fork gate precedes the canonical check, so the name grants nothing.
+    const decision = resolveBranchDecision({
+      strategy: 'preview',
+      identity: {
+        provider: 'github',
+        headBranch: CANONICAL,
+        rawRef: CANONICAL,
+        defaultBranch: CANONICAL,
+        refKind: 'branch',
+        isPrContext: true,
+        isForkPr: true
+      },
+      canonicalBranch: CANONICAL,
+      channels: []
+    });
+
+    expect(decision.tier).toBe('gated');
   });
 
   it('gates fork PRs identically to non-fork PRs under publish-gate', () => {

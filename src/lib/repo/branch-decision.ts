@@ -10,7 +10,10 @@
  *              release/* -> RC); prefix-named parallel asset sets
  *   preview    any other branch under branch-strategy: preview; suffix-named,
  *              TTL-governed asset sets
- *   gated      any other branch under branch-strategy: publish-gate;
+ *   gated      tag/unknown refs, every fork PR under any non-legacy strategy
+ *              (the fork gate precedes the canonical and channel checks, so a
+ *              fork head can never claim a write-eligible tier), and any other
+ *              branch under branch-strategy: publish-gate;
  *              credential-free static validation only, zero writes
  *   legacy     branch-blind pre-v2 behavior (default under v1)
  *
@@ -49,7 +52,10 @@ export interface BranchIdentity {
   defaultBranch?: string;
   refKind: RefKind;
   isPrContext: boolean;
-  /** True when the PR head repo differs from the base repo. Preview-ineligible. */
+  /**
+   * True for a confirmed fork, or when a PR-capable provider cannot prove the
+   * source is same-repository. Preview-ineligible.
+   */
   isForkPr: boolean;
   headSha?: string;
 }
@@ -160,9 +166,9 @@ export function resolveBranchIdentity(
         headBranch = headRef;
         rawRef = clean(env.GITHUB_REF) ?? headRef;
         refKind = 'branch';
-        const headRepo = event?.pull_request?.head?.repo?.full_name;
-        const baseRepo = event?.pull_request?.base?.repo?.full_name ?? event?.repository?.full_name;
-        isForkPr = Boolean(headRepo && baseRepo && headRepo !== baseRepo);
+        const headRepo = clean(event?.pull_request?.head?.repo?.full_name)?.toLowerCase();
+        const baseRepo = clean(event?.pull_request?.base?.repo?.full_name)?.toLowerCase();
+        isForkPr = !(headRepo && baseRepo && headRepo === baseRepo);
         headSha = clean(event?.pull_request?.head?.sha) ?? headSha;
       } else {
         rawRef = clean(env.GITHUB_REF) ?? clean(env.GITHUB_REF_NAME);
@@ -183,7 +189,7 @@ export function resolveBranchIdentity(
         refKind = 'branch';
         const sourceProject = clean(env.CI_MERGE_REQUEST_SOURCE_PROJECT_ID);
         const targetProject = clean(env.CI_MERGE_REQUEST_PROJECT_ID);
-        isForkPr = Boolean(sourceProject && targetProject && sourceProject !== targetProject);
+        isForkPr = !(sourceProject && targetProject && sourceProject === targetProject);
       } else if (clean(env.CI_COMMIT_TAG)) {
         rawRef = clean(env.CI_COMMIT_TAG);
         refKind = 'tag';
@@ -221,7 +227,7 @@ export function resolveBranchIdentity(
         rawRef = prSource;
         refKind = parsed.kind;
         const forkFlag = clean(env.SYSTEM_PULLREQUEST_ISFORK);
-        isForkPr = forkFlag?.toLowerCase() === 'true';
+        isForkPr = forkFlag?.toLowerCase() !== 'false';
       } else {
         // BUILD_SOURCEBRANCHNAME is the LAST path segment only (feature/x -> x).
         // Always resolve from the full BUILD_SOURCEBRANCH.
@@ -325,6 +331,13 @@ export function resolveBranchDecision(options: ResolveDecisionOptions): BranchDe
     };
   }
 
+  if (identity.isForkPr) {
+    return {
+      tier: 'gated', strategy, identity, canonicalBranch,
+      reason: 'fork PR: never write-eligible (canonical/channel/preview require a same-repo head), gated instead'
+    };
+  }
+
   if (identity.headBranch === canonicalBranch) {
     return {
       tier: 'canonical', strategy, identity, canonicalBranch,
@@ -341,12 +354,6 @@ export function resolveBranchDecision(options: ResolveDecisionOptions): BranchDe
   }
 
   if (strategy === 'preview') {
-    if (identity.isForkPr) {
-      return {
-        tier: 'gated', strategy, identity, canonicalBranch,
-        reason: 'fork PR: preview-ineligible (same-repo gate), gated instead'
-      };
-    }
     return {
       tier: 'preview', strategy, identity, canonicalBranch,
       reason: `branch ${identity.headBranch} under branch-strategy preview`

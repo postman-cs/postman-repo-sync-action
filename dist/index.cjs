@@ -118881,9 +118881,9 @@ function resolveBranchIdentity(env = process.env, overrides = {}) {
         headBranch = headRef;
         rawRef = clean(env.GITHUB_REF) ?? headRef;
         refKind = "branch";
-        const headRepo = event?.pull_request?.head?.repo?.full_name;
-        const baseRepo = event?.pull_request?.base?.repo?.full_name ?? event?.repository?.full_name;
-        isForkPr = Boolean(headRepo && baseRepo && headRepo !== baseRepo);
+        const headRepo = clean(event?.pull_request?.head?.repo?.full_name)?.toLowerCase();
+        const baseRepo = clean(event?.pull_request?.base?.repo?.full_name)?.toLowerCase();
+        isForkPr = !(headRepo && baseRepo && headRepo === baseRepo);
         headSha = clean(event?.pull_request?.head?.sha) ?? headSha;
       } else {
         rawRef = clean(env.GITHUB_REF) ?? clean(env.GITHUB_REF_NAME);
@@ -118904,7 +118904,7 @@ function resolveBranchIdentity(env = process.env, overrides = {}) {
         refKind = "branch";
         const sourceProject = clean(env.CI_MERGE_REQUEST_SOURCE_PROJECT_ID);
         const targetProject = clean(env.CI_MERGE_REQUEST_PROJECT_ID);
-        isForkPr = Boolean(sourceProject && targetProject && sourceProject !== targetProject);
+        isForkPr = !(sourceProject && targetProject && sourceProject === targetProject);
       } else if (clean(env.CI_COMMIT_TAG)) {
         rawRef = clean(env.CI_COMMIT_TAG);
         refKind = "tag";
@@ -118938,7 +118938,7 @@ function resolveBranchIdentity(env = process.env, overrides = {}) {
         rawRef = prSource;
         refKind = parsed.kind;
         const forkFlag = clean(env.SYSTEM_PULLREQUEST_ISFORK);
-        isForkPr = forkFlag?.toLowerCase() === "true";
+        isForkPr = forkFlag?.toLowerCase() !== "false";
       } else {
         rawRef = clean(env.BUILD_SOURCEBRANCH);
         const parsed = stripRefPrefix(rawRef);
@@ -119023,6 +119023,15 @@ function resolveBranchDecision(options) {
       reason: `ref kind ${identity.refKind}: never canonical/preview-eligible; no-op with annotation`
     };
   }
+  if (identity.isForkPr) {
+    return {
+      tier: "gated",
+      strategy,
+      identity,
+      canonicalBranch,
+      reason: "fork PR: never write-eligible (canonical/channel/preview require a same-repo head), gated instead"
+    };
+  }
   if (identity.headBranch === canonicalBranch) {
     return {
       tier: "canonical",
@@ -119044,15 +119053,6 @@ function resolveBranchDecision(options) {
     };
   }
   if (strategy === "preview") {
-    if (identity.isForkPr) {
-      return {
-        tier: "gated",
-        strategy,
-        identity,
-        canonicalBranch,
-        reason: "fork PR: preview-ineligible (same-repo gate), gated instead"
-      };
-    }
     return {
       tier: "preview",
       strategy,

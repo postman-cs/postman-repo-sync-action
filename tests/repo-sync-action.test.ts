@@ -491,6 +491,8 @@ describe('repo sync action', () => {
     process.env.GITHUB_REPOSITORY = 'postman-cs/repo-sync-demo';
     process.env.GITHUB_REF_NAME = 'feature/repo-sync';
     delete process.env.GITHUB_HEAD_REF;
+    delete process.env.GITHUB_REF;
+    delete process.env.GITHUB_EVENT_PATH;
     vi.stubEnv('POSTMAN_API_KEY', '');
     vi.stubEnv('POSTMAN_ACCESS_TOKEN', '');
   });
@@ -500,6 +502,9 @@ describe('repo sync action', () => {
     rmSync(testDir, { recursive: true, force: true });
     delete process.env.GITHUB_REPOSITORY;
     delete process.env.GITHUB_REF_NAME;
+    delete process.env.GITHUB_HEAD_REF;
+    delete process.env.GITHUB_REF;
+    delete process.env.GITHUB_EVENT_PATH;
     delete process.env.GITHUB_HEAD_REF;
     vi.unstubAllEnvs();
   }, 120_000);
@@ -6154,6 +6159,32 @@ describe('runAction credential preflight', () => {
     };
     return router as typeof fetch;
   }
+
+  it('gates an empty-payload GitHub fork PR before credential or API work', async () => {
+    const events: string[] = [];
+    const eventPath = join(testDir, 'empty-pull-request-event.json');
+    writeFileSync(eventPath, '{}');
+    process.env.GITHUB_HEAD_REF = 'release/attacker';
+    process.env.GITHUB_REF = 'refs/pull/42/merge';
+    process.env.GITHUB_EVENT_PATH = eventPath;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { core, outputs } = createRunActionCore(
+      baseInputValues({
+        'branch-strategy': 'preview',
+        'canonical-branch': 'main'
+      }),
+      events
+    );
+
+    await runAction(core, createExecStub());
+
+    expect(outputs['sync-status']).toBe('skipped-branch-gate');
+    const branchDecision = JSON.parse(outputs['branch-decision']);
+    expect(branchDecision.tier).toBe('gated');
+    expect(branchDecision.identity.isForkPr).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 
   it('runAction logs PMAK and session identity lines before the first environment call', async () => {
     const events: string[] = [];
