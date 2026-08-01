@@ -42,24 +42,16 @@ const service = new RepoMutationService({
   repository: 'owner/repo'
 });
 
-const safeSegment = fc
-  .stringMatching(/^[A-Za-z0-9._-]{1,12}$/)
-  .filter((segment) => segment !== '..' && segment !== '.');
-
-const relativePath = fc
-  .array(safeSegment, { minLength: 1, maxLength: 4 })
-  .map((segments) => segments.join('/'));
-
 const controlChar = fc
-  .integer({ min: 0, max: 31 })
+  .constantFrom(...Array.from({ length: 33 }, (_, index) => index === 32 ? 127 : index))
   .map((code) => String.fromCharCode(code));
 
 describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
   it('rejects every POSIX-absolute path', async () => {
     await fc.assert(
-      fc.asyncProperty(relativePath, async (rest) => {
+      fc.asyncProperty(fc.string(), async (remainder) => {
         await expect(
-          service.commitAndPush(commitOptions([`/${rest}`]))
+          service.commitAndPush(commitOptions([`/${remainder}`]))
         ).rejects.toThrow(/Unsafe git stage path/);
       }),
       { numRuns: NUM_RUNS }
@@ -69,8 +61,8 @@ describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
   it('rejects every Windows-absolute path', async () => {
     const driveLetter = fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
     await fc.assert(
-      fc.asyncProperty(driveLetter, relativePath, async (drive, rest) => {
-        for (const candidate of [`${drive}:\\${rest}`, `\\\\server\\${rest}`]) {
+      fc.asyncProperty(driveLetter, fc.string(), async (drive, remainder) => {
+        for (const candidate of [`${drive}:\\${remainder}`, `\\\\${remainder}`]) {
           await expect(
             service.commitAndPush(commitOptions([candidate]))
           ).rejects.toThrow(/Unsafe git stage path/);
@@ -83,10 +75,11 @@ describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
   it('rejects every path containing a .. segment', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(safeSegment, { minLength: 0, maxLength: 3 }),
-        fc.array(safeSegment, { minLength: 0, maxLength: 3 }),
-        async (before, after) => {
-          const candidate = [...before, '..', ...after].join('/');
+        fc.string(),
+        fc.constantFrom('/', '\\'),
+        fc.string(),
+        async (prefix, delimiter, suffix) => {
+          const candidate = `${prefix}${delimiter}..${delimiter}${suffix}`;
           await expect(
             service.commitAndPush(commitOptions([candidate]))
           ).rejects.toThrow(/Unsafe git stage path/);
@@ -98,12 +91,8 @@ describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
 
   it('rejects every path bearing a control character', async () => {
     await fc.assert(
-      fc.asyncProperty(relativePath, controlChar, fc.nat({ max: 10 }), async (base, ctl, at) => {
-        const index = Math.min(at, base.length);
-        const candidate = `${base.slice(0, index)}${ctl}${base.slice(index)}`;
-        // A control char that trims away entirely (e.g. leading \t alone) still
-        // leaves the raw-path check to fire; empty-after-trim entries are
-        // skipped by contract, so keep a non-empty visible body.
+      fc.asyncProperty(fc.string(), controlChar, fc.string(), async (prefix, ctl, suffix) => {
+        const candidate = `x${prefix}${ctl}${suffix}y`;
         await expect(
           service.commitAndPush(commitOptions([candidate]))
         ).rejects.toThrow(/Unsafe git stage path/);
@@ -114,9 +103,9 @@ describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
 
   it('rejects every :-prefixed path', async () => {
     await fc.assert(
-      fc.asyncProperty(relativePath, async (rest) => {
+      fc.asyncProperty(fc.string(), async (remainder) => {
         await expect(
-          service.commitAndPush(commitOptions([`:${rest}`]))
+          service.commitAndPush(commitOptions([`:${remainder}`]))
         ).rejects.toThrow(/Unsafe git stage path/);
       }),
       { numRuns: NUM_RUNS }
@@ -161,9 +150,42 @@ describe('resolveCurrentRef properties (WS8)', () => {
           repoWriteMode: 'commit-and-push',
           currentRef: `refs/tags/${tagName}`,
           githubHeadRef: '',
-          githubRefName: ''
+          githubRefName: tagName
         });
         expect(resolved).toBe('');
+      }),
+      { numRuns: NUM_RUNS }
+    );
+  });
+
+  it('never resolves a PR merge shorthand from githubRefName alone', () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 9999 }), (prNumber) => {
+        expect(
+          resolveCurrentRef({
+            repoWriteMode: 'commit-and-push',
+            currentRef: '',
+            githubHeadRef: '',
+            githubRefName: `${prNumber}/merge`
+          })
+        ).toBe('');
+      }),
+      { numRuns: NUM_RUNS }
+    );
+  });
+
+  it('preserves a PR-shaped branch supplied as githubHeadRef', () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 9999 }), (prNumber) => {
+        const headBranch = `${prNumber}/merge`;
+        expect(
+          resolveCurrentRef({
+            repoWriteMode: 'commit-and-push',
+            currentRef: '',
+            githubHeadRef: headBranch,
+            githubRefName: headBranch
+          })
+        ).toBe(headBranch);
       }),
       { numRuns: NUM_RUNS }
     );

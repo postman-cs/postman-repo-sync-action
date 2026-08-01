@@ -71,7 +71,15 @@ describe('repo-sync branch decision', () => {
     const inherited = {
       tier: 'canonical',
       strategy: 'publish-gate',
-      identity: { provider: 'github', refKind: 'default-branch', isPrContext: false, isForkPr: false },
+      identity: {
+        provider: 'github',
+        headBranch: 'main',
+        rawRef: 'refs/heads/main',
+        defaultBranch: 'main',
+        refKind: 'default-branch',
+        isPrContext: false,
+        isForkPr: false
+      },
       canonicalBranch: 'main',
       reason: 'inherited'
     };

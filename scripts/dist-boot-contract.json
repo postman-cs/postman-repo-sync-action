@@ -1,7 +1,7 @@
 {
   "entry": "dist/action.cjs",
   "env": {
-    "POSTMAN_BRANCH_DECISION": "{\"tier\":\"gated\",\"strategy\":\"single\",\"identity\":{\"provider\":\"github\",\"refKind\":\"branch\"},\"reason\":\"verify-dist gated boot contract\"}",
+    "POSTMAN_BRANCH_DECISION": "{\"tier\":\"gated\",\"strategy\":\"publish-gate\",\"identity\":{\"provider\":\"github\",\"rawRef\":\"refs/tags/v1.0.0\",\"refKind\":\"tag\",\"isPrContext\":false,\"isForkPr\":false},\"canonicalBranch\":\"main\",\"reason\":\"ref kind tag: never canonical/preview-eligible; no-op with annotation\"}",
     "INPUT_PROJECT-NAME": "verify-dist-boot"
   },
   "exitCode": 0,

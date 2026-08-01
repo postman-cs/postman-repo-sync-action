@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ContractError,
+  parseBranchDecision,
   resolveBranchDecision,
   serializeBranchDecision,
   type BranchIdentity,
@@ -107,9 +108,9 @@ describe('resolveBranchDecision properties (WS8)', () => {
         const second = resolveOrError(options);
         expect(second).toEqual(first);
         if (first.kind === 'decision' && second.kind === 'decision') {
-          expect(serializeBranchDecision(second.value)).toBe(
-            serializeBranchDecision(first.value)
-          );
+          const serialized = serializeBranchDecision(first.value);
+          expect(serializeBranchDecision(second.value)).toBe(serialized);
+          expect(parseBranchDecision(serialized)).toEqual(first.value);
         }
       }),
       { numRuns: NUM_RUNS }
