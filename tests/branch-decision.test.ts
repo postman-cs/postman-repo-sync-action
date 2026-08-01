@@ -73,6 +73,44 @@ describe('identity-ref resolution table (provider x trigger)', () => {
       expect(id.headSha).toBe('headsha');
     });
 
+    it('pull_request from the same repository: isForkPr false from complete event identity', () => {
+      const eventPath = githubEventFile({
+        repository: { default_branch: 'main', full_name: 'org/base' },
+        pull_request: {
+          head: { ref: 'feature/x', repo: { full_name: 'org/base' } },
+          base: { repo: { full_name: 'org/base' } }
+        }
+      });
+      const id = resolveBranchIdentity({
+        GITHUB_ACTIONS: 'true',
+        GITHUB_HEAD_REF: 'feature/x',
+        GITHUB_EVENT_PATH: eventPath
+      });
+      expect(id.isForkPr).toBe(false);
+    });
+
+    it('pull_request missing repo identity fails closed and cannot claim release or canonical tiers', () => {
+      for (const { headBranch, payload } of [
+        { headBranch: 'release/attacker', payload: {} },
+        { headBranch: 'main', payload: { pull_request: {} } }
+      ]) {
+        const id = resolveBranchIdentity({
+          GITHUB_ACTIONS: 'true',
+          GITHUB_HEAD_REF: headBranch,
+          GITHUB_EVENT_PATH: githubEventFile(payload)
+        });
+        expect(id.isForkPr).toBe(true);
+
+        const decision = resolveBranchDecision({
+          strategy: 'preview',
+          identity: id,
+          canonicalBranch: 'main',
+          channels: parseChannelRules(undefined)
+        });
+        expect(decision.tier).toBe('gated');
+      }
+    });
+
     it('tag push: refKind tag, no headBranch', () => {
       const id = resolveBranchIdentity({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/tags/v1.2.3' });
       expect(id.refKind).toBe('tag');
@@ -126,6 +164,20 @@ describe('identity-ref resolution table (provider x trigger)', () => {
       expect(id.isForkPr).toBe(true);
     });
 
+    it('MR missing source or target project identity fails closed', () => {
+      for (const env of [
+        { CI_MERGE_REQUEST_PROJECT_ID: '1' },
+        { CI_MERGE_REQUEST_SOURCE_PROJECT_ID: '1' }
+      ]) {
+        const id = resolveBranchIdentity({
+          GITLAB_CI: 'true',
+          CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: 'feature/x',
+          ...env
+        });
+        expect(id.isForkPr).toBe(true);
+      }
+    });
+
     it('tag pipeline: CI_COMMIT_TAG', () => {
       const id = resolveBranchIdentity({ GITLAB_CI: 'true', CI_COMMIT_TAG: 'v1.0.0' });
       expect(id.refKind).toBe('tag');
@@ -148,6 +200,7 @@ describe('identity-ref resolution table (provider x trigger)', () => {
       });
       expect(id.isPrContext).toBe(true);
       expect(id.headBranch).toBe('feature/x');
+      expect(id.isForkPr).toBe(false);
     });
 
     it('tag build: BITBUCKET_TAG', () => {
@@ -177,6 +230,26 @@ describe('identity-ref resolution table (provider x trigger)', () => {
       expect(id.headBranch).toBe('feature/x');
       expect(id.isPrContext).toBe(true);
       expect(id.isForkPr).toBe(true);
+    });
+
+    it('PR build: explicit False fork flag is same-repository', () => {
+      const id = resolveBranchIdentity({
+        TF_BUILD: 'True',
+        SYSTEM_PULLREQUEST_SOURCEBRANCH: 'refs/heads/feature/x',
+        SYSTEM_PULLREQUEST_ISFORK: 'False'
+      });
+      expect(id.isForkPr).toBe(false);
+    });
+
+    it('PR build: missing or malformed fork flag fails closed', () => {
+      for (const forkFlag of [undefined, 'not-a-boolean']) {
+        const id = resolveBranchIdentity({
+          TF_BUILD: 'True',
+          SYSTEM_PULLREQUEST_SOURCEBRANCH: 'refs/heads/feature/x',
+          ...(forkFlag === undefined ? {} : { SYSTEM_PULLREQUEST_ISFORK: forkFlag })
+        });
+        expect(id.isForkPr).toBe(true);
+      }
     });
 
     it('tag build: refs/tags parsed as tag', () => {
