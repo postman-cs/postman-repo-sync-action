@@ -2677,6 +2677,7 @@ async function commitAndPushGeneratedFiles(
   // requested CI workflow, but never stages/commits/pushes.
   if (inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs);
+    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
 
     // Extract dir from ciWorkflowPath
     const parts = inputs.ciWorkflowPath.split('/');
@@ -2685,7 +2686,6 @@ async function commitAndPushGeneratedFiles(
       ensureDir(dir);
     }
 
-    assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
     writeFileSync(inputs.ciWorkflowPath, ciWorkflow);
 
     // GC workflow: dedicated generated workflow for preview retention (R18a).
@@ -2694,8 +2694,8 @@ async function commitAndPushGeneratedFiles(
     if (inputs.provider === 'github' || inputs.provider === 'unknown') {
       const gcPath = '.github/workflows/postman-preview-gc.yml';
       if (inputs.ciWorkflowPath.endsWith('.github/workflows/ci.yml') || inputs.ciWorkflowPath === '.github/workflows/ci.yml') {
-        ensureDir('.github/workflows');
         assertPathWithinCwd(gcPath, 'preview GC workflow path');
+        ensureDir('.github/workflows');
         writeFileSync(gcPath, renderGcWorkflowTemplate());
       }
     }

@@ -324,6 +324,20 @@ describe('postman-repo-sync-action contract', () => {
     expect(
       createExecutionPlan({
         repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/heads/refs/tags/v1.2.3'
+      }).resolvedCurrentRef
+    ).toBe('');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
+        currentRef: 'refs/heads/refs/pull/42/merge'
+      }).resolvedCurrentRef
+    ).toBe('');
+
+    expect(
+      createExecutionPlan({
+        repoWriteMode: 'commit-and-push',
         currentRef: 'refs/pull/42/merge',
         githubHeadRef: 'refs/heads/feature/customer-sync',
         githubRefName: '42/merge'

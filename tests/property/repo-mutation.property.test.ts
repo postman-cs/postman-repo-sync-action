@@ -138,6 +138,8 @@ describe('resolveCurrentRef properties (WS8)', () => {
       fc.property(contextArb, (context) => {
         const resolved = resolveCurrentRef(context as Parameters<typeof resolveCurrentRef>[0]);
         expect(resolved.startsWith('refs/')).toBe(false);
+        expect(resolved.startsWith('refs/tags/')).toBe(false);
+        expect(resolved.startsWith('refs/pull/')).toBe(false);
       }),
       { numRuns: NUM_RUNS }
     );
@@ -153,6 +155,38 @@ describe('resolveCurrentRef properties (WS8)', () => {
           githubRefName: tagName
         });
         expect(resolved).toBe('');
+      }),
+      { numRuns: NUM_RUNS }
+    );
+  });
+
+  it('rejects nested tag refs after stripping refs/heads/', () => {
+    fc.assert(
+      fc.property(refFragment, (tagName) => {
+        expect(
+          resolveCurrentRef({
+            repoWriteMode: 'commit-and-push',
+            currentRef: `refs/heads/refs/tags/${tagName}`,
+            githubHeadRef: '',
+            githubRefName: ''
+          })
+        ).toBe('');
+      }),
+      { numRuns: NUM_RUNS }
+    );
+  });
+
+  it('rejects nested pull refs after stripping refs/heads/', () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 9999 }), (prNumber) => {
+        expect(
+          resolveCurrentRef({
+            repoWriteMode: 'commit-and-push',
+            currentRef: `refs/heads/refs/pull/${prNumber}/merge`,
+            githubHeadRef: '',
+            githubRefName: ''
+          })
+        ).toBe('');
       }),
       { numRuns: NUM_RUNS }
     );
