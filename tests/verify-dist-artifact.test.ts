@@ -173,14 +173,18 @@ async function materializeCommittedDistSnapshot(targetRoot: string): Promise<voi
   }
 }
 
-async function runVerify(root: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runVerify(
+  root: string,
+  extraEnv: Record<string, string> = {}
+): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const result = await execFileAsync(process.execPath, [verifyScript, root], {
       encoding: 'utf8',
       env: {
         PATH: process.env.PATH ?? '',
         HOME: process.env.HOME ?? '',
-        TMPDIR: process.env.TMPDIR ?? ''
+        TMPDIR: process.env.TMPDIR ?? '',
+        ...extraEnv
       },
       maxBuffer: 1024 * 1024
     });
@@ -502,7 +506,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const root = await makeTempDir('verify-dist-help-timeout-', onTestFinished);
     await writeFixture(root, { hangHelp: true });
     const startedAt = Date.now();
-    const result = await runVerify(root);
+    const result = await runVerify(root, { VERIFY_DIST_CLI_PROBE_TIMEOUT_MS: '5000' });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/direct dist[\\/]cli\.cjs --help timed out after 5000ms/);
     expect(Date.now() - startedAt).toBeLessThan(10_000);
@@ -512,7 +516,7 @@ describe('verify-dist-artifact canonical contract', () => {
     const root = await makeTempDir('verify-dist-version-timeout-', onTestFinished);
     await writeFixture(root, { hangVersion: true });
     const startedAt = Date.now();
-    const result = await runVerify(root);
+    const result = await runVerify(root, { VERIFY_DIST_CLI_PROBE_TIMEOUT_MS: '5000' });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/direct dist[\\/]cli\.cjs --version timed out after 5000ms/);
     expect(Date.now() - startedAt).toBeLessThan(10_000);
