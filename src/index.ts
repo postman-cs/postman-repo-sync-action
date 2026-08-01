@@ -1285,7 +1285,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   return inputs;
 }
 
-function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, string> {
+export function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, string> {
   const allowList = [
     'PATH',
     'HOME',
@@ -1308,7 +1308,7 @@ function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, st
   return filtered;
 }
 
-async function persistSslSecrets(
+export async function persistSslSecrets(
   inputs: ResolvedInputs,
   actionCore: Pick<CoreLike, 'info' | 'warning'>,
   actionExec: ExecLike,
