@@ -247,9 +247,15 @@ describe('git smart-HTTP transport', () => {
     expect(fetches.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('stops the token cascade on a permission denial instead of retrying', async () => {
-    const repo = await fixture.createRemoteRepo('denied', { acceptTokens: ['limited-token', 'ambient-token'] });
-    await fixture.installRejectingPreReceiveHook(repo, 'permission denied: repository write policy');
+  it('stops the token cascade when a pre-receive hook emits GitHub\'s ambiguous permission denial', async () => {
+    const repo = await fixture.createRemoteRepo('ambiguous-denied', {
+      acceptTokens: ['limited-token', 'ambient-token']
+    });
+    const remoteHead = await fixture.revParse(repo, 'refs/heads/main');
+    await fixture.installRejectingPreReceiveHook(
+      repo,
+      `Permission to postman-cs/${repo.name} denied to policy-user.`
+    );
     const clone = await cloneWorkRepo(repo, 'ws10-git-denied');
     await stageGeneratedFile(clone, 'generated.json', '{"v":6}\n');
 
@@ -259,12 +265,35 @@ describe('git smart-HTTP transport', () => {
         fallbackToken: 'limited-token',
         githubToken: 'ambient-token'
       })
-    ).rejects.toThrow(/permission denied/i);
+    ).rejects.toThrow(/Permission to .* denied to/i);
 
-    // Denial is non-retryable: the second candidate token was never offered.
+    // The phrase alone is policy evidence here, not credential evidence.
     expect(fixture.authAttempts.some((a) => a.token === 'ambient-token')).toBe(false);
-    // The commit exists locally but the remote never moved.
-    expect(await fixture.revParse(repo, 'refs/heads/main')).not.toBe('');
+    expect(await fixture.revParse(repo, 'refs/heads/main')).toBe(remoteHead);
+  });
+
+  it.each([
+    ['GH006', 'remote: error: GH006: Protected branch update failed for refs/heads/main.'],
+    ['GH013', 'remote: error: GH013: Repository rule violations found for refs/heads/main.']
+  ])('stops the token cascade on a %s policy rejection', async (_code, rejection) => {
+    const repo = await fixture.createRemoteRepo(`policy-${_code.toLowerCase()}`, {
+      acceptTokens: ['limited-token', 'ambient-token']
+    });
+    const remoteHead = await fixture.revParse(repo, 'refs/heads/main');
+    await fixture.installRejectingPreReceiveHook(repo, rejection);
+    const clone = await cloneWorkRepo(repo, `ws10-git-policy-${_code.toLowerCase()}`);
+    await stageGeneratedFile(clone, 'generated.json', '{"v":8}\n');
+
+    await expect(
+      service(repo, clone).commitAndPush({
+        ...PUSH_DEFAULTS,
+        fallbackToken: 'limited-token',
+        githubToken: 'ambient-token'
+      })
+    ).rejects.toThrow(new RegExp(_code));
+
+    expect(fixture.authAttempts.some((a) => a.token === 'ambient-token')).toBe(false);
+    expect(await fixture.revParse(repo, 'refs/heads/main')).toBe(remoteHead);
   });
 
   it('advances the cascade past a GitHub-style 403 credential denial', async () => {

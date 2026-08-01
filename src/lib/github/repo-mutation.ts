@@ -404,18 +404,24 @@ export class RepoMutationService {
     let stopCandidates = false;
 
     // Credential-level denials (this token cannot write to the repo) must
-    // advance the candidate cascade: real GitHub rejects an under-scoped
-    // token with "Permission to <repo> denied to <user>" over HTTP 403,
-    // which is specific to the offered credential, not to the push itself.
+    // advance the candidate cascade. The permission-denied prose is
+    // ambiguous: GitHub emits it with an HTTP 403 for a bad credential, but
+    // hooks and branch policy can emit the exact same text. Require transport
+    // or authentication evidence before treating it as token-specific.
     const isCredentialDenial = (message: string): boolean =>
-      /permission to .+ denied to/i.test(message) ||
       /authentication failed/i.test(message) ||
-      /the requested url returned error: 40[13]/i.test(message);
+      /the requested url returned error:\s*40[13]\b|http(?:\/\d(?:\.\d)?)?\s+(?:error\s+)?(?:status\s+)?40[13]\b|curl.*?\b40[13]\b/i.test(
+        message
+      );
 
     // Policy-level denials (any token would be rejected: branch policy,
-    // pre-receive hooks, workflow-scope refusals) stop the whole cascade.
+    // pre-receive hooks, repository rules, workflow-scope refusals) stop the
+    // whole cascade. Credential evidence retains precedence above.
     const isNonRetryablePushError = (message: string): boolean =>
-      !isCredentialDenial(message) && /workflow|permission/i.test(message);
+      !isCredentialDenial(message) &&
+      /gh006|protected branch|gh013|repository rule violations|pre-receive|hook declined|workflow|permission/i.test(
+        message
+      );
 
     try {
       const pushCandidates = usePersistedCredentials ? [null] : tokens;
