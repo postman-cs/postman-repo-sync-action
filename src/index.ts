@@ -254,6 +254,14 @@ export interface RepoSyncDependencies {
   secretMasker?: SecretMasker;
 }
 
+/**
+ * Optional immutable context resolved by an entrypoint before execution. Direct
+ * callers may omit it and retain local branch-decision resolution.
+ */
+export interface RepoSyncExecutionContext {
+  branchDecision?: Readonly<BranchDecision>;
+}
+
 const identitySecretMasker: SecretMasker = (input) => input;
 
 function resolveRepoSyncMasker(dependencies: RepoSyncDependencies): SecretMasker {
@@ -2747,7 +2755,8 @@ async function commitAndPushGeneratedFiles(
 
 export async function runRepoSync(
   inputs: ResolvedInputs,
-  dependencies: RepoSyncDependencies
+  dependencies: RepoSyncDependencies,
+  executionContext?: RepoSyncExecutionContext
 ): Promise<RepoSyncOutputs> {
   const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', actionVersion: resolveActionVersion(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
@@ -2774,7 +2783,7 @@ export async function runRepoSync(
     team_id: dependencies.teamId || undefined
   });
   try {
-    const result = await runRepoSyncInner(inputs, { ...dependencies, logger });
+    const result = await runRepoSyncInner(inputs, { ...dependencies, logger }, executionContext);
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion('success');
     return result;
@@ -2790,7 +2799,8 @@ export async function runRepoSync(
 
 async function runRepoSyncInner(
   inputs: ResolvedInputs,
-  dependencies: RepoSyncDependencies
+  dependencies: RepoSyncDependencies,
+  executionContext?: RepoSyncExecutionContext
 ): Promise<RepoSyncOutputs> {
   const mask = resolveRepoSyncMasker(dependencies);
   // Normally the instance runRepoSync built and registered secrets on; the
@@ -2801,7 +2811,7 @@ async function runRepoSyncInner(
   // via POSTMAN_BRANCH_DECISION, or resolved locally; legacy under default
   // inputs). Gated runs never reach here (runAction short-circuits), so the
   // non-canonical tiers seen here are preview and channel.
-  const branchDecision = decideBranchTier(inputs);
+  const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
   assertBranchAssetIds(inputs, branchDecision);
   const isCanonicalWriter = branchDecision.tier === 'legacy' || branchDecision.tier === 'canonical';
   if (!isCanonicalWriter) {
@@ -3448,10 +3458,9 @@ async function runRepoSyncInner(
 
   // Branch-aware sync: surface the run's BranchDecision (inherited from
   // bootstrap via POSTMAN_BRANCH_DECISION or resolved locally) on executed runs.
-  if (inputs.branchStrategy !== 'legacy' || process.env[BRANCH_DECISION_ENV]) {
-    const decision = decideBranchTier(inputs);
+  if (inputs.branchStrategy !== 'legacy' || branchDecision.reason === 'inherited') {
     outputs['sync-status'] = 'synced';
-    outputs['branch-decision'] = serializeBranchDecision(decision);
+    outputs['branch-decision'] = serializeBranchDecision(branchDecision);
   }
 
   for (const [name, value] of Object.entries(outputs)) {
@@ -4021,7 +4030,7 @@ export async function runAction(
 
   await persistSslSecrets(inputs, actionCore, actionExec, repository);
 
-  return runRepoSync(inputs, dependencies);
+  return runRepoSync(inputs, dependencies, { branchDecision });
 }
 
 /**

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -390,6 +390,45 @@ describe('repo mutation helpers', () => {
     ).rejects.toThrow('Unsafe git stage path');
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects symlinked removal paths outside cwd before invoking git',
+    async () => {
+      const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'repo-mutation-symlink-'));
+      const cwd = path.join(fixtureRoot, 'cwd');
+      const outside = path.join(fixtureRoot, 'outside');
+      const victim = path.join(outside, 'victim');
+      const execute = vi.fn();
+
+      try {
+        await mkdir(cwd, { recursive: true });
+        await mkdir(outside, { recursive: true });
+        await writeFile(victim, 'must remain\n', 'utf8');
+        await symlink(outside, path.join(cwd, 'link'));
+
+        const repoMutation = new RepoMutationService({
+          cwd,
+          repository: 'postman-cs/repo-sync-demo',
+          execute
+        });
+
+        await expect(
+          repoMutation.commitAndPush({
+            repoWriteMode: 'commit-only',
+            committerName: 'Postman CSE',
+            committerEmail: 'help@postman.com',
+            stagePaths: ['link/victim'],
+            removePaths: ['link/victim']
+          })
+        ).rejects.toThrow('Unsafe repository mutation path');
+
+        await expect(readFile(victim, 'utf8')).resolves.toBe('must remain\n');
+        expect(execute).not.toHaveBeenCalled();
+      } finally {
+        await rm(fixtureRoot, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('redacts secrets from git push failures', async () => {
     const deniedMessage = [

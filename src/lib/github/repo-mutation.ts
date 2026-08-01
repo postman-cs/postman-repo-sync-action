@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { createSecretMasker, type SecretMasker } from '../secrets.js';
@@ -241,6 +241,53 @@ function normalizeStagePaths(stagePaths: string[]): string[] {
   return normalized;
 }
 
+function isContainedPath(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+function throwUnsafeMutationPath(): never {
+  throw new Error('Unsafe repository mutation path: resolved path escapes the working directory');
+}
+
+function assertMutationPathsAreContained(cwd: string, paths: string[]): void {
+  let realCwd: string;
+  try {
+    realCwd = realpathSync(cwd);
+  } catch {
+    throwUnsafeMutationPath();
+  }
+
+  const normalizedCwd = path.resolve(cwd);
+  for (const mutationPath of paths) {
+    let candidate = path.resolve(normalizedCwd, mutationPath);
+
+    while (true) {
+      try {
+        const resolvedCandidate = realpathSync(candidate);
+        if (!isContainedPath(realCwd, resolvedCandidate)) {
+          throwUnsafeMutationPath();
+        }
+      } catch {
+        try {
+          lstatSync(candidate);
+        } catch {
+          if (candidate === normalizedCwd) {
+            throwUnsafeMutationPath();
+          }
+          candidate = path.dirname(candidate);
+          continue;
+        }
+        throwUnsafeMutationPath();
+      }
+
+      if (candidate === normalizedCwd) {
+        break;
+      }
+      candidate = path.dirname(candidate);
+    }
+  }
+}
+
 export class RepoMutationService {
   private readonly cwd: string;
   private readonly execute: ExecuteFn;
@@ -267,6 +314,8 @@ export class RepoMutationService {
     const resolvedCurrentRef = resolveCurrentRef(options);
     const removePaths = normalizeStagePaths(options.removePaths ?? []);
     const stagePaths = normalizeStagePaths([...options.stagePaths, ...removePaths]);
+    assertMutationPathsAreContained(this.cwd, stagePaths);
+    assertMutationPathsAreContained(this.cwd, removePaths);
     const tokens =
       this.provider === 'azure-devops'
         ? buildPushTokenOrder({ adoToken: options.adoToken })

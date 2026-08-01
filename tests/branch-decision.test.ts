@@ -503,6 +503,34 @@ describe('serialized decision hand-off', () => {
       {
         name: 'otherwise eligible preview branch falsely marked gated',
         decision: { ...valid, strategy: 'preview' }
+      },
+      {
+        name: 'whitespace-canonical preview contradiction',
+        decision: {
+          ...valid,
+          tier: 'preview',
+          strategy: 'preview',
+          identity: { ...valid.identity, headBranch: 'main', refKind: 'default-branch' },
+          canonicalBranch: ' main '
+        }
+      },
+      {
+        name: 'whitespace-canonical channel contradiction',
+        decision: {
+          ...valid,
+          tier: 'channel',
+          identity: { ...valid.identity, headBranch: 'main', refKind: 'default-branch' },
+          canonicalBranch: ' main ',
+          channel: { pattern: 'main', code: 'MAIN' }
+        }
+      },
+      {
+        name: 'whitespace-canonical gated contradiction',
+        decision: {
+          ...valid,
+          identity: { ...valid.identity, headBranch: 'main', refKind: 'default-branch' },
+          canonicalBranch: ' main '
+        }
       }
     ];
 
