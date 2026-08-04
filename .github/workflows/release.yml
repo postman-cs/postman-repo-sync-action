@@ -46,7 +46,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
           echo "ACTIONLINT_BIN=$RUNNER_TEMP/actionlint" >> "$GITHUB_ENV"
       - run: npm run bundle
       - name: Run gates
@@ -217,3 +217,35 @@ jobs:
           E2E_GATE_SUITE: smoke
           E2E_GATE_REF: ${{ github.ref_name }}
         run: node .github/scripts/dispatch-e2e-monitor.mjs
+
+  # GITHUB_TOKEN-created Release runs never emit workflow_run cascades; the
+  # composite's daily cron remains the backstop when App secrets are absent.
+  notify-composite:
+    needs: [classify, publish, advance-major-alias]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Mint composite-scoped App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SUITE_PIN_BOT_APP_ID }}
+          private-key: ${{ secrets.SUITE_PIN_BOT_PRIVATE_KEY }}
+          owner: postman-cs
+          repositories: postman-api-onboarding-action
+
+      - name: Dispatch sibling-release to the composite
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::App token unavailable (secrets missing or mint failed); the composite's daily cron will pick this release up."
+            exit 0
+          fi
+          gh api repos/postman-cs/postman-api-onboarding-action/dispatches \
+            -f event_type=sibling-release \
+            -f "client_payload[repository]=${GITHUB_REPOSITORY}" \
+            -f "client_payload[run]=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
