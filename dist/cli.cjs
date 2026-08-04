@@ -115994,6 +115994,48 @@ var PostmanGatewayAssetsClient = class {
     return { uid, name, collection, mockUrl, environment, visibility };
   }
   /**
+   * Validate and normalize a collection public UID for routes that require the
+   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): collection
+   * GET export, collection-root PATCH/read, and private-mock runtime auth.
+   *
+   * - Trims once.
+   * - Rejects empty values.
+   * - Rejects bare UUID model IDs (5 hyphen segments) with an actionable
+   *   `COLLECTION_ROOT_UID_REQUIRED`-style message — the live service denies
+   *   these routes on bare ids (403 FORBIDDEN).
+   * - Enforces a positive safe single-path-segment contract: only letters,
+   *   digits, and safe UID punctuation (hyphen, underscore, dot, tilde) are
+   *   permitted, and the value must contain at least one hyphen (owner prefix).
+   *   Everything else — backslash, percent-encoded slash/query, whitespace,
+   *   `&`, `=`, control characters, newlines, and other non-segment characters —
+   *   is rejected before any gateway call to prevent path/query alteration.
+   * - Returns the full safe owner-prefixed UID verbatim; never calls
+   *   `toModelId`. Use `toModelId` only for namespaces documented as bare-ID
+   *   routes (sync environment routes, entity-id GETs).
+   * - The invalid-character error is static and does not echo the raw value,
+   *   preventing control-character or log-injection attacks.
+   */
+  requireCollectionPublicUid(uid) {
+    const trimmed = String(uid ?? "").trim();
+    if (!trimmed) {
+      throw new Error(
+        "COLLECTION_ROOT_UID_REQUIRED: Collection UID must not be empty."
+      );
+    }
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      throw new Error(
+        `COLLECTION_ROOT_UID_REQUIRED: This route requires the full owner-prefixed collection UID, got bare model id.`
+      );
+    }
+    const SAFE_COLLECTION_UID = /^[a-zA-Z0-9._~]+(-[a-zA-Z0-9._~]+)+$/;
+    if (!SAFE_COLLECTION_UID.test(trimmed)) {
+      throw new Error(
+        "COLLECTION_ROOT_UID_INVALID: Collection UID must be an owner-prefixed value containing only letters, digits, hyphens, underscores, dots, and tildes."
+      );
+    }
+    return trimmed;
+  }
+  /**
    * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
    * model id (`<uuid>`, 5 groups), mirroring `decomposeUID`. Used ONLY for the
    * bare-id namespaces: the `sync` environment routes (`/environment/:id/...`)
@@ -116265,7 +116307,9 @@ var PostmanGatewayAssetsClient = class {
   // serve `GET /v3/collections/:id/export`, which returns the canonical v3
   // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
   // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
-  // Both the full public uid and the bare model id are accepted on the path.
+  // The full owner-prefixed public UID must be sent verbatim; the bare model id
+  // is rejected on root mutation routes (403 FORBIDDEN) and must not be used
+  // here either, so the caller is responsible for passing the public UID.
   /**
    * Fetch a collection's v3 IR through the gateway v3 export endpoint.
    * Returns the `data.collection` object (canonical v3 shape with `$kind`
@@ -116274,7 +116318,7 @@ var PostmanGatewayAssetsClient = class {
    * reads.
    */
   async getCollection(uid) {
-    const id = this.toModelId(uid);
+    const id = this.requireCollectionPublicUid(uid);
     const response = await this.gateway.requestJson({
       service: "collection",
       method: "get",
@@ -116365,7 +116409,7 @@ var PostmanGatewayAssetsClient = class {
     return [...existingScripts, managedScript];
   }
   async readCollectionRootScripts(collectionUid) {
-    const id = String(collectionUid ?? "").trim();
+    const id = this.requireCollectionPublicUid(collectionUid);
     const response = await this.gateway.requestJson({
       service: "collection",
       method: "get",
@@ -116381,7 +116425,7 @@ var PostmanGatewayAssetsClient = class {
     return this.normalizeCollectionScripts(collection.scripts);
   }
   async patchCollectionRootScripts(collectionUid, scripts) {
-    const id = String(collectionUid ?? "").trim();
+    const id = this.requireCollectionPublicUid(collectionUid);
     await this.gateway.requestJson(
       {
         service: "collection",
@@ -116398,13 +116442,7 @@ var PostmanGatewayAssetsClient = class {
    * the variable name and header wiring, never the credential.
    */
   async configurePrivateMockRuntimeAuth(collectionUid) {
-    const cid = String(collectionUid ?? "").trim();
-    if (!cid) return 0;
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cid)) {
-      throw new Error(
-        `COLLECTION_ROOT_UID_REQUIRED: Private-mock root auth requires the full owner-prefixed collection UID, got bare model id ${cid}.`
-      );
-    }
+    const cid = this.requireCollectionPublicUid(collectionUid);
     const installFromFreshRoot = async (existingScripts) => {
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
         return 0;

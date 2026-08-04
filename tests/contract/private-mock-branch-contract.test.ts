@@ -97,24 +97,61 @@ describe.each(['canonical', 'preview'] as const)(
 
       expect(result.error).toBeUndefined();
       expect(result.outputs['mock-visibility']).toBe('private');
-      const rootReads = platform.events.filter((event) =>
+
+      // Every collection GET export event must use an owner-prefixed public UID.
+      const exportEvents = platform.events.filter((event) =>
         event.startsWith('proxy:collection GET /v3/collections/')
       );
-      const rootPatches = platform.events.filter((event) =>
+      expect(exportEvents.length).toBeGreaterThanOrEqual(2);
+      const exportedUids = new Set<string>();
+      for (const event of exportEvents) {
+        const match = /\/v3\/collections\/([^/]+)\/export$/.exec(event);
+        expect(match).not.toBeNull();
+        const uid = match![1]!;
+        expect(uid).toMatch(/^\d+-[0-9a-f-]+$/);
+        expect(uid).not.toBe(SMOKE_MODEL_ID);
+        expect(uid).not.toBe(CONTRACT_MODEL_ID);
+        exportedUids.add(uid);
+      }
+      expect(exportedUids.has(SMOKE_UID)).toBe(true);
+      expect(exportedUids.has(CONTRACT_UID)).toBe(true);
+
+      // PATCH IDs must be full owner-prefixed UIDs, and PATCH must occur before
+      // any later GET export/readback for the same collection. Use indices in
+      // the single global platform.events array to prove chronology.
+      const patchEvents = platform.events.filter((event) =>
         event.startsWith('proxy:collection PATCH /v3/collections/')
       );
-      expect(rootReads).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining(`/v3/collections/${SMOKE_UID}`),
-          expect.stringContaining(`/v3/collections/${CONTRACT_UID}`)
-        ])
-      );
-      const patchedIds = rootPatches.map(
-        (event) => event.split('/v3/collections/')[1]?.replace(/\/export$/, '') ?? ''
+      const patchedIds = patchEvents.map(
+        (event) => event.split('/v3/collections/')[1] ?? ''
       );
       expect(patchedIds).toEqual([SMOKE_UID, CONTRACT_UID]);
+      for (const patchedId of patchedIds) {
+        const patchGlobalIndex = platform.events.findIndex((event) =>
+          event.includes(`/v3/collections/${patchedId}`) &&
+          event.startsWith('proxy:collection PATCH')
+        );
+        expect(patchGlobalIndex).toBeGreaterThanOrEqual(0);
+        const laterGetGlobalIndex = platform.events.findIndex((event, idx) =>
+          idx > patchGlobalIndex &&
+          event.startsWith('proxy:collection GET') &&
+          event.includes(`/v3/collections/${patchedId}/export`)
+        );
+        expect(laterGetGlobalIndex).toBeGreaterThanOrEqual(0);
+        expect(laterGetGlobalIndex).toBeGreaterThan(patchGlobalIndex);
+      }
+
+      // Fake state must contain the exact managed root hook evidence.
       for (const resource of platform.state.collections) {
-        expect(JSON.stringify(resource.collection)).toContain('postmanPrivateMockApiKey');
+        const scripts = (resource.collection as Record<string, unknown>).scripts as
+          | Array<{ type: string; code: string }>
+          | undefined;
+        expect(scripts).toBeDefined();
+        const hook = scripts!.find((script) =>
+          String(script.code ?? '').includes('postmanPrivateMockApiKey')
+        );
+        expect(hook).toBeDefined();
+        expect(hook!.type).toBe('http:beforeRequest');
       }
     });
   }

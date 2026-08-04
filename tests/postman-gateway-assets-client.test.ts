@@ -929,6 +929,123 @@ describe('PostmanGatewayAssetsClient', () => {
   const ESOCKET_500_BODY =
     '{"error":{"name":"serverError","details":"ESOCKETTIMEDOUT","source":"downstream"}}';
 
+  it('getCollection sends the full owner-prefixed public UID to /v3/collections/:uid/export', async () => {
+    const requestJson = vi.fn(async () => ({ data: { collection: { info: { name: 'x' } } } }));
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await assets.getCollection(PUBLIC_UID);
+
+    expect(requestJson).toHaveBeenCalledWith({
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${PUBLIC_UID}/export`
+    });
+  });
+
+  it('getCollection rejects a bare collection model ID before transport', async () => {
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.getCollection(COLLECTION_BARE_ID)).rejects.toThrow(/COLLECTION_ROOT_UID_REQUIRED/);
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it('getCollection rejects unsafe UID values containing slash, query, or control characters before transport', async () => {
+    const unsafe = [
+      'owner-abc/def-1234-5678-90ab-cdef',
+      'owner-abc?def-1234-5678-90ab-cdef',
+      'owner-abc#def-1234-5678-90ab-cdef',
+      `owner-abc\x00def-1234-5678-90ab-cdef`
+    ];
+    for (const uid of unsafe) {
+      const requestJson = vi.fn();
+      const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+      await expect(assets.getCollection(uid)).rejects.toThrow(/COLLECTION_ROOT_UID_INVALID/);
+      expect(requestJson).not.toHaveBeenCalled();
+    }
+  });
+
+  it('getCollection rejects backslash, percent-encoding, whitespace, ampersand, equals, and newline inputs before transport', async () => {
+    const unsafe = [
+      'owner-abc\\def-1234-5678-90ab-cdef',
+      'owner-abc%2Fdef-1234-5678-90ab-cdef',
+      'owner-abc def-1234-5678-90ab-cdef',
+      'owner-abc\tdef-1234-5678-90ab-cdef',
+      'owner-abc\ndef-1234-5678-90ab-cdef',
+      'owner-abc&def-1234-5678-90ab-cdef',
+      'owner-abc=def-1234-5678-90ab-cdef'
+    ];
+    for (const uid of unsafe) {
+      const requestJson = vi.fn();
+      const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+      await expect(assets.getCollection(uid)).rejects.toThrow(/COLLECTION_ROOT_UID_INVALID/);
+      expect(requestJson).not.toHaveBeenCalled();
+    }
+  });
+
+  it('getCollection error does not echo the raw unsafe UID value', async () => {
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+    const unsafe = 'owner-abc/def-1234-5678-90ab-cdef';
+    await expect(assets.getCollection(unsafe)).rejects.toThrow(/COLLECTION_ROOT_UID_INVALID/);
+    try {
+      await assets.getCollection(unsafe);
+    } catch (error) {
+      expect(String(error)).not.toContain('abc/def');
+    }
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it('configurePrivateMockRuntimeAuth rejects backslash, percent-encoding, whitespace, ampersand, equals, and newline inputs before transport', async () => {
+    const unsafe = [
+      'owner-abc\\def-1234-5678-90ab-cdef',
+      'owner-abc%2Fdef-1234-5678-90ab-cdef',
+      'owner-abc def-1234-5678-90ab-cdef',
+      'owner-abc\tdef-1234-5678-90ab-cdef',
+      'owner-abc\ndef-1234-5678-90ab-cdef',
+      'owner-abc&def-1234-5678-90ab-cdef',
+      'owner-abc=def-1234-5678-90ab-cdef'
+    ];
+    for (const uid of unsafe) {
+      const requestJson = vi.fn();
+      const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+      await expect(assets.configurePrivateMockRuntimeAuth(uid)).rejects.toThrow(/COLLECTION_ROOT_UID_INVALID/);
+      expect(requestJson).not.toHaveBeenCalled();
+    }
+  });
+
+  it('configurePrivateMockRuntimeAuth error does not echo the raw unsafe UID value', async () => {
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+    const unsafe = 'owner-abc/def-1234-5678-90ab-cdef';
+    await expect(assets.configurePrivateMockRuntimeAuth(unsafe)).rejects.toThrow(/COLLECTION_ROOT_UID_INVALID/);
+    try {
+      await assets.configurePrivateMockRuntimeAuth(unsafe);
+    } catch (error) {
+      expect(String(error)).not.toContain('abc/def');
+    }
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it('configurePrivateMockRuntimeAuth sends full UID for both GET export and PATCH root', async () => {
+    const requestJson = vi.fn(async (request: { method: string; path: string }) => {
+      if (request.method === 'get' && request.path === `/v3/collections/${PUBLIC_UID}/export`) {
+        return collectionExport([]);
+      }
+      if (request.method === 'patch' && request.path === `/v3/collections/${PUBLIC_UID}`) {
+        return { data: {} };
+      }
+      throw new Error(`unexpected call: ${request.method} ${request.path}`);
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.configurePrivateMockRuntimeAuth(PUBLIC_UID)).resolves.toBe(1);
+
+    const paths = requestJson.mock.calls.map(([request]) => request.path);
+    expect(paths).toContain(`/v3/collections/${PUBLIC_UID}/export`);
+    expect(paths).toContain(`/v3/collections/${PUBLIC_UID}`);
+  });
+
   it('deleteCollection succeeds after a transient Bifrost 500 ESOCKETTIMEDOUT', async () => {
     const requestJson = vi
       .fn()
