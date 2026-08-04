@@ -118286,7 +118286,7 @@ var PostmanGatewayAssetsClient = class {
     return [...existingScripts, managedScript];
   }
   async readCollectionRootScripts(collectionUid) {
-    const id = this.toModelId(collectionUid);
+    const id = String(collectionUid ?? "").trim();
     const response = await this.gateway.requestJson({
       service: "collection",
       method: "get",
@@ -118302,7 +118302,7 @@ var PostmanGatewayAssetsClient = class {
     return this.normalizeCollectionScripts(collection.scripts);
   }
   async patchCollectionRootScripts(collectionUid, scripts) {
-    const id = this.toModelId(collectionUid);
+    const id = String(collectionUid ?? "").trim();
     await this.gateway.requestJson(
       {
         service: "collection",
@@ -118321,6 +118321,11 @@ var PostmanGatewayAssetsClient = class {
   async configurePrivateMockRuntimeAuth(collectionUid) {
     const cid = String(collectionUid ?? "").trim();
     if (!cid) return 0;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cid)) {
+      throw new Error(
+        `COLLECTION_ROOT_UID_REQUIRED: Private-mock root auth requires the full owner-prefixed collection UID, got bare model id ${cid}.`
+      );
+    }
     const installFromFreshRoot = async (existingScripts) => {
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
         return 0;
