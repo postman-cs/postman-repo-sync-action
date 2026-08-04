@@ -208,8 +208,10 @@ describe('contract: platform fake routing', () => {
   });
 
   it('rejects a bare model id on collection ROOT PATCH with the live 403 wire shape', async () => {
-    const platform = createPlatform();
     const bareId = '6b9b8a7c-1111-4222-8333-444455556666';
+    const platform = createPlatform({
+      existingCollections: [{ id: bareId, ownerId: 132319 }]
+    });
 
     const denied = await proxy(platform, {
       service: 'collection',

@@ -13,6 +13,7 @@ const windowsCwdSensitiveTests = [
   'tests/repo-sync-action.test.ts',
   'tests/contract/credential-matrix.test.ts',
   'tests/contract/cassette-replay.test.ts',
+  'tests/contract/harness.test.ts',
   'tests/contract/monitor-rebind-contract.test.ts',
   'tests/cli.test.ts',
   'tests/path-sandboxing.test.ts',
