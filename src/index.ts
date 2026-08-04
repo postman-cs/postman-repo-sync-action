@@ -105,6 +105,7 @@ export interface ResolvedInputs {
   baselineCollectionId: string;
   smokeCollectionId: string;
   contractCollectionId: string;
+  syncGeneratedAssets?: boolean;
   /** Optional digest-bound prebuilt collection manifest JSON from bootstrap. */
   prebuiltCollectionsJson?: string;
   collectionSyncMode: 'refresh' | 'version';
@@ -600,6 +601,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     baselineCollectionId: getInput('baseline-collection-id', env),
     smokeCollectionId: getInput('smoke-collection-id', env),
     contractCollectionId: getInput('contract-collection-id', env),
+    syncGeneratedAssets: parseBooleanInput(getInput('sync-generated-assets', env), true),
     prebuiltCollectionsJson: getInput('prebuilt-collections-json', env),
     specId: getInput('spec-id', env),
     specContentChanged: parseBooleanInput(getInput('spec-content-changed', env), true),
@@ -1206,6 +1208,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, 'smoke-collection-id'),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, 'contract-collection-id'),
+    INPUT_SYNC_GENERATED_ASSETS: readInput(actionCore, 'sync-generated-assets'),
     INPUT_PREBUILT_COLLECTIONS_JSON: readInput(actionCore, 'prebuilt-collections-json'),
     INPUT_SPEC_ID: readInput(actionCore, 'spec-id'),
     INPUT_SPEC_PATH: readInput(actionCore, 'spec-path'),
@@ -1670,7 +1673,8 @@ function buildResourcesManifest(
   mappedSpecRef?: string,
   specId?: string,
   existingSpecs?: CloudResourceMap,
-  priorState?: PostmanResourcesState | null
+  priorState?: PostmanResourcesState | null,
+  preserveGeneratedAssets = false
 ): string {
   // Merge-preserving writer (state v2): round-trip every unknown field from
   // the prior tracked state instead of rebuilding the document from scratch,
@@ -1689,15 +1693,24 @@ function buildResourcesManifest(
   const cloudResources: Record<string, Record<string, string>> = {};
 
   // Collections
-  const collectionKeys = Object.keys(collectionMap);
+  const effectiveCollectionMap = preserveGeneratedAssets
+    ? { ...(priorState?.cloudResources?.collections ?? {}), ...collectionMap }
+    : collectionMap;
+  const collectionKeys = Object.keys(effectiveCollectionMap);
   if (collectionKeys.length > 0) {
-    cloudResources.collections = collectionMap;
+    cloudResources.collections = effectiveCollectionMap;
   }
 
   // Environments
+  const priorEnvironmentMap = preserveGeneratedAssets
+    ? { ...(priorState?.cloudResources?.environments ?? {}) }
+    : {};
   const envEntries = Object.entries(envMap);
+  if (Object.keys(priorEnvironmentMap).length > 0 || envEntries.length > 0) {
+    cloudResources.environments = priorEnvironmentMap;
+  }
   if (envEntries.length > 0) {
-    cloudResources.environments = {};
+    cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
@@ -2461,8 +2474,10 @@ async function exportArtifacts(
     return;
   }
 
-  assertPathWithinCwd(inputs.artifactDir, 'artifact-dir');
-  if (inputs.generateCiWorkflow) {
+  if (inputs.syncGeneratedAssets !== false) {
+    assertPathWithinCwd(inputs.artifactDir, 'artifact-dir');
+  }
+  if (inputs.syncGeneratedAssets !== false && inputs.generateCiWorkflow) {
     assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
   }
 
@@ -2486,6 +2501,34 @@ async function exportArtifacts(
           options.releaseLabel
         )
       : undefined;
+
+  const durableWorkspaceId = resolveDurableWorkspaceId({
+    candidateId: inputs.workspaceId,
+    priorId: options.priorWorkspaceId,
+    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
+    workspaceLinkStatus: options.workspaceLinkStatus
+  });
+
+  if (inputs.syncGeneratedAssets === false) {
+    ensureDir('.postman');
+    assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
+    writeFileSync('.postman/resources.yaml', buildResourcesManifest(
+      durableWorkspaceId,
+      {},
+      {},
+      inputs.artifactDir,
+      discoveredSpecs.map((spec) => spec.configRelativePath),
+      mappedSpecCloudKey,
+      inputs.specId || undefined,
+      options.existingSpecs,
+      options.priorState,
+      true
+    ));
+    dependencies.core.info(
+      'Generated asset sync disabled; updated only workspace/spec state in .postman/resources.yaml.'
+    );
+    return;
+  }
 
   const prebuiltByRole = options.preparedPrebuiltCollections;
   const privateMockAuth = options.privateMockAuth === true;
@@ -2585,13 +2628,6 @@ async function exportArtifacts(
     );
   }
 
-  const durableWorkspaceId = resolveDurableWorkspaceId({
-    candidateId: inputs.workspaceId,
-    priorId: options.priorWorkspaceId,
-    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
-    workspaceLinkStatus: options.workspaceLinkStatus
-  });
-
   assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
   writeFileSync('.postman/resources.yaml', buildResourcesManifest(
     durableWorkspaceId,
@@ -2675,7 +2711,7 @@ async function commitAndPushGeneratedFiles(
 ): Promise<{ commitSha: string; resolvedCurrentRef: string; pushed: boolean }> {
   // File generation is independent of git mutation: mode=none still writes the
   // requested CI workflow, but never stages/commits/pushes.
-  if (inputs.generateCiWorkflow) {
+  if (inputs.syncGeneratedAssets !== false && inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs);
     assertPathWithinCwd(inputs.ciWorkflowPath, 'ci-workflow-path');
 
@@ -2710,13 +2746,16 @@ async function commitAndPushGeneratedFiles(
   const gcWorkflowPath = '.github/workflows/postman-preview-gc.yml';
   const gcExists = inputs.generateCiWorkflow && existsSync(gcWorkflowPath);
 
-  const stagePaths = [
-    inputs.artifactDir,
-    '.postman',
-    inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
-    gcExists ? gcWorkflowPath : null,
-    provisionExists ? provisionPath : null
-  ].filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === provisionPath)) as string[];
+  const stagePaths = (inputs.syncGeneratedAssets === false
+    ? ['.postman']
+    : [
+        inputs.artifactDir,
+        '.postman',
+        inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
+        gcExists ? gcWorkflowPath : null,
+        provisionExists ? provisionPath : null
+      ]
+  ).filter((entry) => typeof entry === 'string' && (existsSync(entry) || entry === provisionPath)) as string[];
 
   if (stagePaths.length === 0) {
     dependencies.core.info('No generated repository paths were found; skipping repo mutation.');
@@ -2812,7 +2851,10 @@ async function runRepoSyncInner(
   // inputs). Gated runs never reach here (runAction short-circuits), so the
   // non-canonical tiers seen here are preview and channel.
   const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
-  assertBranchAssetIds(inputs, branchDecision);
+  const syncGeneratedAssets = inputs.syncGeneratedAssets !== false;
+  if (syncGeneratedAssets) {
+    assertBranchAssetIds(inputs, branchDecision);
+  }
   const isCanonicalWriter = branchDecision.tier === 'legacy' || branchDecision.tier === 'canonical';
   if (!isCanonicalWriter) {
     // Preview/channel runs: branch-scoped asset names; no repo-link mutation;
@@ -2840,7 +2882,9 @@ async function runRepoSyncInner(
   }
 
   const outputs = createOutputs(inputs);
-  const versionRequested = inputs.collectionSyncMode === 'version' || inputs.specSyncMode === 'version';
+  const versionRequested =
+    inputs.specSyncMode === 'version' ||
+    (syncGeneratedAssets && inputs.collectionSyncMode === 'version');
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
     throw new Error('release-label is required when collection-sync-mode or spec-sync-mode is version');
@@ -2864,21 +2908,21 @@ async function runRepoSyncInner(
     }
 
     const cloudCollections = resourcesState.cloudResources?.collections;
-    if (!inputs.baselineCollectionId) {
+    if (syncGeneratedAssets && !inputs.baselineCollectionId) {
       inputs.baselineCollectionId =
         findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || '';
       if (inputs.baselineCollectionId) {
         dependencies.core.info('Resolved baseline-collection-id from .postman/resources.yaml');
       }
     }
-    if (!inputs.smokeCollectionId) {
+    if (syncGeneratedAssets && !inputs.smokeCollectionId) {
       inputs.smokeCollectionId =
         findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Smoke]')) || '';
       if (inputs.smokeCollectionId) {
         dependencies.core.info('Resolved smoke-collection-id from .postman/resources.yaml');
       }
     }
-    if (!inputs.contractCollectionId) {
+    if (syncGeneratedAssets && !inputs.contractCollectionId) {
       inputs.contractCollectionId =
         findCloudResourceId(cloudCollections, (filePath) => filePath.includes('[Contract]')) || '';
       if (inputs.contractCollectionId) {
@@ -2887,9 +2931,33 @@ async function runRepoSyncInner(
     }
   }
 
-  const preparedPrebuiltCollections = await logger.phase('prepare-collections', async () =>
-    preparePrebuiltCollections(inputs)
-  );
+  if (!syncGeneratedAssets) {
+    inputs = {
+      ...inputs,
+      baselineCollectionId: '',
+      smokeCollectionId: '',
+      contractCollectionId: '',
+      prebuiltCollectionsJson: undefined,
+      environments: [],
+      environmentUids: {},
+      envRuntimeUrls: {},
+      environmentSyncEnabled: false,
+      systemEnvMap: {},
+      generateCiWorkflow: false,
+      monitorId: '',
+      monitorCron: '',
+      monitorType: 'cli',
+      mockUrl: '',
+      mockEnvironmentEnabled: false
+    };
+    dependencies.core.info(
+      'Generated asset sync disabled; skipping collections, environments, mocks, monitors, exports, and generated CI.'
+    );
+  }
+
+  const preparedPrebuiltCollections = syncGeneratedAssets
+    ? await logger.phase('prepare-collections', async () => preparePrebuiltCollections(inputs))
+    : new Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>();
 
   // Repo-link admission guard: Bifrost enforces global uniqueness of
   // (repository URL, path) -> workspace. Probe before any asset writes so a
@@ -2936,9 +3004,11 @@ async function runRepoSyncInner(
   }
 
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = await logger.phase('sync-environments', async () =>
-    upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
-  );
+  const envUids = syncGeneratedAssets
+    ? await logger.phase('sync-environments', async () =>
+        upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
+      )
+    : {};
   outputs['environment-uids-json'] = JSON.stringify(envUids);
   dependencies.core.setOutput('environment-uids-json', outputs['environment-uids-json']);
 

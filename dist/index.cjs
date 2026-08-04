@@ -116987,6 +116987,12 @@ var postmanRepoSyncActionContract = {
       description: "Contract collection ID used for exported artifacts.",
       required: false
     },
+    "sync-generated-assets": {
+      description: "Whether to create or update collections, environments, mocks, monitors, exported Postman assets, and generated CI. Set false for workspace/spec-only onboarding.",
+      required: false,
+      default: "true",
+      allowedValues: ["true", "false"]
+    },
     "prebuilt-collections-json": {
       description: "Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.",
       required: false,
@@ -119561,6 +119567,7 @@ function resolveInputs(env = process.env) {
     baselineCollectionId: getInput2("baseline-collection-id", env),
     smokeCollectionId: getInput2("smoke-collection-id", env),
     contractCollectionId: getInput2("contract-collection-id", env),
+    syncGeneratedAssets: parseBooleanInput(getInput2("sync-generated-assets", env), true),
     prebuiltCollectionsJson: getInput2("prebuilt-collections-json", env),
     specId: getInput2("spec-id", env),
     specContentChanged: parseBooleanInput(getInput2("spec-content-changed", env), true),
@@ -119982,6 +119989,7 @@ function readActionInputs(actionCore) {
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, "baseline-collection-id"),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, "smoke-collection-id"),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, "contract-collection-id"),
+    INPUT_SYNC_GENERATED_ASSETS: readInput(actionCore, "sync-generated-assets"),
     INPUT_PREBUILT_COLLECTIONS_JSON: readInput(actionCore, "prebuilt-collections-json"),
     INPUT_SPEC_ID: readInput(actionCore, "spec-id"),
     INPUT_SPEC_PATH: readInput(actionCore, "spec-path"),
@@ -120347,7 +120355,7 @@ function resolveDurableWorkspaceId(options) {
   }
   return prior === candidate ? prior : void 0;
 }
-function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState) {
+function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState, preserveGeneratedAssets = false) {
   const manifest = { ...priorState ?? {} };
   delete manifest.version;
   delete manifest.workspace;
@@ -120359,13 +120367,18 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir,
     manifest.workspace = { id: workspaceId };
   }
   const cloudResources = {};
-  const collectionKeys = Object.keys(collectionMap);
+  const effectiveCollectionMap = preserveGeneratedAssets ? { ...priorState?.cloudResources?.collections ?? {}, ...collectionMap } : collectionMap;
+  const collectionKeys = Object.keys(effectiveCollectionMap);
   if (collectionKeys.length > 0) {
-    cloudResources.collections = collectionMap;
+    cloudResources.collections = effectiveCollectionMap;
   }
+  const priorEnvironmentMap = preserveGeneratedAssets ? { ...priorState?.cloudResources?.environments ?? {} } : {};
   const envEntries = Object.entries(envMap);
+  if (Object.keys(priorEnvironmentMap).length > 0 || envEntries.length > 0) {
+    cloudResources.environments = priorEnvironmentMap;
+  }
   if (envEntries.length > 0) {
-    cloudResources.environments = {};
+    cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
@@ -120916,8 +120929,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   if (!inputs.workspaceId) {
     return;
   }
-  assertPathWithinCwd(inputs.artifactDir, "artifact-dir");
-  if (inputs.generateCiWorkflow) {
+  if (inputs.syncGeneratedAssets !== false) {
+    assertPathWithinCwd(inputs.artifactDir, "artifact-dir");
+  }
+  if (inputs.syncGeneratedAssets !== false && inputs.generateCiWorkflow) {
     assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
   }
   const collectionsDir = `${inputs.artifactDir}/collections`;
@@ -120936,6 +120951,32 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     inputs.specSyncMode,
     options.releaseLabel
   ) : void 0;
+  const durableWorkspaceId = resolveDurableWorkspaceId({
+    candidateId: inputs.workspaceId,
+    priorId: options.priorWorkspaceId,
+    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
+    workspaceLinkStatus: options.workspaceLinkStatus
+  });
+  if (inputs.syncGeneratedAssets === false) {
+    ensureDir(".postman");
+    assertPathWithinCwd(".postman/resources.yaml", "resources state target");
+    (0, import_node_fs5.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
+      durableWorkspaceId,
+      {},
+      {},
+      inputs.artifactDir,
+      discoveredSpecs.map((spec) => spec.configRelativePath),
+      mappedSpecCloudKey,
+      inputs.specId || void 0,
+      options.existingSpecs,
+      options.priorState,
+      true
+    ));
+    dependencies.core.info(
+      "Generated asset sync disabled; updated only workspace/spec state in .postman/resources.yaml."
+    );
+    return;
+  }
   const prebuiltByRole = options.preparedPrebuiltCollections;
   const privateMockAuth = options.privateMockAuth === true;
   const collectionSpecs = [
@@ -121032,12 +121073,6 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
       true
     );
   }
-  const durableWorkspaceId = resolveDurableWorkspaceId({
-    candidateId: inputs.workspaceId,
-    priorId: options.priorWorkspaceId,
-    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
-    workspaceLinkStatus: options.workspaceLinkStatus
-  });
   assertPathWithinCwd(".postman/resources.yaml", "resources state target");
   (0, import_node_fs5.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
     durableWorkspaceId,
@@ -121106,7 +121141,7 @@ function createRepoSummary(outputs, envUids, pushed) {
   });
 }
 async function commitAndPushGeneratedFiles(inputs, dependencies) {
-  if (inputs.generateCiWorkflow) {
+  if (inputs.syncGeneratedAssets !== false && inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs);
     assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
     const parts = inputs.ciWorkflowPath.split("/");
@@ -121131,13 +121166,13 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
   const provisionExists = inputs.provider === "github" && (0, import_node_fs5.existsSync)(provisionPath);
   const gcWorkflowPath = ".github/workflows/postman-preview-gc.yml";
   const gcExists = inputs.generateCiWorkflow && (0, import_node_fs5.existsSync)(gcWorkflowPath);
-  const stagePaths = [
+  const stagePaths = (inputs.syncGeneratedAssets === false ? [".postman"] : [
     inputs.artifactDir,
     ".postman",
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
     gcExists ? gcWorkflowPath : null,
     provisionExists ? provisionPath : null
-  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs5.existsSync)(entry) || entry === provisionPath));
+  ]).filter((entry) => typeof entry === "string" && ((0, import_node_fs5.existsSync)(entry) || entry === provisionPath));
   if (stagePaths.length === 0) {
     dependencies.core.info("No generated repository paths were found; skipping repo mutation.");
     return {
@@ -121209,7 +121244,10 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
   const mask = resolveRepoSyncMasker(dependencies);
   const logger = resolveRepoSyncLogger(dependencies);
   const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
-  assertBranchAssetIds(inputs, branchDecision);
+  const syncGeneratedAssets = inputs.syncGeneratedAssets !== false;
+  if (syncGeneratedAssets) {
+    assertBranchAssetIds(inputs, branchDecision);
+  }
   const isCanonicalWriter = branchDecision.tier === "legacy" || branchDecision.tier === "canonical";
   if (!isCanonicalWriter) {
     if (branchDecision.tier === "preview" && branchDecision.identity.headBranch) {
@@ -121234,7 +121272,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     );
   }
   const outputs = createOutputs(inputs);
-  const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
+  const versionRequested = inputs.specSyncMode === "version" || syncGeneratedAssets && inputs.collectionSyncMode === "version";
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
     throw new Error("release-label is required when collection-sync-mode or spec-sync-mode is version");
@@ -121248,29 +121286,49 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
       dependencies.core.info("Resolved workspace-id from .postman/resources.yaml");
     }
     const cloudCollections = resourcesState.cloudResources?.collections;
-    if (!inputs.baselineCollectionId) {
+    if (syncGeneratedAssets && !inputs.baselineCollectionId) {
       inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || "";
       if (inputs.baselineCollectionId) {
         dependencies.core.info("Resolved baseline-collection-id from .postman/resources.yaml");
       }
     }
-    if (!inputs.smokeCollectionId) {
+    if (syncGeneratedAssets && !inputs.smokeCollectionId) {
       inputs.smokeCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Smoke]")) || "";
       if (inputs.smokeCollectionId) {
         dependencies.core.info("Resolved smoke-collection-id from .postman/resources.yaml");
       }
     }
-    if (!inputs.contractCollectionId) {
+    if (syncGeneratedAssets && !inputs.contractCollectionId) {
       inputs.contractCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Contract]")) || "";
       if (inputs.contractCollectionId) {
         dependencies.core.info("Resolved contract-collection-id from .postman/resources.yaml");
       }
     }
   }
-  const preparedPrebuiltCollections = await logger.phase(
-    "prepare-collections",
-    async () => preparePrebuiltCollections(inputs)
-  );
+  if (!syncGeneratedAssets) {
+    inputs = {
+      ...inputs,
+      baselineCollectionId: "",
+      smokeCollectionId: "",
+      contractCollectionId: "",
+      prebuiltCollectionsJson: void 0,
+      environments: [],
+      environmentUids: {},
+      envRuntimeUrls: {},
+      environmentSyncEnabled: false,
+      systemEnvMap: {},
+      generateCiWorkflow: false,
+      monitorId: "",
+      monitorCron: "",
+      monitorType: "cli",
+      mockUrl: "",
+      mockEnvironmentEnabled: false
+    };
+    dependencies.core.info(
+      "Generated asset sync disabled; skipping collections, environments, mocks, monitors, exports, and generated CI."
+    );
+  }
+  const preparedPrebuiltCollections = syncGeneratedAssets ? await logger.phase("prepare-collections", async () => preparePrebuiltCollections(inputs)) : /* @__PURE__ */ new Map();
   let skipRepositoryLinkPost = false;
   let repositoryLinkPreflightWasFree = false;
   if (inputs.workspaceLinkEnabled && inputs.workspaceId && inputs.repoUrl && dependencies.internalIntegration?.findWorkspaceForRepo) {
@@ -121305,10 +121363,10 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     }
   }
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = await logger.phase(
+  const envUids = syncGeneratedAssets ? await logger.phase(
     "sync-environments",
     async () => upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
-  );
+  ) : {};
   outputs["environment-uids-json"] = JSON.stringify(envUids);
   dependencies.core.setOutput("environment-uids-json", outputs["environment-uids-json"]);
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {

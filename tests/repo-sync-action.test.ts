@@ -2712,6 +2712,114 @@ describe('repo sync action', () => {
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
   });
 
+  it('supports workspace and spec sync without generated assets or cloud monitors', async () => {
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  collections:',
+        '    ../postman/collections/existing: col-existing',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-existing',
+        '  specs:',
+        '    ../existing.yaml: spec-existing',
+        ''
+      ].join('\n')
+    );
+    writeFileSync(
+      'openapi.yaml',
+      'openapi: 3.1.0\ninfo:\n  title: Specs Only\n  version: 1.0.0\npaths: {}\n'
+    );
+
+    const postman = {
+      createEnvironment: vi.fn(),
+      updateEnvironment: vi.fn(),
+      findEnvironmentByName: vi.fn(),
+      createMock: vi.fn(),
+      findMockByCollection: vi.fn(),
+      createMonitor: vi.fn(),
+      findMonitorByCollection: vi.fn(),
+      runMonitor: vi.fn(),
+      getCollection: vi.fn(),
+      getEnvironment: vi.fn()
+    } as unknown as RepoSyncDependencies['postman'];
+    const internalIntegration = {
+      associateSystemEnvironments: vi.fn(),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+    };
+    const repoMutation = {
+      commitAndPush: vi.fn().mockResolvedValue({
+        commitSha: 'spec-only-commit',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      })
+    };
+
+    const result = await runRepoSync(
+      createInputs({
+        specId: 'spec-new',
+        specPath: 'openapi.yaml',
+        syncGeneratedAssets: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        internalIntegration,
+        repoMutation: repoMutation as unknown as RepoSyncDependencies['repoMutation']
+      }
+    );
+
+    expect(result).toMatchObject({
+      'workspace-link-status': 'success',
+      'environment-sync-status': 'skipped',
+      'environment-uids-json': '{}',
+      'mock-url': '',
+      'monitor-id': ''
+    });
+    expect(internalIntegration.connectWorkspaceToRepository).toHaveBeenCalledWith(
+      'ws-123',
+      'https://github.com/postman-cs/repo-sync-demo',
+      { preflightWasFree: true }
+    );
+    expect(internalIntegration.associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.findMockByCollection).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.findMonitorByCollection).not.toHaveBeenCalled();
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(existsSync('postman')).toBe(false);
+    expect(existsSync('.github/workflows/ci.yml')).toBe(false);
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources).toEqual({
+      version: 2,
+      workspace: { id: 'ws-123' },
+      canonical: {
+        collections: { '../postman/collections/existing': 'col-existing' },
+        environments: {
+          '../postman/environments/prod.postman_environment.json': 'env-existing'
+        },
+        specs: {
+          '../existing.yaml': 'spec-existing',
+          '../openapi.yaml': 'spec-new'
+        }
+      }
+    });
+    expect(repoMutation.commitAndPush).toHaveBeenCalledWith(
+      expect.objectContaining({ stagePaths: ['.postman'] })
+    );
+  });
+
   it('refresh reruns keep the same tracked collection ids in .postman/resources.yaml', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
