@@ -15,6 +15,7 @@ const windowsCwdSensitiveTests = [
   'tests/contract/cassette-replay.test.ts',
   'tests/contract/harness.test.ts',
   'tests/contract/monitor-rebind-contract.test.ts',
+  'tests/contract/private-mock-branch-contract.test.ts',
   'tests/cli.test.ts',
   'tests/path-sandboxing.test.ts',
   'tests/create-reconciliation.test.ts',
