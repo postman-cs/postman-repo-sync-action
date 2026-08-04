@@ -1,5 +1,14 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
+// Hosted CI runners run the contract lane under heavy contention: full
+// runAction flows that take tens of milliseconds locally can take many seconds
+// there. The fake-timer harness bounds itself by wall clock
+// (FAKE_TIMER_SETTLE_DEADLINE_MS + FAKE_TIMER_CLEANUP_GRACE_MS) so it can fail
+// with restored timers and cwd; this timeout has to stay strictly larger than
+// that budget, which tests/contract/harness.test.ts asserts. Local runs keep
+// vitest's strict default so a real slowdown still surfaces as a failure.
+const CI_TIMEOUT_MS = 30_000;
+
 const windowsCwdSensitiveTests = [
   'tests/repo-sync-action.test.ts',
   'tests/contract/credential-matrix.test.ts',
@@ -19,7 +28,8 @@ const testEnvironment = {
   environment: 'node',
   // Telemetry is fire-and-forget; keep it disabled in unit tests so no run
   // ever attempts a network call. Enabled-path tests pass an explicit env.
-  env: { POSTMAN_ACTIONS_TELEMETRY: 'off' }
+  env: { POSTMAN_ACTIONS_TELEMETRY: 'off' },
+  ...(process.env.CI ? { testTimeout: CI_TIMEOUT_MS, hookTimeout: CI_TIMEOUT_MS } : {})
 } as const;
 
 export default defineConfig({
@@ -54,6 +64,7 @@ export default defineConfig({
           // Telemetry is fire-and-forget; keep it disabled in unit tests so no run
           // ever attempts a network call. Enabled-path tests pass an explicit env.
           env: { POSTMAN_ACTIONS_TELEMETRY: 'off' },
+          ...(process.env.CI ? { testTimeout: CI_TIMEOUT_MS, hookTimeout: CI_TIMEOUT_MS } : {}),
           include: ['tests/**/*.test.ts'],
           exclude: [...configDefaults.exclude, 'tests/emulator/**']
         }
