@@ -14,6 +14,50 @@ import { vi } from 'vitest';
 
 import { createExecStub, NEUTRALIZED_ENV_VARS } from './platform-fake.js';
 
+// Preserve the real event-loop yield before Vitest replaces timer globals.
+const realSetImmediate = setImmediate;
+const MAX_TIMER_FLUSH_PASSES = 100_000;
+const REAL_EVENT_LOOP_YIELD_INTERVAL = 10;
+
+/**
+ * Run action work under vitest fake timers, flushing retry/poll sleep chains
+ * until the promise settles. Production converge sleeps stay real outside tests.
+ */
+export async function runWithFakeTimers<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-07-31T00:00:00.000Z'));
+  try {
+    const pending = fn();
+    let settled: { value: T } | { error: unknown } | undefined;
+    void pending.then(
+      (value) => {
+        settled = { value };
+      },
+      (error) => {
+        settled = { error };
+      }
+    );
+    for (let pass = 0; pass < MAX_TIMER_FLUSH_PASSES && !settled; pass += 1) {
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+      if ((pass + 1) % REAL_EVENT_LOOP_YIELD_INTERVAL === 0) {
+        await new Promise<void>((resolve) => realSetImmediate(resolve));
+      }
+    }
+    if (!settled) {
+      throw new Error(
+        `Fake timer flush budget exhausted after ${MAX_TIMER_FLUSH_PASSES} passes: action promise did not settle`
+      );
+    }
+    if ('error' in settled) {
+      throw settled.error;
+    }
+    return settled.value;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 export interface ContractCoreLike {
   getInput(name: string, options?: { required?: boolean }): string;
   info(message: string): void;
@@ -112,7 +156,7 @@ export async function runContractAction(options: ContractRunOptions): Promise<Co
 
   let error: unknown;
   try {
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
   } catch (caught) {
     error = caught;
   } finally {
