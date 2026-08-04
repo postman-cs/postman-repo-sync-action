@@ -50,6 +50,14 @@ export function createExecStub(): ExecLike {
 
 type FakeBodyShape = 'none' | 'record' | 'array';
 
+/**
+ * Bare collection model id (no owner prefix). Live-proven 2026-08-03: the
+ * collection-service ROOT routes fail closed on bare ids —
+ * PATCH /v3/collections/:id returns 403 FORBIDDEN unless the full
+ * owner-prefixed public UID is sent. Export and DELETE still accept bare ids.
+ */
+const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface RepoSyncFakeRoute {
   service: string;
   method: string;
@@ -623,7 +631,19 @@ export function createPlatform(options: PlatformOptions = {}) {
           return json({ data: { collection: resource?.collection ?? { info: { name: 'baseline' }, item: [] } } });
         }
         if (pmethod === 'patch' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
-          return json({ data: { id: ppath.split('/').pop() } });
+          const candidate = ppath.split('/').pop() || '';
+          if (BARE_COLLECTION_MODEL_ID.test(candidate)) {
+            return json(
+              {
+                error: {
+                  code: 'FORBIDDEN',
+                  message: `Access to the requested resource "${candidate}" has been denied`
+                }
+              },
+              403
+            );
+          }
+          return json({ data: { id: candidate } });
         }
         if (pmethod === 'delete' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
           return deleteOwned('collection', collections, ppath.split('/').pop() || '');
