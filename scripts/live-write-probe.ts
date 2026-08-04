@@ -2,7 +2,8 @@
  * Live WRITE probe for gateway mock + monitor services against the same path
  * e2e uses: mint access token → disposable workspace → spec upload → gateway
  * collection generation → sync env import → PostmanGatewayAssetsClient
- * createMock/createMonitor (public uid in, model id on the wire) → teardown.
+ * createMock/createMonitor + private-mock root auth (public uid in, model id on
+ * the wire only where required) → teardown.
  *
  * Unlike the old probe, this does NOT bind to pre-existing workspace/collection
  * list entries — it creates a fresh spec-generated collection so ACS permission
@@ -353,6 +354,21 @@ async function main(): Promise<void> {
     const privateRecord = privateCreate.json?.data ?? privateCreate.json;
     privateMockUid = String((privateRecord as JsonRecord | null)?.id ?? '').trim();
     console.log(`  [${privateCreate.status}] private mock create :: ${recordShape(privateRecord)}`);
+
+    console.log('\n== private mock: collection-root runtime auth (production path) ==');
+    try {
+      const configured = await assets.configurePrivateMockRuntimeAuth(publicCollectionUid);
+      const repeated = await assets.configurePrivateMockRuntimeAuth(publicCollectionUid);
+      console.log(`  [ok] root auth configured=${configured} repeated=${repeated}`);
+      if (configured !== 1 || repeated !== 0) {
+        fail(
+          'private mock root auth',
+          `expected first configure=1 and repeat=0, got ${configured} and ${repeated}`
+        );
+      }
+    } catch (error) {
+      fail('private mock root auth', error instanceof Error ? error.message : String(error));
+    }
 
     const rawMockList = await gwRaw(gateway, 'mock', 'get', `/mocks?workspace=${workspaceId}`);
     console.log(`  [${rawMockList.status}] raw mock list envelope :: ${recordShape(rawMockList.json)}`);

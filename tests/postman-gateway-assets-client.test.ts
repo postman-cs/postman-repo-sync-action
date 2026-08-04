@@ -185,6 +185,51 @@ describe('PostmanGatewayAssetsClient', () => {
     });
   });
 
+  it('keeps the owner-prefixed UID on private-mock collection root reads and writes', async () => {
+    const requestJson = vi.fn(async (request: { method: string; path: string }) => {
+      if (request.method === 'get' && request.path === `/v3/collections/${PUBLIC_UID}/export`) {
+        return collectionExport([]);
+      }
+      if (request.method === 'patch' && request.path === `/v3/collections/${PUBLIC_UID}`) {
+        return { data: {} };
+      }
+      const id = request.path.split('/').filter(Boolean).at(-1);
+      throw bifrostPatchHttpError(
+        403,
+        JSON.stringify({
+          error: {
+            code: 'FORBIDDEN',
+            message: `Access to the requested resource "${id}" has been denied`
+          }
+        })
+      );
+    });
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws'
+    });
+
+    await expect(assets.configurePrivateMockRuntimeAuth(PUBLIC_UID)).resolves.toBe(1);
+    expect(requestJson.mock.calls.map(([request]) => request.path)).toEqual([
+      `/v3/collections/${PUBLIC_UID}/export`,
+      `/v3/collections/${PUBLIC_UID}`
+    ]);
+  });
+
+  it('rejects a bare collection model ID before addressing a private-mock root route', async () => {
+    const bareId = PUBLIC_UID.split('-').slice(1).join('-');
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws'
+    });
+
+    await expect(assets.configurePrivateMockRuntimeAuth(bareId)).rejects.toThrow(
+      /COLLECTION_ROOT_UID_REQUIRED/
+    );
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it('adds an idempotent private-mock runtime hook at the collection root without persisting a credential', async () => {
     const requestJson = vi.fn(async (request: { method: string; path: string; body?: unknown }) => {
       if (request.method === 'get' && request.path.endsWith('/export')) {
