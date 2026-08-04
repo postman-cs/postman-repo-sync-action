@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 import {
@@ -31,8 +31,56 @@ type ExecPwshFailure = {
 
 const PWSH_PATH = process.env.PWSH_PATH?.trim() || 'pwsh';
 
+// Per-test vitest budget for every test below that spawns real pwsh.
+const PWSH_TEST_TIMEOUT_MS = 150_000;
+
+// Nine short per-attempt execFileSync budgets for execPwsh. The generated scripts
+// complete in well under 1s once spawned, but this host intermittently stalls pwsh
+// process spawn for ~49-99s at roughly 15-25% of spawns (unsigned Homebrew pwsh,
+// `spctl` reports `source=no usable signature`, heavy machine load). The stall is
+// NOT first-spawn-only, so a `beforeAll` warmup cannot absorb it. Short attempts
+// SIGKILL a stalled spawn and respawn; a fresh spawn normally completes in ~250-370ms,
+// so nine short attempts make an all-attempts-stall failure vanishingly unlikely while
+// still surfacing a genuinely hung script (every attempt would time out). Their sum
+// is the worst-case wall clock one execPwsh call can consume and must stay strictly
+// inside PWSH_TEST_TIMEOUT_MS (asserted below).
+const PWSH_ATTEMPT_TIMEOUTS_MS = [5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 5_000] as const;
+
+// pwsh/CLR cold start can intermittently take 50-99s on an unsigned/loaded host, so
+// prime the runtime once outside any per-test budget instead of charging that one-time
+// process-startup cost to the first test that happens to spawn pwsh.
+let pwshWarmed = false;
+
+function warmPwsh(): void {
+  if (pwshWarmed) return;
+  pwshWarmed = true;
+  try {
+    execFileSync(
+      PWSH_PATH,
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Write-Output warm'],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PSModulePath: '',
+          POWERSHELL_TELEMETRY_OPTOUT: '1',
+          POWERSHELL_UPDATECHECK: 'Off',
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        timeout: 180_000,
+        killSignal: 'SIGKILL'
+      }
+    );
+  } catch {
+    // Cache-priming spawn only. If pwsh is missing or slow, the real tests still run
+    // and still fail honestly on their own assertions.
+  }
+}
+
 function execPwsh(command: string, options: ExecPwshOptions = {}): string {
-  const run = (): string =>
+  const run = (timeoutMs: number): string =>
     execFileSync(
       PWSH_PATH,
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
@@ -54,18 +102,17 @@ function execPwsh(command: string, options: ExecPwshOptions = {}): string {
         // Never inherit stdin: vitest workers keep a pipe open and pwsh can block on read.
         stdio: ['ignore', 'pipe', 'pipe'],
         encoding: 'utf8',
-        // Scripts finish in <1s. Short attempts let a stalled CLR startup be
-        // replaced while keeping the full retry window below the 60s test budget.
-        timeout: 5_000,
+        // Startup is warmed once in beforeAll, so these per-attempt budgets bound
+        // script execution only and still catch a genuinely hung script.
+        timeout: timeoutMs,
         killSignal: 'SIGKILL'
       }
     );
 
-  const maxAttempts = 8;
   let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (const timeoutMs of PWSH_ATTEMPT_TIMEOUTS_MS) {
     try {
-      return run();
+      return run(timeoutMs);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ETIMEDOUT') throw error;
       lastError = error;
@@ -74,6 +121,19 @@ function execPwsh(command: string, options: ExecPwshOptions = {}): string {
 
   throw lastError;
 }
+
+beforeAll(() => {
+  warmPwsh();
+}, 240_000);
+
+describe('execPwsh retry budget', () => {
+  it('keeps the full pwsh attempt ladder strictly inside the per-test budget', () => {
+    const ladderTotalMs = PWSH_ATTEMPT_TIMEOUTS_MS.reduce<number>((sum, ms) => sum + ms, 0);
+    // Strict inequality: spawn/teardown overhead around each attempt needs real
+    // headroom, so a ladder that exactly equals the budget is already a bug.
+    expect(ladderTotalMs).toBeLessThan(PWSH_TEST_TIMEOUT_MS);
+  });
+});
 
 function buildFakePostmanHarness(exitCode: number): string {
   return [
@@ -598,7 +658,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
   });
 
   describe.sequential('PowerShell Azure DevOps execution', () => {
-    it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: 60_000 }, () => {
+    it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const parsed = parse(
         getCiWorkflowTemplate('azure-devops', {
           runnerOs: 'windows'
@@ -640,7 +700,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
       }
     });
 
-    it('forwards RESPONSE_TIME_THRESHOLD through the full generated Smoke pwsh body', { timeout: 60_000 }, () => {
+    it('forwards RESPONSE_TIME_THRESHOLD through the full generated Smoke pwsh body', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const { smokeStep, contractStep } = getWindowsSmokeAndContractSteps();
       // Contract step uses the same Resolve-AdoOptional threshold wiring; keep
       // one real pwsh boundary on Smoke and scale the rest via template parity.
@@ -680,7 +740,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
       expect(explicit.thresholdPair).toEqual(['--env-var', 'RESPONSE_TIME_THRESHOLD=5000']);
     });
 
-    it('keeps RESPONSE_TIME_THRESHOLD as one argv element through & postman @arguments for metacharacter values', { timeout: 60_000 }, () => {
+    it('keeps RESPONSE_TIME_THRESHOLD as one argv element through & postman @arguments for metacharacter values', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const { smokeStep, contractStep } = getWindowsSmokeAndContractSteps();
       expect(contractStep.pwsh).toContain(
         "'--env-var', \"RESPONSE_TIME_THRESHOLD=$responseTimeThreshold\""
@@ -706,7 +766,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
       }
     });
 
-    it('fails the full generated Smoke pwsh body when postman exits non-zero', { timeout: 60_000 }, () => {
+    it('fails the full generated Smoke pwsh body when postman exits non-zero', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const { smokeStep, contractStep } = getWindowsSmokeAndContractSteps();
       expect(contractStep.pwsh).toContain('failed with exit code');
       const sharedEnv = {
