@@ -473,6 +473,7 @@ describe('runCli credential preflight seam', () => {
     vi.stubEnv('GITHUB_ACTIONS', 'true');
     vi.stubEnv('GITHUB_REF', `refs/heads/${ambientBranch}`);
     vi.stubEnv('GITHUB_REF_NAME', ambientBranch);
+    vi.stubEnv('GITHUB_HEAD_REF', '');
     vi.stubEnv('POSTMAN_BRANCH_DECISION', '');
 
     const env: NodeJS.ProcessEnv = {
