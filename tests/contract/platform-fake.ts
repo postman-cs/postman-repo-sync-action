@@ -53,8 +53,8 @@ type FakeBodyShape = 'none' | 'record' | 'array';
 /**
  * Bare collection model id (no owner prefix). Live-proven 2026-08-03: the
  * collection-service ROOT routes fail closed on bare ids —
- * PATCH /v3/collections/:id returns 403 FORBIDDEN unless the full
- * owner-prefixed public UID is sent. Export and DELETE still accept bare ids.
+ * GET /v3/collections/:id/export and PATCH /v3/collections/:id both return
+ * 403 FORBIDDEN unless the full owner-prefixed public UID is sent.
  */
 const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -634,6 +634,17 @@ export function createPlatform(options: PlatformOptions = {}) {
       if (svc === 'collection') {
         if (pmethod === 'get' && /\/export$/.test(ppath)) {
           const candidate = ppath.replace(/\/export$/, '').split('/').pop() || '';
+          if (BARE_COLLECTION_MODEL_ID.test(candidate)) {
+            return json(
+              {
+                error: {
+                  code: 'FORBIDDEN',
+                  message: `Access to the requested resource "${candidate}" has been denied`
+                }
+              },
+              403
+            );
+          }
           const resource = resolveOwned(collections, candidate);
           return json({ data: { collection: resource?.collection ?? { info: { name: 'baseline' }, item: [] } } });
         }

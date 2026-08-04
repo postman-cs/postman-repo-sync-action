@@ -108,6 +108,8 @@ export interface PostmanGatewayAssetsClientOptions {
  * (RESOURCE_NOT_FOUND) — are NOT wired here. Collection reads use the verified
  * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
  * reads/updates use the `sync` service. PMAK is never used for any asset op.
+ * Collection export and root-mutation routes require the full owner-prefixed
+ * public UID; bare model ids are rejected before transport.
  *
  * Create operations submit once and reconcile via live discovery on ambiguous
  * responses. Blind transport retries are reserved for safe reads. Per-process
@@ -335,6 +337,55 @@ export class PostmanGatewayAssetsClient {
       ? (record.published ? 'public' : 'private')
       : 'unknown';
     return { uid, name, collection, mockUrl, environment, visibility };
+  }
+
+  /**
+   * Validate and normalize a collection public UID for routes that require the
+   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): collection
+   * GET export, collection-root PATCH/read, and private-mock runtime auth.
+   *
+   * - Trims once.
+   * - Rejects empty values.
+   * - Rejects bare UUID model IDs (5 hyphen segments) with an actionable
+   *   `COLLECTION_ROOT_UID_REQUIRED`-style message — the live service denies
+   *   these routes on bare ids (403 FORBIDDEN).
+   * - Enforces a positive safe single-path-segment contract: only letters,
+   *   digits, and safe UID punctuation (hyphen, underscore, dot, tilde) are
+   *   permitted, and the value must contain at least one hyphen (owner prefix).
+   *   Everything else — backslash, percent-encoded slash/query, whitespace,
+   *   `&`, `=`, control characters, newlines, and other non-segment characters —
+   *   is rejected before any gateway call to prevent path/query alteration.
+   * - Returns the full safe owner-prefixed UID verbatim; never calls
+   *   `toModelId`. Use `toModelId` only for namespaces documented as bare-ID
+   *   routes (sync environment routes, entity-id GETs).
+   * - The invalid-character error is static and does not echo the raw value,
+   *   preventing control-character or log-injection attacks.
+   */
+  private requireCollectionPublicUid(uid: string): string {
+    const trimmed = String(uid ?? '').trim();
+    if (!trimmed) {
+      throw new Error(
+        'COLLECTION_ROOT_UID_REQUIRED: Collection UID must not be empty.'
+      );
+    }
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+      throw new Error(
+        `COLLECTION_ROOT_UID_REQUIRED: This route requires the full owner-prefixed collection UID, got bare model id.`
+      );
+    }
+    // Positive safe single-path-segment contract: only letters, digits, and
+    // safe UID punctuation (hyphen, underscore, dot, tilde) are permitted.
+    // The value must contain at least one hyphen (owner prefix). Everything
+    // else — backslash, percent, whitespace, &, =, control chars, slashes,
+    // query delimiters — is rejected before transport. The error is static
+    // and does not echo the raw unsafe value.
+    const SAFE_COLLECTION_UID = /^[a-zA-Z0-9._~]+(-[a-zA-Z0-9._~]+)+$/;
+    if (!SAFE_COLLECTION_UID.test(trimmed)) {
+      throw new Error(
+        'COLLECTION_ROOT_UID_INVALID: Collection UID must be an owner-prefixed value containing only letters, digits, hyphens, underscores, dots, and tildes.'
+      );
+    }
+    return trimmed;
   }
 
   /**
@@ -655,7 +706,9 @@ export class PostmanGatewayAssetsClient {
   // serve `GET /v3/collections/:id/export`, which returns the canonical v3
   // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
   // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
-  // Both the full public uid and the bare model id are accepted on the path.
+  // The full owner-prefixed public UID must be sent verbatim; the bare model id
+  // is rejected on root mutation routes (403 FORBIDDEN) and must not be used
+  // here either, so the caller is responsible for passing the public UID.
 
   /**
    * Fetch a collection's v3 IR through the gateway v3 export endpoint.
@@ -665,7 +718,7 @@ export class PostmanGatewayAssetsClient {
    * reads.
    */
   async getCollection(uid: string): Promise<unknown> {
-    const id = this.toModelId(uid);
+    const id = this.requireCollectionPublicUid(uid);
     const response = await this.gateway.requestJson<JsonRecord>({
       service: 'collection',
       method: 'get',
@@ -774,7 +827,7 @@ export class PostmanGatewayAssetsClient {
   }
 
   private async readCollectionRootScripts(collectionUid: string): Promise<JsonRecord[]> {
-    const id = String(collectionUid ?? '').trim();
+    const id = this.requireCollectionPublicUid(collectionUid);
     const response = await this.gateway.requestJson<JsonRecord>({
       service: 'collection',
       method: 'get',
@@ -791,7 +844,7 @@ export class PostmanGatewayAssetsClient {
   }
 
   private async patchCollectionRootScripts(collectionUid: string, scripts: JsonRecord[]): Promise<void> {
-    const id = String(collectionUid ?? '').trim();
+    const id = this.requireCollectionPublicUid(collectionUid);
     await this.gateway.requestJson<JsonRecord>(
       {
         service: 'collection',
@@ -809,13 +862,7 @@ export class PostmanGatewayAssetsClient {
    * the variable name and header wiring, never the credential.
    */
   async configurePrivateMockRuntimeAuth(collectionUid: string): Promise<number> {
-    const cid = String(collectionUid ?? '').trim();
-    if (!cid) return 0;
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cid)) {
-      throw new Error(
-        `COLLECTION_ROOT_UID_REQUIRED: Private-mock root auth requires the full owner-prefixed collection UID, got bare model id ${cid}.`
-      );
-    }
+    const cid = this.requireCollectionPublicUid(collectionUid);
 
     const installFromFreshRoot = async (existingScripts: JsonRecord[]): Promise<number> => {
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
