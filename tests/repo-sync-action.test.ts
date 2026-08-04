@@ -53,6 +53,7 @@ import {
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
   PRIVATE_MOCK_AUTH_ROOT_TYPE
 } from '../src/lib/postman/private-mock-auth-script.js';
+import { runWithFakeTimers } from './contract/harness.js';
 
 type IndexModule = typeof import('../src/index.js');
 type IdentityModule = typeof import('../src/lib/postman/credential-identity.js');
@@ -6210,7 +6211,7 @@ describe('runAction credential preflight', () => {
       events
     );
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(outputs['sync-status']).toBe('skipped-branch-gate');
     const branchDecision = JSON.parse(outputs['branch-decision']);
@@ -6224,7 +6225,7 @@ describe('runAction credential preflight', () => {
     vi.stubGlobal('fetch', createRunActionFetchRouter({ events }));
     const { core, infos, outputs } = createRunActionCore(baseInputValues(), events);
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
     const pmakLineIndex = events.findIndex((entry) =>
@@ -6250,7 +6251,7 @@ describe('runAction credential preflight', () => {
     );
     const { core, warnings, outputs } = createRunActionCore(baseInputValues(), events);
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
     expect(
@@ -6284,7 +6285,7 @@ describe('runAction credential preflight', () => {
 
     let thrown: unknown;
     try {
-      await runAction(core, createExecStub());
+      await runWithFakeTimers(() => runAction(core, createExecStub()));
     } catch (error) {
       thrown = error;
     }
@@ -6314,7 +6315,7 @@ describe('runAction credential preflight', () => {
     );
     const { core, warnings, outputs } = createRunActionCore(baseInputValues(), events);
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(JSON.parse(outputs['environment-uids-json'])).toEqual({ prod: '123-env-prod-uid' });
     const note = warnings.find((line) => line.includes('credential preflight note'));
@@ -6334,9 +6335,9 @@ describe('runAction credential preflight', () => {
       events
     );
 
-    await expect(runAction(core, createExecStub())).rejects.toThrow(
-      /Unsupported credential-preflight/
-    );
+    await expect(
+      runWithFakeTimers(() => runAction(core, createExecStub()))
+    ).rejects.toThrow(/Unsupported credential-preflight/);
     expect(events).toHaveLength(0);
   });
 
@@ -6360,7 +6361,7 @@ describe('runAction credential preflight', () => {
       events
     );
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(outputs['environment-sync-status']).toBe('failed');
     const adviceWarning = warnings.find((line) =>

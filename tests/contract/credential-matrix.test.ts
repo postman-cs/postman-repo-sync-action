@@ -18,6 +18,7 @@ import {
   createPlatform,
   NEUTRALIZED_ENV_VARS
 } from './platform-fake.js';
+import { runWithFakeTimers } from './harness.js';
 
 const ADAPTER_MODULE = '../../src/lib/postman/internal-integration-adapter.js';
 
@@ -114,7 +115,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs());
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     // Org-mode auto-detected.
     expect(platform.events.some((entry) => entry.startsWith('proxy:ums'))).toBe(true);
@@ -133,7 +134,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs());
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(platform.events.some((entry) => entry.startsWith('proxy:ums'))).toBe(true);
     expect(platform.state.mockCreated).toBe(true);
@@ -146,7 +147,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '' }));
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     // /me was NOT called (no PMAK to validate) — identity createApiKey was.
     expect(platform.events.some((entry) => entry.includes('GET') && entry.includes('/me'))).toBe(false);
@@ -163,7 +164,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '' }));
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(
       platform.events.some((entry) => entry.startsWith('proxy:identity POST /api/keys'))
@@ -189,7 +190,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs({ 'postman-access-token': '' }));
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     // The eager mint happened exactly once, and before the first gateway proxy call.
     expect(platform.state.mintCount).toBe(1);
@@ -212,7 +213,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs({ 'postman-access-token': '' }));
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     expect(platform.state.mintCount).toBe(1);
     expect(platform.state.mockCreated).toBe(true);
@@ -225,7 +226,7 @@ describe('contract: repo-sync org x credential matrix', () => {
     vi.stubGlobal('fetch', platform.fetch);
     const { core, outputs } = createCore(baseInputs({ 'postman-stack': 'beta' }));
 
-    await runAction(core, createExecStub());
+    await runWithFakeTimers(() => runAction(core, createExecStub()));
 
     const fetches = platform.events.filter((entry) => entry.startsWith('fetch:'));
     expect(fetches.some((entry) => entry.includes('api.getpostman-beta.com'))).toBe(true);
