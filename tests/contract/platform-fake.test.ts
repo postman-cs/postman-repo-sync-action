@@ -207,6 +207,36 @@ describe('contract: platform fake routing', () => {
     }
   });
 
+  it('rejects a bare model id on collection ROOT PATCH with the live 403 wire shape', async () => {
+    const platform = createPlatform();
+    const bareId = '6b9b8a7c-1111-4222-8333-444455556666';
+
+    const denied = await proxy(platform, {
+      service: 'collection',
+      method: 'patch',
+      path: `/v3/collections/${bareId}`,
+      body: [{ op: 'add', path: '/scripts', value: [] }]
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toEqual({
+      error: {
+        code: 'FORBIDDEN',
+        message: `Access to the requested resource "${bareId}" has been denied`
+      }
+    });
+
+    const allowed = await proxy(platform, {
+      service: 'collection',
+      method: 'patch',
+      path: `/v3/collections/132319-${bareId}`,
+      body: [{ op: 'add', path: '/scripts', value: [] }]
+    });
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toEqual({
+      data: { id: `132319-${bareId}` }
+    });
+  });
+
   it('returns 403 instead of deleting a collection owned by another user', async () => {
     const platform = createPlatform({
       userId: 123,
