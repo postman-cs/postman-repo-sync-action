@@ -1,0 +1,121 @@
+/**
+ * Full runAction proof for the two branch-aware paths that can mutate private
+ * mock collections. Both paths must carry the owner-prefixed public UID from
+ * bootstrap through repo-sync to collection ROOT GET/PATCH; the live service
+ * denies the same routes when addressed by a bare model id.
+ */
+import { describe, expect, it } from 'vitest';
+
+import { runContractAction } from './harness.js';
+import { createPlatform } from './platform-fake.js';
+
+const OWNER_ID = 12_345_678;
+const SMOKE_MODEL_ID = '6b9b8a7c-1111-4222-8333-444455556666';
+const CONTRACT_MODEL_ID = '7c0c9b8d-2222-4333-8444-555566667777';
+const SMOKE_UID = `${OWNER_ID}-${SMOKE_MODEL_ID}`;
+const CONTRACT_UID = `${OWNER_ID}-${CONTRACT_MODEL_ID}`;
+
+function collection(name: string, id: string): Record<string, unknown> {
+  return {
+    id,
+    name,
+    $kind: 'collection',
+    items: [
+      {
+        id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        name: 'Health',
+        $kind: 'http-request',
+        method: 'GET',
+        url: 'https://api.example.com/health'
+      }
+    ]
+  };
+}
+
+function branchDecision(tier: 'canonical' | 'preview'): string {
+  const preview = tier === 'preview';
+  return JSON.stringify({
+    tier,
+    strategy: 'preview',
+    identity: {
+      provider: 'github',
+      headBranch: preview ? 'feature/private-mock' : 'main',
+      rawRef: preview ? 'refs/heads/feature/private-mock' : 'refs/heads/main',
+      defaultBranch: 'main',
+      refKind: preview ? 'branch' : 'default-branch',
+      isPrContext: false,
+      isForkPr: false
+    },
+    canonicalBranch: 'main',
+    reason: 'contract fixture'
+  });
+}
+
+function inputs(): Record<string, string> {
+  return {
+    'project-name': 'core-payments',
+    'workspace-id': 'ws-contract',
+    'baseline-collection-id': `${OWNER_ID}-5a8a796b-0000-4111-8222-333344445555`,
+    'smoke-collection-id': SMOKE_UID,
+    'contract-collection-id': CONTRACT_UID,
+    'postman-api-key': 'pmak-test',
+    'postman-access-token': 'access-token-test',
+    'environments-json': '["prod"]',
+    'env-runtime-urls-json': '{"prod":"https://api.example.com"}',
+    'mock-visibility': 'private',
+    'repo-write-mode': 'none',
+    'generate-ci-workflow': 'false',
+    'workspace-link-enabled': 'false',
+    'environment-sync-enabled': 'false',
+    'branch-strategy': 'preview'
+  };
+}
+
+describe.each(['canonical', 'preview'] as const)(
+  'contract: private-mock attachment on the %s branch path',
+  (tier) => {
+    it('preserves public UIDs through root hook install and verification', async () => {
+      const platform = createPlatform({
+        userId: OWNER_ID,
+        existingCollections: [
+          { id: SMOKE_MODEL_ID, collection: collection('[Smoke] core-payments', SMOKE_MODEL_ID) },
+          {
+            id: CONTRACT_MODEL_ID,
+            collection: collection('[Contract] core-payments', CONTRACT_MODEL_ID)
+          }
+        ]
+      });
+
+      const result = await runContractAction({
+        inputs: inputs(),
+        env: {
+          POSTMAN_BRANCH_DECISION: branchDecision(tier),
+          ...(tier === 'preview' ? { POSTMAN_BRANCH_ASSET_IDS: 'owned' } : {})
+        },
+        fetchImpl: platform.fetch
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.outputs['mock-visibility']).toBe('private');
+      const rootReads = platform.events.filter((event) =>
+        event.startsWith('proxy:collection GET /v3/collections/')
+      );
+      const rootPatches = platform.events.filter((event) =>
+        event.startsWith('proxy:collection PATCH /v3/collections/')
+      );
+      expect(rootReads).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(`/v3/collections/${SMOKE_UID}`),
+          expect.stringContaining(`/v3/collections/${CONTRACT_UID}`)
+        ])
+      );
+      const patchedIds = rootPatches.map(
+        (event) => event.split('/v3/collections/')[1]?.replace(/\/export$/, '') ?? ''
+      );
+      expect(patchedIds).toEqual([SMOKE_UID, CONTRACT_UID]);
+      for (const resource of platform.state.collections) {
+        expect(JSON.stringify(resource.collection)).toContain('postmanPrivateMockApiKey');
+      }
+    });
+  }
+);

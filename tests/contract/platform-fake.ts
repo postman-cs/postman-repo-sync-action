@@ -206,6 +206,7 @@ export interface MockSeed extends OwnedResourceSeed {
   collection: string;
   environment: string;
   url?: string;
+  published?: boolean;
 }
 
 export interface MonitorSeed extends OwnedResourceSeed {
@@ -262,7 +263,12 @@ export function createPlatform(options: PlatformOptions = {}) {
   const mocks = new Map(
     (options.existingMocks ?? []).map((entry) => [
       entry.id,
-      { ...entry, ownerId: entry.ownerId ?? userId, url: entry.url ?? `https://${entry.id}.mock.pstmn.io` }
+      {
+        ...entry,
+        ownerId: entry.ownerId ?? userId,
+        url: entry.url ?? `https://${entry.id}.mock.pstmn.io`,
+        published: entry.published ?? true
+      }
     ])
   );
   const monitors = new Map(
@@ -535,7 +541,7 @@ export function createPlatform(options: PlatformOptions = {}) {
             collection: entry.collection,
             environment: entry.environment,
             url: entry.url,
-            published: true
+            published: entry.published
           })));
           return json({ data: page.data, meta: { cursor: { next: page.nextCursor } } });
         }
@@ -560,7 +566,8 @@ export function createPlatform(options: PlatformOptions = {}) {
             name: String(body.name ?? ''),
             collection: String(body.collection ?? ''),
             environment: String(body.environment ?? ''),
-            url: 'https://mock-123.mock.pstmn.io'
+            url: 'https://mock-123.mock.pstmn.io',
+            published: body.private !== true
           };
           mocks.set(resource.id, resource);
           return json({ data: {
@@ -569,7 +576,7 @@ export function createPlatform(options: PlatformOptions = {}) {
             collection: resource.collection,
             environment: resource.environment,
             url: resource.url,
-            published: true
+            published: resource.published
           } });
         }
         if (pmethod === 'delete' && /\/mocks\/[^/]+$/.test(ppath)) {
@@ -642,6 +649,19 @@ export function createPlatform(options: PlatformOptions = {}) {
               },
               403
             );
+          }
+          const resource = resolveOwned(collections, candidate);
+          if (!resource) return json({ error: 'missing' }, 404);
+          const patches = Array.isArray(proxy.body) ? proxy.body : [];
+          const scriptsPatch = patches.find((entry) => {
+            const operation = entry as Record<string, unknown>;
+            return operation.op === 'add' && operation.path === '/scripts';
+          }) as Record<string, unknown> | undefined;
+          if (scriptsPatch) {
+            resource.collection = {
+              ...resource.collection,
+              scripts: Array.isArray(scriptsPatch.value) ? scriptsPatch.value : []
+            };
           }
           return json({ data: { id: candidate } });
         }
