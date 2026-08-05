@@ -2221,6 +2221,26 @@ describe('repo sync action', () => {
       );
     });
 
+    it('skips local spec discovery for workspace-only runs when generated assets are disabled', async () => {
+      seedCandidateJsonFiles(201);
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            specId: '',
+            specPath: '',
+            syncGeneratedAssets: false,
+            generateCiWorkflow: false
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).resolves.toBeDefined();
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.workspace).toEqual({ id: 'ws-123' });
+      expect(resources.canonical?.specs).toBeUndefined();
+    });
+
     it('fails closed when local spec discovery exceeds the directory-depth budget', async () => {
       const deepDir = seedDeepDirectoryChain(7);
       seedOpenApiSpec(join(deepDir, 'openapi.json'));
@@ -2713,6 +2733,8 @@ describe('repo sync action', () => {
   });
 
   it('supports workspace and spec sync without generated assets or cloud monitors', async () => {
+    mkdirSync('.github/workflows', { recursive: true });
+    writeFileSync('.github/workflows/provision.yml', 'name: Existing Provision\n');
     mkdirSync('.postman', { recursive: true });
     writeFileSync(
       '.postman/resources.yaml',
@@ -2799,6 +2821,7 @@ describe('repo sync action', () => {
     expect(postman.getEnvironment).not.toHaveBeenCalled();
     expect(existsSync('postman')).toBe(false);
     expect(existsSync('.github/workflows/ci.yml')).toBe(false);
+    expect(readFileSync('.github/workflows/provision.yml', 'utf8')).toBe('name: Existing Provision\n');
 
     const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
     expect(resources).toEqual({
@@ -2816,7 +2839,7 @@ describe('repo sync action', () => {
       }
     });
     expect(repoMutation.commitAndPush).toHaveBeenCalledWith(
-      expect.objectContaining({ stagePaths: ['.postman'] })
+      expect.objectContaining({ stagePaths: ['.postman'], removePaths: [] })
     );
   });
 

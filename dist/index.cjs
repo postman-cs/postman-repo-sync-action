@@ -120088,6 +120088,9 @@ function buildGhCliEnv(env, token) {
   return filtered;
 }
 async function persistSslSecrets(inputs, actionCore, actionExec, repository, env = process.env) {
+  if (inputs.syncGeneratedAssets === false) {
+    return;
+  }
   if (!inputs.sslClientCert) {
     return;
   }
@@ -120943,7 +120946,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   const specsDir = `${inputs.artifactDir}/specs`;
   const manifestCollections = {};
   const artifactDirPrefix = canonicalizeRelativePath(inputs.artifactDir);
-  const { discoveredSpecs, mappedSpec } = resolveLocalSpecReferences(inputs.specPath, ".", {
+  const { discoveredSpecs, mappedSpec } = inputs.syncGeneratedAssets === false && !inputs.specId ? { discoveredSpecs: [], mappedSpec: void 0 } : resolveLocalSpecReferences(inputs.specPath, ".", {
     ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, ".postman"] : [".postman"]
   });
   const mappedSpecCloudKey = mappedSpec && inputs.specId ? buildMappedSpecCloudKey(
@@ -121196,7 +121199,7 @@ async function commitAndPushGeneratedFiles(inputs, dependencies) {
     adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
     githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
     fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
-    removePaths: provisionExists ? [provisionPath] : [],
+    removePaths: inputs.syncGeneratedAssets === false || !provisionExists ? [] : [provisionPath],
     stagePaths
   });
   return {

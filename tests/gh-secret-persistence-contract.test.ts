@@ -260,6 +260,22 @@ describe('persistSslSecrets — argv/stdin/GH_TOKEN/env contract', () => {
     expect(actionCore.info).toHaveBeenCalledWith('SSL certificate inputs persisted to repository secrets');
   });
 
+  it('does not persist SSL secrets when generated assets are disabled', async () => {
+    const actionCore = { info: vi.fn(), warning: vi.fn() };
+    const inputs = baseInputs({
+      syncGeneratedAssets: false,
+      sslClientCert: 'CERT-B64',
+      sslClientKey: 'KEY-B64',
+      githubToken: 'ghp_ssl_token'
+    });
+
+    await persistSslSecrets(inputs, actionCore, createCapturingExec(calls), 'acme/payments', {});
+
+    expect(calls).toEqual([]);
+    expect(actionCore.info).not.toHaveBeenCalled();
+    expect(actionCore.warning).not.toHaveBeenCalled();
+  });
+
   it('prefers ghFallbackToken over githubToken for the GH_TOKEN value', async () => {
     const actionCore = { info: vi.fn(), warning: vi.fn() };
     const inputs = baseInputs({

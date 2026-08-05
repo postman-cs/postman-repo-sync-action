@@ -1318,6 +1318,9 @@ export async function persistSslSecrets(
   repository: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
+  if (inputs.syncGeneratedAssets === false) {
+    return;
+  }
   if (!inputs.sslClientCert) {
     return;
   }
@@ -2490,9 +2493,12 @@ async function exportArtifacts(
 
   const manifestCollections: Record<string, string> = {};
   const artifactDirPrefix = canonicalizeRelativePath(inputs.artifactDir);
-  const { discoveredSpecs, mappedSpec } = resolveLocalSpecReferences(inputs.specPath, '.', {
-    ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, '.postman'] : ['.postman']
-  });
+  const { discoveredSpecs, mappedSpec } =
+    inputs.syncGeneratedAssets === false && !inputs.specId
+      ? { discoveredSpecs: [], mappedSpec: undefined }
+      : resolveLocalSpecReferences(inputs.specPath, '.', {
+          ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, '.postman'] : ['.postman']
+        });
   const mappedSpecCloudKey =
     mappedSpec && inputs.specId
       ? buildMappedSpecCloudKey(
@@ -2781,7 +2787,7 @@ async function commitAndPushGeneratedFiles(
     adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
     githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
     fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
-    removePaths: provisionExists ? [provisionPath] : [],
+    removePaths: inputs.syncGeneratedAssets === false || !provisionExists ? [] : [provisionPath],
     stagePaths
   });
 
