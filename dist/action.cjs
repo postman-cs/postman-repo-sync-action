@@ -120934,6 +120934,9 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     workspaceLinkEnabled: inputs.workspaceLinkEnabled,
     workspaceLinkStatus: options.workspaceLinkStatus
   });
+  const preservePriorWorkspaceResources = Boolean(
+    durableWorkspaceId && options.priorWorkspaceId && durableWorkspaceId === options.priorWorkspaceId
+  );
   if (inputs.syncGeneratedAssets === false) {
     ensureDir(".postman");
     assertPathWithinCwd(".postman/resources.yaml", "resources state target");
@@ -120945,9 +120948,9 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
       discoveredSpecs.map((spec) => spec.configRelativePath),
       mappedSpecCloudKey,
       inputs.specId || void 0,
-      options.existingSpecs,
+      preservePriorWorkspaceResources ? options.existingSpecs : void 0,
       options.priorState,
-      true
+      preservePriorWorkspaceResources
     ));
     dependencies.core.info(
       "Generated asset sync disabled; updated only workspace/spec state in .postman/resources.yaml."
@@ -121828,7 +121831,10 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       }
     }
   }
-  if (!keyValid) {
+  if (!keyValid && options.allowApiKeyCreation === false) {
+    apiKey = "";
+    actionCore.info("Skipping Postman API key creation because generated assets are disabled.");
+  } else if (!keyValid) {
     if (!inputs.postmanAccessToken) {
       throw new Error("postman-api-key is missing or invalid, and no postman-access-token provided to generate a new one.");
     }
@@ -122190,6 +122196,8 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
     }
   });
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {
+    allowApiKeyCreation: inputs.syncGeneratedAssets !== false,
+    persistGeneratedApiKeySecret: inputs.syncGeneratedAssets !== false,
     env: process.env
   });
   const repository = inputs.repository;

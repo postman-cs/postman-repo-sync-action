@@ -2241,6 +2241,45 @@ describe('repo sync action', () => {
       expect(resources.canonical?.specs).toBeUndefined();
     });
 
+    it('does not preserve generated resource ids when specs-only sync targets a different workspace', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'workspace:',
+          '  id: ws-old',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/old: col-old',
+          '  environments:',
+          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '  specs:',
+          '    ../old.yaml: spec-old',
+          ''
+        ].join('\n')
+      );
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({
+          workspaceId: 'ws-new',
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          syncGeneratedAssets: false,
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources).toEqual({
+        version: 2,
+        workspace: { id: 'ws-new' },
+        canonical: { specs: { '../openapi.yaml': 'spec-new' } }
+      });
+    });
+
     it('fails closed when local spec discovery exceeds the directory-depth budget', async () => {
       const deepDir = seedDeepDirectoryChain(7);
       seedOpenApiSpec(join(deepDir, 'openapi.json'));
@@ -4996,6 +5035,42 @@ describe('org-mode auto-detection', () => {
       return new Response('', { status: 404 });
     });
   }
+
+  it('does not create or persist a Postman API key when generated assets are disabled', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+    const masker = createSecretMasker(['postman-access-token']);
+    const inputs = createInputs({
+      postmanApiKey: '',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true
+    });
+    vi.mocked(createInternalIntegrationAdapter).mockClear();
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      {
+        allowApiKeyCreation: false,
+        persistGeneratedApiKeySecret: false,
+        env: {}
+      }
+    );
+
+    expect(result).toEqual({ apiKey: '', teamId: '10490519' });
+    expect(createInternalIntegrationAdapter).not.toHaveBeenCalled();
+    expect(execLike.getExecOutput).not.toHaveBeenCalled();
+    expect(actionCore.setSecret).not.toHaveBeenCalled();
+  });
 
   it('sets orgMode=true when ums squads returns a non-empty squad list (org-mode team)', async () => {
     const actionCore = {
