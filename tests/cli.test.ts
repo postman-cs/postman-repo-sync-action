@@ -432,6 +432,42 @@ describe('runCli credential preflight seam', () => {
     expect(logged).toMatch(/\[repo-sync timing\] \{"stage":"runRepoSync finalize","ms":\d+(?:\.\d+)?,"status":"success"\}/);
   });
 
+  it('does not mint a Postman API key in specs-only CLI mode', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/sessions/current')) {
+        return new Response(
+          JSON.stringify({ identity: { team: 333 }, data: { user: { id: 'u-sess' } } }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      throw new Error(`unexpected fetch in specs-only CLI test: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const executeRepoSync = vi.fn(async () => fullRepoSyncOutputs());
+
+    await withTempCwd(async () => {
+      await runCli(
+        [
+          '--project-name', 'specs-only',
+          '--postman-access-token', 'tok-only',
+          '--team-id', '333',
+          '--org-mode', 'true',
+          '--sync-generated-assets', 'false',
+          '--credential-preflight', 'warn',
+          '--repo-write-mode', 'none'
+        ],
+        { env: {}, executeRepoSync, writeStdout: () => undefined }
+      );
+    });
+
+    expect(executeRepoSync).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      'https://iapub.postman.co/api/sessions/current'
+    ]);
+  });
+
   it.each([
     {
       name: 'preview',

@@ -120053,7 +120053,7 @@ function readActionInputs(actionCore) {
   if (inputs.sslClientKey) actionCore.setSecret(inputs.sslClientKey);
   if (inputs.sslClientPassphrase) actionCore.setSecret(inputs.sslClientPassphrase);
   if (inputs.sslExtraCaCerts) actionCore.setSecret(inputs.sslExtraCaCerts);
-  if (inputs.sslClientCert) {
+  if (inputs.syncGeneratedAssets !== false && inputs.sslClientCert) {
     if (!inputs.sslClientKey) {
       throw new Error("ssl-client-key is required when ssl-client-cert is provided");
     }

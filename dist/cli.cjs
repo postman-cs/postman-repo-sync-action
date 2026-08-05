@@ -120920,6 +120920,7 @@ async function runCli(argv = process.argv.slice(2), runtime = {}) {
     resolvingExec,
     initialMasker,
     {
+      allowApiKeyCreation: inputs.syncGeneratedAssets !== false,
       persistGeneratedApiKeySecret: false,
       env
     }

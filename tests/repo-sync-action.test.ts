@@ -585,6 +585,25 @@ describe('repo sync action', () => {
     );
   });
 
+  it('skips generated-CI SSL validation when generated assets are disabled', () => {
+    const sslClientCert = Buffer.from('stale-cert').toString('base64');
+    const { core, secrets } = createCoreStub({
+      'project-name': 'core-payments',
+      'postman-access-token': 'postman-access-token',
+      'sync-generated-assets': 'false',
+      'ssl-client-cert': sslClientCert,
+      'environments-json': '["prod"]',
+      'system-env-map-json': '{}',
+      'environment-uids-json': '{}',
+      'env-runtime-urls-json': '{}'
+    });
+
+    const inputs = readActionInputs(core);
+
+    expect(inputs.syncGeneratedAssets).toBe(false);
+    expect(secrets).toContain(sslClientCert);
+  });
+
   it('materializes repo sync outputs and files', async () => {
     const { core, outputs } = createCoreStub();
     const postman = {

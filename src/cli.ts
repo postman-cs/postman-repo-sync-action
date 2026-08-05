@@ -626,6 +626,7 @@ export async function runCli(
       resolvingExec,
       initialMasker,
       {
+        allowApiKeyCreation: inputs.syncGeneratedAssets !== false,
         persistGeneratedApiKeySecret: false,
         env
       }
