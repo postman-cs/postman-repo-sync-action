@@ -212,7 +212,9 @@ describe('verify-dist-artifact canonical contract', () => {
       const bundle = await readFile(path.join(repoRoot, entrypoint), 'utf8');
       const collectionAcquisition = bundle.indexOf('collection-acquisition count=');
       const environmentAcquisition = bundle.indexOf('environment-artifact-acquisition count=');
-      const resourcesMaterialization = bundle.indexOf(
+      // Specs-only mode has an earlier state-only write. The final occurrence
+      // remains the generated-assets path whose ordering this contract protects.
+      const resourcesMaterialization = bundle.lastIndexOf(
         'writeFileSync)(".postman/resources.yaml", buildResourcesManifest('
       );
 

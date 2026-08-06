@@ -40,6 +40,7 @@ describe('postman-repo-sync-action contract', () => {
       'monitor-type',
       'smoke-collection-id',
       'contract-collection-id',
+      'sync-generated-assets',
       'prebuilt-collections-json',
       'collection-sync-mode',
       'spec-sync-mode',
@@ -420,5 +421,27 @@ describe('postman-repo-sync-action contract', () => {
     // Standalone behavior absent input unchanged
     const plan = createExecutionPlan();
     expect(plan.outputs).toBeDefined();
+  });
+
+  it('defaults generated asset sync on and supports a specs-only opt-in', () => {
+    const inputDef = postmanRepoSyncActionContract.inputs['sync-generated-assets'];
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string }>;
+    };
+
+    expect(inputDef).toMatchObject({
+      required: false,
+      default: 'true',
+      allowedValues: ['true', 'false']
+    });
+    expect(actionYaml.inputs['sync-generated-assets']).toMatchObject({
+      required: false,
+      default: 'true'
+    });
+    expect(resolveInputs({}).syncGeneratedAssets).toBe(true);
+    expect(resolveInputs({ INPUT_SYNC_GENERATED_ASSETS: 'false' }).syncGeneratedAssets).toBe(false);
+    expect(() =>
+      resolveInputs({ INPUT_SYNC_GENERATED_ASSETS: 'flase' })
+    ).toThrow('sync-generated-assets must be either true or false');
   });
 });
