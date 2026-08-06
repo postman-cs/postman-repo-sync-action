@@ -36,6 +36,7 @@ function createInputs(): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    onboardingScope: 'full',
     prebuiltCollectionsJson: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
