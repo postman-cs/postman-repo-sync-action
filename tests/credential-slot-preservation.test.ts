@@ -46,6 +46,7 @@ function createInputs(overrides: Record<string, unknown> = {}) {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    onboardingScope: 'full' as const,
     collectionSyncMode: 'refresh' as const,
     specSyncMode: 'update' as const,
     environments: ['prod'],

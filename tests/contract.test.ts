@@ -40,7 +40,7 @@ describe('postman-repo-sync-action contract', () => {
       'monitor-type',
       'smoke-collection-id',
       'contract-collection-id',
-      'sync-generated-assets',
+      'onboarding-scope',
       'prebuilt-collections-json',
       'collection-sync-mode',
       'spec-sync-mode',
@@ -423,25 +423,25 @@ describe('postman-repo-sync-action contract', () => {
     expect(plan.outputs).toBeDefined();
   });
 
-  it('defaults generated asset sync on and supports a specs-only opt-in', () => {
-    const inputDef = postmanRepoSyncActionContract.inputs['sync-generated-assets'];
+  it('defaults onboarding scope to full and supports a spec-only opt-in', () => {
+    const inputDef = postmanRepoSyncActionContract.inputs['onboarding-scope'];
     const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
       inputs: Record<string, { required?: boolean; default?: string }>;
     };
 
     expect(inputDef).toMatchObject({
       required: false,
-      default: 'true',
-      allowedValues: ['true', 'false']
+      default: 'full',
+      allowedValues: ['full', 'spec-only']
     });
-    expect(actionYaml.inputs['sync-generated-assets']).toMatchObject({
+    expect(actionYaml.inputs['onboarding-scope']).toMatchObject({
       required: false,
-      default: 'true'
+      default: 'full'
     });
-    expect(resolveInputs({}).syncGeneratedAssets).toBe(true);
-    expect(resolveInputs({ INPUT_SYNC_GENERATED_ASSETS: 'false' }).syncGeneratedAssets).toBe(false);
+    expect(resolveInputs({}).onboardingScope).toBe('full');
+    expect(resolveInputs({ INPUT_ONBOARDING_SCOPE: 'spec-only' }).onboardingScope).toBe('spec-only');
     expect(() =>
-      resolveInputs({ INPUT_SYNC_GENERATED_ASSETS: 'flase' })
-    ).toThrow('sync-generated-assets must be either true or false');
+      resolveInputs({ INPUT_ONBOARDING_SCOPE: 'specs-only' })
+    ).toThrow('onboarding-scope must be either full or spec-only');
   });
 });

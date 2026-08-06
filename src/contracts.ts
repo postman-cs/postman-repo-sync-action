@@ -132,11 +132,11 @@ export const postmanRepoSyncActionContract: {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
     },
-    'sync-generated-assets': {
-      description: 'Whether to create or update collections, environments, mocks, monitors, exported Postman assets, and generated CI. Set false for workspace/spec-only onboarding; existing generated assets are left unchanged.',
+    'onboarding-scope': {
+      description: 'Onboarding scope. Use full for the complete pipeline or spec-only for repository linking and workspace/spec state only.',
       required: false,
-      default: 'true',
-      allowedValues: ['true', 'false']
+      default: 'full',
+      allowedValues: ['full', 'spec-only']
     },
     'prebuilt-collections-json': {
       description:

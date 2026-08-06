@@ -112,6 +112,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    onboardingScope: 'full',
     prebuiltCollectionsJson: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
@@ -585,12 +586,12 @@ describe('repo sync action', () => {
     );
   });
 
-  it('skips generated-CI SSL validation when generated assets are disabled', () => {
+  it('skips generated-CI SSL validation in spec-only scope', () => {
     const sslClientCert = Buffer.from('stale-cert').toString('base64');
     const { core, secrets } = createCoreStub({
       'project-name': 'core-payments',
       'postman-access-token': 'postman-access-token',
-      'sync-generated-assets': 'false',
+      'onboarding-scope': 'spec-only',
       'ssl-client-cert': sslClientCert,
       'environments-json': '["prod"]',
       'system-env-map-json': '{}',
@@ -600,7 +601,7 @@ describe('repo sync action', () => {
 
     const inputs = readActionInputs(core);
 
-    expect(inputs.syncGeneratedAssets).toBe(false);
+    expect(inputs.onboardingScope).toBe('spec-only');
     expect(secrets).toContain(sslClientCert);
   });
 
@@ -2240,7 +2241,44 @@ describe('repo sync action', () => {
       );
     });
 
-    it('skips local spec discovery for workspace-only runs when generated assets are disabled', async () => {
+    it('preserves legacy tracked collection ids in full scope without workspace state', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/core-payments: col-baseline-tracked',
+          '    ../postman/collections/[Smoke] core-payments: col-smoke-tracked',
+          '    ../postman/collections/[Contract] core-payments: col-contract-tracked',
+          ''
+        ].join('\n')
+      );
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          baselineCollectionId: '',
+          smokeCollectionId: '',
+          contractCollectionId: '',
+          onboardingScope: 'full',
+          environments: [],
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false,
+          generateCiWorkflow: false,
+          repoWriteMode: 'none'
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline-tracked');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-tracked');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract-tracked');
+    });
+
+    it('skips local spec discovery for workspace-only runs in spec-only scope', async () => {
       seedCandidateJsonFiles(201);
 
       await expect(
@@ -2248,7 +2286,7 @@ describe('repo sync action', () => {
           createInputs({
             specId: '',
             specPath: '',
-            syncGeneratedAssets: false,
+            onboardingScope: 'spec-only',
             generateCiWorkflow: false
           }),
           deps(createExportPostmanStub())
@@ -2260,7 +2298,7 @@ describe('repo sync action', () => {
       expect(resources.canonical?.specs).toBeUndefined();
     });
 
-    it('does not preserve generated resource ids when specs-only sync targets a different workspace', async () => {
+    it('does not preserve generated resource ids when spec-only sync targets a different workspace', async () => {
       mkdirSync('.postman', { recursive: true });
       writeFileSync(
         '.postman/resources.yaml',
@@ -2285,7 +2323,7 @@ describe('repo sync action', () => {
           workspaceId: 'ws-new',
           specId: 'spec-new',
           specPath: 'openapi.yaml',
-          syncGeneratedAssets: false,
+          onboardingScope: 'spec-only',
           generateCiWorkflow: false
         }),
         deps(createExportPostmanStub())
@@ -2299,7 +2337,48 @@ describe('repo sync action', () => {
       });
     });
 
-    it('does not rewrite canonical resources during a specs-only preview run', async () => {
+    it('does not attach legacy generated mappings to a new workspace when state has no workspace id', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/old: col-old',
+          '  environments:',
+          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '  specs:',
+          '    ../old.yaml: spec-old',
+          ''
+        ].join('\n')
+      );
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({
+          workspaceId: 'ws-new',
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources).toEqual({
+        version: 2,
+        workspace: { id: 'ws-new' },
+        canonical: {
+          specs: {
+            '../openapi.yaml': 'spec-new'
+          }
+        }
+      });
+    });
+
+    it('does not rewrite canonical resources during a spec-only preview run', async () => {
       mkdirSync('.postman', { recursive: true });
       const originalResources = [
         'version: 2',
@@ -2325,13 +2404,44 @@ describe('repo sync action', () => {
           githubRefName: 'feature/spec-only',
           specId: 'spec-preview',
           specPath: 'openapi.yaml',
-          syncGeneratedAssets: false,
+          onboardingScope: 'spec-only',
           generateCiWorkflow: false
         }),
         deps(createExportPostmanStub())
       );
 
       expect(readFileSync('.postman/resources.yaml', 'utf8')).toBe(originalResources);
+    });
+
+    it('stages only the resources state file during spec-only sync', async () => {
+      seedOpenApiSpec('openapi.yaml');
+      const dependencies = deps(createExportPostmanStub());
+      const commitAndPush = vi.fn().mockResolvedValue({
+        commitSha: 'commit-spec-only',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      dependencies.repoMutation = {
+        commitAndPush
+      } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>;
+
+      await runRepoSync(
+        createInputs({
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false,
+          repoWriteMode: 'commit-only'
+        }),
+        dependencies
+      );
+
+      expect(commitAndPush).toHaveBeenCalledWith(
+        expect.objectContaining({
+          removePaths: [],
+          stagePaths: ['.postman/resources.yaml']
+        })
+      );
     });
 
     it('fails closed when local spec discovery exceeds the directory-depth budget', async () => {
@@ -2879,7 +2989,7 @@ describe('repo sync action', () => {
       createInputs({
         specId: 'spec-new',
         specPath: 'openapi.yaml',
-        syncGeneratedAssets: false
+        onboardingScope: 'spec-only'
       }),
       {
         core: createCoreStub().core,
@@ -2932,7 +3042,7 @@ describe('repo sync action', () => {
       }
     });
     expect(repoMutation.commitAndPush).toHaveBeenCalledWith(
-      expect.objectContaining({ stagePaths: ['.postman'], removePaths: [] })
+      expect.objectContaining({ stagePaths: ['.postman/resources.yaml'], removePaths: [] })
     );
   });
 
@@ -5090,7 +5200,7 @@ describe('org-mode auto-detection', () => {
     });
   }
 
-  it('does not create or persist a Postman API key when generated assets are disabled', async () => {
+  it('does not create or persist a Postman API key in spec-only scope', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),

@@ -44,7 +44,7 @@ const CLI_INPUT_NAMES = [
   'baseline-collection-id',
   'smoke-collection-id',
   'contract-collection-id',
-  'sync-generated-assets',
+  'onboarding-scope',
   'prebuilt-collections-json',
   'collection-sync-mode',
   'spec-sync-mode',
@@ -626,7 +626,7 @@ export async function runCli(
       resolvingExec,
       initialMasker,
       {
-        allowApiKeyCreation: inputs.syncGeneratedAssets !== false,
+        allowApiKeyCreation: inputs.onboardingScope === 'full',
         persistGeneratedApiKeySecret: false,
         env
       }
