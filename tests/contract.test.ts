@@ -147,6 +147,24 @@ describe('postman-repo-sync-action contract', () => {
     ).toThrow(/Unsupported credential-preflight/);
   });
 
+  it('defaults mock visibility to private while preserving an explicit public opt-out', () => {
+    const definition = postmanRepoSyncActionContract.inputs['mock-visibility'];
+    expect(definition.default).toBe('private');
+    expect(definition.allowedValues).toEqual(['public', 'private']);
+
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { default?: string }>;
+    };
+    expect(actionYaml.inputs['mock-visibility']?.default).toBe('private');
+    expect(resolveInputs({ INPUT_PROJECT_NAME: 'core-payments' }).mockVisibility).toBe('private');
+    expect(
+      resolveInputs({
+        INPUT_PROJECT_NAME: 'core-payments',
+        INPUT_MOCK_VISIBILITY: 'public'
+      }).mockVisibility
+    ).toBe('public');
+  });
+
   it('resolves Azure DevOps provider defaults from pipeline environment', () => {
     const inputs = resolveInputs({
       INPUT_PROJECT_NAME: 'core-payments',

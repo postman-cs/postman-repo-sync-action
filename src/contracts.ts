@@ -163,7 +163,7 @@ export const postmanRepoSyncActionContract: {
     'mock-visibility': {
       description: 'Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync.',
       required: false,
-      default: 'public',
+      default: 'private',
       allowedValues: ['public', 'private']
     },
     'mock-environment-enabled': {

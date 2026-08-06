@@ -2343,17 +2343,50 @@ describe('repo sync action', () => {
       };
     }
 
-    it('forces smoke/contract cloud export on private mock while baseline still reuses prebuilt trees', async () => {
+    it('exports collection-only runs without requiring private-mock auth hooks', async () => {
+      const postman = {
+        ...createExportPostmanStub(),
+        getCollection: vi.fn(async (uid: string) =>
+          uid === 'col-smoke'
+            ? createCollectionFixture('[Smoke] core-payments')
+            : createCollectionFixture('[Contract] core-payments')
+        )
+      };
+
+      const result = await runRepoSync(
+        createInputs({
+          baselineCollectionId: '',
+          environments: [],
+          generateCiWorkflow: true,
+          mockVisibility: 'private'
+        }),
+        privateMockDeps(postman)
+      );
+
+      expect(result['mock-auth-required']).toBe('false');
+      expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalled();
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
+      expect(readFileSync('.github/workflows/ci.yml', 'utf8')).not.toContain(
+        'postmanPrivateMockApiKey'
+      );
+    });
+
+    it('forces every collection through verified cloud export for a private mock', async () => {
       const { manifest } = buildAllPrebuiltManifest();
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn()
-          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
-            itemLegacyBlockIndex: 2,
-            itemCustomerScript: "console.log('customer-owned');"
-          }))
-          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+        getCollection: vi.fn(async (uid: string) => {
+          if (uid === 'col-baseline') return createV3CollectionFixture('core-payments');
+          if (uid === 'col-smoke') {
+            return createV3CollectionFixture('[Smoke] core-payments', {
+              itemLegacyBlockIndex: 2,
+              itemCustomerScript: "console.log('customer-owned');"
+            });
+          }
+          return createV3CollectionFixture('[Contract] core-payments');
+        })
       };
 
       await runRepoSync(
@@ -2367,12 +2400,19 @@ describe('repo sync action', () => {
         privateMockDeps(postman)
       );
 
-      expect(postman.getCollection).toHaveBeenCalledTimes(2);
-      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
       expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
       expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+
+      const baselineDefinition = readFileSync(
+        'postman/collections/core-payments/.resources/definition.yaml',
+        'utf8'
+      );
+      expect(baselineDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
 
       const smokeDefinition = readFileSync(
         'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
@@ -2426,8 +2466,10 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn().mockResolvedValue(
-          createV3CollectionFixture('[Smoke] core-payments', { rootHook: false })
+        getCollection: vi.fn(async (uid: string) =>
+          uid === 'col-smoke'
+            ? createV3CollectionFixture('[Smoke] core-payments', { rootHook: false })
+            : createV3CollectionFixture('core-payments')
         )
       };
 
@@ -2445,7 +2487,8 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED.*smoke.*col-smoke/);
 
       assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
-      expect(postman.getCollection).toHaveBeenCalledTimes(2);
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
       expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
       expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
       expect(commitAndPush).not.toHaveBeenCalled();
@@ -2465,9 +2508,14 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn()
-          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments'))
-          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments', { rootHook: false }))
+        getCollection: vi.fn(async (uid: string) => {
+          if (uid === 'col-contract') {
+            return createV3CollectionFixture('[Contract] core-payments', { rootHook: false });
+          }
+          return createV3CollectionFixture(
+            uid === 'col-smoke' ? '[Smoke] core-payments' : 'core-payments'
+          );
+        })
       };
 
       await expect(
@@ -2484,9 +2532,10 @@ describe('repo sync action', () => {
       ).rejects.toThrow(/PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED.*contract.*col-contract/);
 
       assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
-      expect(postman.getCollection).toHaveBeenCalledTimes(2);
-      expect(postman.getCollection).toHaveBeenNthCalledWith(1, 'col-smoke');
-      expect(postman.getCollection).toHaveBeenNthCalledWith(2, 'col-contract');
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
       expect(commitAndPush).not.toHaveBeenCalled();
       expect(existsSync('.postman/resources.yaml')).toBe(false);
       expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);
@@ -2505,9 +2554,12 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        configurePrivateMockRuntimeAuth: vi.fn().mockRejectedValue(
-          new Error(`gateway PATCH 403 forbidden: ${secret}`)
-        )
+        configurePrivateMockRuntimeAuth: vi.fn(async (uid: string) => {
+          if (uid === 'col-smoke') {
+            throw new Error(`gateway PATCH 403 forbidden: ${secret}`);
+          }
+          return 1;
+        })
       };
 
       const error = await runRepoSync(
@@ -2535,6 +2587,7 @@ describe('repo sync action', () => {
       expect(message).not.toContain(secret);
 
       assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
       expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalledWith('col-contract');
       expect(postman.getCollection).not.toHaveBeenCalled();
@@ -2549,11 +2602,16 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn()
-          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
-            itemLegacyBlockIndex: 2
-          }))
-          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+        getCollection: vi.fn(async (uid: string) => {
+          if (uid === 'col-smoke') {
+            return createV3CollectionFixture('[Smoke] core-payments', {
+              itemLegacyBlockIndex: 2
+            });
+          }
+          return createV3CollectionFixture(
+            uid === 'col-contract' ? '[Contract] core-payments' : 'core-payments'
+          );
+        })
       };
 
       await runRepoSync(
@@ -2576,10 +2634,11 @@ describe('repo sync action', () => {
         'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
         'utf8'
       )).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
-      expect(postman.getCollection).toHaveBeenCalledTimes(2);
-      expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
       vi.unstubAllEnvs();
     });
 
@@ -2592,11 +2651,16 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn()
-          .mockResolvedValueOnce(createV3CollectionFixture('[Smoke] core-payments', {
-            itemNearMissScript: nearMiss
-          }))
-          .mockResolvedValueOnce(createV3CollectionFixture('[Contract] core-payments'))
+        getCollection: vi.fn(async (uid: string) => {
+          if (uid === 'col-smoke') {
+            return createV3CollectionFixture('[Smoke] core-payments', {
+              itemNearMissScript: nearMiss
+            });
+          }
+          return createV3CollectionFixture(
+            uid === 'col-contract' ? '[Contract] core-payments' : 'core-payments'
+          );
+        })
       };
 
       await runRepoSync(
@@ -2624,14 +2688,15 @@ describe('repo sync action', () => {
         itemCustomerScript: "console.log('stable');"
       });
       const contractV3 = createV3CollectionFixture('[Contract] core-payments');
+      const baselineV3 = createV3CollectionFixture('core-payments');
       const postman = {
         ...createExportPostmanStub(),
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn()
-          .mockResolvedValueOnce(smokeV3)
-          .mockResolvedValueOnce(contractV3)
-          .mockResolvedValueOnce(smokeV3)
-          .mockResolvedValueOnce(contractV3)
+        getCollection: vi.fn(async (uid: string) =>
+          structuredClone(
+            uid === 'col-baseline' ? baselineV3 : uid === 'col-smoke' ? smokeV3 : contractV3
+          )
+        )
       };
       const inputs = createInputs({
         environments: ['prod'],
@@ -2649,9 +2714,10 @@ describe('repo sync action', () => {
       const secondDigest = await digestTreeOnDisk('postman/collections/[Smoke] core-payments');
 
       expect(firstDigest).toBe(secondDigest);
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledTimes(4);
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(3, 'col-smoke');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(4, 'col-contract');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledTimes(6);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(4, 'col-baseline');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(5, 'col-smoke');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(6, 'col-contract');
     });
   });
 
@@ -4380,7 +4446,7 @@ describe('mock resolution paths', () => {
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockImplementation((uid: string) => {
         if (uid === 'col-baseline') {
-          return Promise.resolve(createCollectionFixture('core-payments'));
+          return Promise.resolve(createV3CollectionFixture('core-payments'));
         }
         if (uid === 'col-smoke') {
           return Promise.resolve(createV3CollectionFixture('[Smoke] core-payments'));
@@ -4642,6 +4708,106 @@ describe('mock resolution paths', () => {
     expect(notice).toHaveBeenCalledWith(expect.stringContaining('postmanPrivateMockApiKey'));
   });
 
+  it('adds the private-key slot when an existing mock environment only matches the URL', async () => {
+    const updateEnvironment = vi.fn().mockResolvedValue(undefined);
+    const postman = makePostman({
+      updateEnvironment,
+      createMock: vi.fn().mockResolvedValue({
+        uid: 'mock-1',
+        url: 'https://mock-new.pstmn.io',
+        visibility: 'private'
+      }),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(1),
+      findEnvironmentByName: vi.fn().mockImplementation((_workspaceId: string, name: string) =>
+        Promise.resolve(name.endsWith(' - Mock') ? { uid: 'env-mock', name } : null)
+      ),
+      getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
+        id: uid,
+        values: uid === 'env-mock'
+          ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' }]
+          : []
+      }))
+    });
+
+    const result = await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        environmentUids: { prod: 'env-prod' },
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        mockVisibility: 'private',
+        repoWriteMode: 'none'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    expect(result['mock-environment-uid']).toBe('env-mock');
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      'env-mock',
+      'core-payments - Mock',
+      expect.arrayContaining([
+        { key: 'postmanPrivateMockApiKey', value: '', type: 'secret' }
+      ])
+    );
+  });
+
+  it('re-enables a disabled private-key slot in an existing mock environment', async () => {
+    const updateEnvironment = vi.fn().mockResolvedValue(undefined);
+    const postman = makePostman({
+      updateEnvironment,
+      createMock: vi.fn().mockResolvedValue({
+        uid: 'mock-1',
+        url: 'https://mock-new.pstmn.io',
+        visibility: 'private'
+      }),
+      findMockByCollection: vi.fn().mockResolvedValue(null),
+      configurePrivateMockRuntimeAuth: vi.fn().mockResolvedValue(1),
+      findEnvironmentByName: vi.fn().mockImplementation((_workspaceId: string, name: string) =>
+        Promise.resolve(name.endsWith(' - Mock') ? { uid: 'env-mock', name } : null)
+      ),
+      getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
+        id: uid,
+        values: uid === 'env-mock'
+          ? [
+              { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
+              { key: 'postmanPrivateMockApiKey', value: '', type: 'secret', enabled: false },
+              { key: 'AWS_REGION', value: 'us-east-2', type: 'default' },
+              { key: 'AWS_SECRET_ACCESS_KEY', value: 'preserved-secret', type: 'secret', enabled: false }
+            ]
+          : []
+      }))
+    });
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        environmentUids: { prod: 'env-prod' },
+        generateCiWorkflow: false,
+        mockEnvironmentEnabled: true,
+        mockVisibility: 'private',
+        repoWriteMode: 'none'
+      }),
+      makeDeps(postman, makeGithub())
+    );
+
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      'env-mock',
+      'core-payments - Mock',
+      expect.arrayContaining([
+        { key: 'postmanPrivateMockApiKey', value: '', type: 'secret' },
+        { key: 'AWS_REGION', value: 'us-east-2', type: 'default' },
+        { key: 'AWS_SECRET_ACCESS_KEY', value: 'preserved-secret', type: 'secret', enabled: false }
+      ])
+    );
+    const exported = JSON.parse(
+      readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')
+    ) as { values: Array<{ key: string; value: string }> };
+    expect(exported.values.find((value) => value.key === 'AWS_REGION')?.value).toBe('us-east-2');
+    expect(exported.values.find((value) => value.key === 'AWS_SECRET_ACCESS_KEY')?.value).toBe('');
+    expect(JSON.stringify(exported)).not.toContain('preserved-secret');
+  });
+
   it('omits the private-mock secret slot for a public mock', async () => {
     const createEnvironment = vi.fn().mockImplementation((_workspaceId: string, name: string) =>
       Promise.resolve(name.endsWith(' - Mock') ? 'env-mock' : 'env-prod')
@@ -4676,7 +4842,12 @@ describe('mock resolution paths', () => {
       ),
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
-        values: uid === 'env-mock' ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io' }] : []
+        values: uid === 'env-mock'
+          ? [
+              { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
+              { key: 'postmanPrivateMockApiKey', value: 'pmak-user-filled', type: 'secret' }
+            ]
+          : []
       }))
     });
     const result = await runRepoSync(
@@ -4685,6 +4856,7 @@ describe('mock resolution paths', () => {
         environmentUids: { prod: 'env-prod' },
         generateCiWorkflow: false,
         mockEnvironmentEnabled: true,
+        mockVisibility: 'private',
         repoWriteMode: 'none'
       }),
       makeDeps(postman, makeGithub())
@@ -4693,6 +4865,11 @@ describe('mock resolution paths', () => {
     expect(result['mock-environment-uid']).toBe('env-mock');
     expect(updateEnvironment.mock.calls.some(([, name]) => name === 'core-payments - Mock')).toBe(false);
     expect(JSON.parse(result['environment-uids-json'])).toEqual({ prod: 'env-prod' });
+    const exported = JSON.parse(
+      readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')
+    ) as { values: Array<{ key: string; value: string }> };
+    expect(exported.values.find((value) => value.key === 'postmanPrivateMockApiKey')?.value).toBe('');
+    expect(JSON.stringify(exported)).not.toContain('pmak-user-filled');
   });
 
   it('reports an observable non-fatal mock environment failure', async () => {

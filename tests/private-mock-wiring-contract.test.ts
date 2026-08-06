@@ -92,15 +92,11 @@ describe('private-mock export cleanup wiring contract', () => {
     );
   });
 
-  it('forces smoke/contract cloud export when private-mock auth is active', () => {
+  it('forces every collection through verified cloud export when private-mock auth is active', () => {
     const exportFn = collectionAcquisitionSource();
-    expect(exportFn).toMatch(/\bprivateMockAuth\b/);
-    expect(exportFn).toMatch(/['"]smoke['"]/);
-    expect(exportFn).toMatch(/['"]contract['"]/);
+    expect(exportFn).toContain('const forceCloudExport = privateMockAuth;');
     expect(exportFn).toContain('tryReusePrebuiltCollection');
-    expect(exportFn).toMatch(
-      /privateMockAuth[\s\S]{0,500}(?:smoke|contract)|(?:smoke|contract)[\s\S]{0,500}privateMockAuth/
-    );
+    expect(exportFn).toMatch(/preparePrivateMockCloudCollection\(role, collectionId, postman\)/);
   });
 
   it('fails before repo mutation when the managed root hook is absent from export IR', () => {
@@ -386,10 +382,17 @@ describe('private-mock behavioral ordering regression (C6)', () => {
     vi.unstubAllEnvs();
   });
 
-  it('exports smoke and contract only after configure patches the managed root hook into cloud state', async () => {
+  it('exports every collection only after configure patches the managed root hook into cloud state', async () => {
     const events: string[] = [];
     const metrics = { active: 0, peak: 0 };
     const cloudCollections = new Map<string, Record<string, unknown>>([
+      [
+        'col-baseline',
+        createCloudCollectionState(
+          'core-payments',
+          "console.log('baseline-customer-listener');"
+        )
+      ],
       [
         'col-smoke',
         createCloudCollectionState(
@@ -443,26 +446,39 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       dependencies
     );
 
+    const configureBaseline = events.indexOf('configure:col-baseline');
     const configureSmoke = events.indexOf('configure:col-smoke');
     const configureContract = events.indexOf('configure:col-contract');
+    const exportBaseline = events.indexOf('export:col-baseline');
     const exportSmoke = events.indexOf('export:col-smoke');
     const exportContract = events.indexOf('export:col-contract');
     const commitIndex = events.indexOf('commit');
 
+    expect(configureBaseline).toBeGreaterThanOrEqual(0);
     expect(configureSmoke).toBeGreaterThanOrEqual(0);
     expect(configureContract).toBeGreaterThanOrEqual(0);
+    expect(exportBaseline).toBeGreaterThan(configureBaseline);
     expect(exportSmoke).toBeGreaterThan(configureSmoke);
     expect(exportContract).toBeGreaterThan(configureContract);
+    expect(commitIndex).toBeGreaterThan(exportBaseline);
     expect(commitIndex).toBeGreaterThan(exportSmoke);
     expect(commitIndex).toBeGreaterThan(exportContract);
     expect(commitAndPush).toHaveBeenCalledTimes(1);
 
+    const baselineDefinition = readFileSync(
+      'postman/collections/core-payments/.resources/definition.yaml',
+      'utf8'
+    );
     const smokeDefinition = readFileSync(
       'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
       'utf8'
     );
     const contractDefinition = readFileSync(
       'postman/collections/[Contract] core-payments/.resources/definition.yaml',
+      'utf8'
+    );
+    const baselineRequest = readFileSync(
+      'postman/collections/core-payments/List Payments.request.yaml',
       'utf8'
     );
     const smokeRequest = readFileSync(
@@ -474,17 +490,22 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       'utf8'
     );
 
+    expect(baselineDefinition).toContain(`type: ${PRIVATE_MOCK_AUTH_ROOT_TYPE}`);
+    expect(baselineDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
     expect(smokeDefinition).toContain(`type: ${PRIVATE_MOCK_AUTH_ROOT_TYPE}`);
     expect(smokeDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
     expect(contractDefinition).toContain(`type: ${PRIVATE_MOCK_AUTH_ROOT_TYPE}`);
     expect(contractDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
 
+    expect(baselineRequest).toContain("console.log('baseline-customer-listener');");
     expect(smokeRequest).toContain("console.log('smoke-customer-listener');");
     expect(contractRequest).toContain("console.log('contract-customer-listener');");
 
     const exportedArtifact = [
+      baselineDefinition,
       smokeDefinition,
       contractDefinition,
+      baselineRequest,
       smokeRequest,
       contractRequest
     ].join('\n');
@@ -493,10 +514,11 @@ describe('private-mock behavioral ordering regression (C6)', () => {
     expect(exportedArtifact).not.toMatch(/['"][a-f0-9]{32,}['"]/i);
 
     expect(existsSync('postman/collections/core-payments/.resources/definition.yaml')).toBe(true);
-    expect(postman.getCollection).toHaveBeenCalledTimes(2);
+    expect(postman.getCollection).toHaveBeenCalledTimes(3);
     expect(metrics.peak).toBeGreaterThan(1);
     expect(metrics.peak).toBeLessThanOrEqual(2);
-    expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
+    expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
+    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
     expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
     expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
   });
