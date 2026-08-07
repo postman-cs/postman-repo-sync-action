@@ -4797,7 +4797,7 @@ describe('mock resolution paths', () => {
       expect.arrayContaining([
         { key: 'postmanPrivateMockApiKey', value: '', type: 'secret' },
         { key: 'AWS_REGION', value: 'us-east-2', type: 'default' },
-        { key: 'AWS_SECRET_ACCESS_KEY', value: 'preserved-secret', type: 'secret', enabled: false }
+        { key: 'AWS_SECRET_ACCESS_KEY', value: '', type: 'secret', enabled: false }
       ])
     );
     const exported = JSON.parse(
@@ -4845,7 +4845,7 @@ describe('mock resolution paths', () => {
         values: uid === 'env-mock'
           ? [
               { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
-              { key: 'postmanPrivateMockApiKey', value: 'pmak-user-filled', type: 'secret' }
+              { key: 'postmanPrivateMockApiKey', value: '', type: 'secret' }
             ]
           : []
       }))

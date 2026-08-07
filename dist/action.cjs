@@ -120276,7 +120276,7 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
           (value) => typeof value?.key === "string"
         ).map((value) => ({
           key: value.key,
-          value: typeof value.value === "string" ? value.value : "",
+          value: value.type === "secret" ? "" : typeof value.value === "string" ? value.value : "",
           type: value.type === "secret" ? "secret" : "default",
           ...typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}
         }));
@@ -120288,10 +120288,11 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
         const baseUrlMatches = currentValues.some(
           (value) => value.key === "baseUrl" && value.value === mockUrl
         );
-        const privateMockAuthSlotExists = currentValues.some(
+        const privateMockAuthSlot = currentValues.find(
           (value) => value.key === PRIVATE_MOCK_AUTH_VARIABLE2 && value.type === "secret" && value.enabled !== false
         );
-        if (baseUrlMatches && (!privateMockAuth || privateMockAuthSlotExists)) {
+        const privateMockAuthSlotExistsAndEmpty = typeof privateMockAuthSlot?.value === "string" ? privateMockAuthSlot.value === "" : false;
+        if (baseUrlMatches && (!privateMockAuth || privateMockAuthSlotExistsAndEmpty)) {
           dependencies.core.info(`Mock environment already points to ${mockUrl}: ${discovered.uid}`);
           return discovered.uid;
         }
