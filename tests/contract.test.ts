@@ -22,6 +22,8 @@ const packageManifest = JSON.parse(
     build: string;
     bundle?: string;
     'verify:dist'?: string;
+    'verify:dist:shape'?: string;
+    'verify:dist:parity'?: string;
     'verify:dist:assert'?: string;
   };
 };
@@ -228,8 +230,12 @@ describe('postman-repo-sync-action contract', () => {
     expect(packageManifest.scripts.bundle).toContain("process.platform!=='win32'");
     expect(packageManifest.scripts.bundle).toContain("chmodSync('dist/cli.cjs',0o755)");
     expect(packageManifest.scripts.build).toBe('npm run typecheck && npm run bundle');
+    expect(packageManifest.scripts['verify:dist:shape']).toBe('node scripts/verify-dist-artifact.mjs');
+    expect(packageManifest.scripts['verify:dist:parity']).toBe(
+      'git diff --ignore-space-at-eol --text --exit-code -- dist'
+    );
     expect(packageManifest.scripts['verify:dist:assert']).toBe(
-      'git diff --ignore-space-at-eol --text --exit-code -- dist && node scripts/verify-dist-artifact.mjs'
+      'npm run verify:dist:shape && npm run verify:dist:parity'
     );
     expect(packageManifest.scripts['verify:dist']).toBe('npm run build && npm run verify:dist:assert');
 
