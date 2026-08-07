@@ -127,7 +127,7 @@ describe('accepted write followed by an ambiguous response', () => {
   it('adopts the mock and does not submit a second create', async () => {
     const api = liveApi(emptyState(), true);
 
-    await expect(buildClient(api.fetchImpl).createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID))
+    await expect(buildClient(api.fetchImpl).createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID, 'public'))
       .resolves.toEqual({ uid: 'mock-1', url: 'https://mock-1.mock.pstmn.io', visibility: 'public' });
 
     expect(api.counts.mock).toBe(1);
@@ -194,7 +194,8 @@ describe('accepted write followed by an ambiguous response', () => {
       'ws-1',
       'Acme Mock',
       COLLECTION_UID,
-      ENVIRONMENT_UID
+      ENVIRONMENT_UID,
+      'public'
     )).resolves.toEqual({
       uid: 'mock-adopted',
       url: 'https://mock-adopted.mock.pstmn.io',
@@ -225,7 +226,8 @@ describe('accepted write followed by an ambiguous response', () => {
       'ws-1',
       'Acme Mock',
       COLLECTION_UID,
-      ENVIRONMENT_UID
+      ENVIRONMENT_UID,
+      'public'
     )).rejects.toThrow(String(status));
     expect(posts).toBe(1);
     expect(listReads).toBe(1);
@@ -253,7 +255,8 @@ describe('accepted write followed by an ambiguous response', () => {
       'ws-1',
       'Acme Mock',
       COLLECTION_UID,
-      ENVIRONMENT_UID
+      ENVIRONMENT_UID,
+      'public'
     )).rejects.toThrow('socket hang up');
     // Empty discovery reads prove the create absent, so one fallback resend
     // fires; it hits the same failing transport and the original error is
@@ -324,12 +327,12 @@ describe('fresh-client two-run live discovery', () => {
     const firstRun = buildClient(api.fetchImpl);
 
     const firstEnvironment = await firstRun.createEnvironment('ws-1', 'Acme - prod', []);
-    const firstMock = await firstRun.createMock('ws-1', 'Acme Mock', COLLECTION_UID, firstEnvironment);
+    const firstMock = await firstRun.createMock('ws-1', 'Acme Mock', COLLECTION_UID, firstEnvironment, 'public');
     const firstMonitor = await firstRun.createMonitor('ws-1', 'Acme Monitor', COLLECTION_UID, firstEnvironment);
 
     const secondRun = buildClient(api.fetchImpl);
     await expect(secondRun.createEnvironment('ws-1', 'Acme - prod', [])).resolves.toBe(firstEnvironment);
-    await expect(secondRun.createMock('ws-1', 'Acme Mock', COLLECTION_UID, firstEnvironment)).resolves.toEqual(firstMock);
+    await expect(secondRun.createMock('ws-1', 'Acme Mock', COLLECTION_UID, firstEnvironment, 'public')).resolves.toEqual(firstMock);
     await expect(secondRun.createMonitor('ws-1', 'Acme Monitor', COLLECTION_UID, firstEnvironment)).resolves.toBe(firstMonitor);
 
     expect(api.counts).toEqual({ environment: 1, environmentUpdate: 1, mock: 1, monitor: 1 });
@@ -386,7 +389,8 @@ describe('exact live identity and duplicate handling', () => {
       'ws-1',
       'Acme Mock',
       COLLECTION_UID,
-      ENVIRONMENT_UID
+      ENVIRONMENT_UID,
+      'public'
     // The duplicate-match discovery read throws inside reconcile, which is
     // inconclusive: the fallback resend stays suppressed and the original 503
     // surfaces instead of adopting either twin.
@@ -467,7 +471,8 @@ describe('exact live identity and duplicate handling', () => {
       'ws-1',
       'Acme Mock',
       COLLECTION_UID,
-      ENVIRONMENT_UID
+      ENVIRONMENT_UID,
+      'public'
     // Only a wrong-environment sibling exists, so discovery proves the
     // create conclusively absent: the fallback resend fires once (second 503)
     // and the original error is rethrown. The wrong-env sibling is never adopted.
@@ -510,8 +515,8 @@ describe('same-process overlap', () => {
       expect(results[0]).toBe(results[1]);
     } else if (kind === 'mock') {
       const results = await Promise.all([
-        a.createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID),
-        b.createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID)
+        a.createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID, 'public'),
+        b.createMock('ws-1', 'Acme Mock', COLLECTION_UID, ENVIRONMENT_UID, 'public')
       ]);
       expect(results[0]).toEqual(results[1]);
     } else {

@@ -735,7 +735,7 @@ export class PostmanGatewayAssetsClient {
     name: string,
     collectionUid: string,
     environmentUid: string,
-    requestedVisibility: RequestedMockVisibility = 'public'
+    requestedVisibility: RequestedMockVisibility = 'private'
   ): Promise<{ uid: string; url: string; visibility: RequestedMockVisibility }> {
     const ws = workspaceId || this.workspaceId;
     const mockName = String(name ?? '').trim();

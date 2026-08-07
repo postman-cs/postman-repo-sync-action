@@ -122,7 +122,7 @@ describe('createRepoSyncDependencies access-token-primary routing', () => {
     );
     expect(deps.postman.configurePrivateMockRuntimeAuth).toBeTypeOf('function');
 
-    const result = await deps.postman.createMock('ws-123', 'm', 'col-1', '');
+    const result = await deps.postman.createMock('ws-123', 'm', 'col-1', '', 'public');
     expect(result.uid).toBe('mock-uuid');
 
     const call = fetchMock.mock.calls[0];

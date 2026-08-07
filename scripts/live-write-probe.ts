@@ -336,7 +336,8 @@ async function main(): Promise<void> {
         workspaceId,
         publicMockName,
         publicCollectionUid,
-        envUid
+        envUid,
+        'public'
       );
       mockUid = mock.uid;
       console.log(`  [ok] createMock uid=${mock.uid} url=${mock.url}`);
