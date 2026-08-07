@@ -90,6 +90,7 @@ function baseInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    onboardingScope: 'full',
     prebuiltCollectionsJson: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
@@ -258,6 +259,22 @@ describe('persistSslSecrets — argv/stdin/GH_TOKEN/env contract', () => {
 
     expect(actionCore.warning).not.toHaveBeenCalled();
     expect(actionCore.info).toHaveBeenCalledWith('SSL certificate inputs persisted to repository secrets');
+  });
+
+  it('does not persist SSL secrets in spec-only scope', async () => {
+    const actionCore = { info: vi.fn(), warning: vi.fn() };
+    const inputs = baseInputs({
+      onboardingScope: 'spec-only',
+      sslClientCert: 'CERT-B64',
+      sslClientKey: 'KEY-B64',
+      githubToken: 'ghp_ssl_token'
+    });
+
+    await persistSslSecrets(inputs, actionCore, createCapturingExec(calls), 'acme/payments', {});
+
+    expect(calls).toEqual([]);
+    expect(actionCore.info).not.toHaveBeenCalled();
+    expect(actionCore.warning).not.toHaveBeenCalled();
   });
 
   it('prefers ghFallbackToken over githubToken for the GH_TOKEN value', async () => {
