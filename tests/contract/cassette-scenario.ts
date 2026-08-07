@@ -108,7 +108,8 @@ export const REPO_SYNC_CASSETTE: RepoSyncCassetteScenario = {
     'repo-write-mode': 'none',
     'generate-ci-workflow': 'false',
     'workspace-link-enabled': 'false',
-    'environment-sync-enabled': 'false'
+    'environment-sync-enabled': 'false',
+    'mock-visibility': 'public'
   },
   fake: { org: true },
   secrets: [PMAK, ACCESS_TOKEN, 'access-token-minted', 'pmak-generated']

@@ -10,8 +10,10 @@ import { runContractAction } from './harness.js';
 import { createPlatform } from './platform-fake.js';
 
 const OWNER_ID = 12_345_678;
+const BASELINE_MODEL_ID = '5a8a796b-0000-4111-8222-333344445555';
 const SMOKE_MODEL_ID = '6b9b8a7c-1111-4222-8333-444455556666';
 const CONTRACT_MODEL_ID = '7c0c9b8d-2222-4333-8444-555566667777';
+const BASELINE_UID = `${OWNER_ID}-${BASELINE_MODEL_ID}`;
 const SMOKE_UID = `${OWNER_ID}-${SMOKE_MODEL_ID}`;
 const CONTRACT_UID = `${OWNER_ID}-${CONTRACT_MODEL_ID}`;
 
@@ -55,7 +57,7 @@ function inputs(): Record<string, string> {
   return {
     'project-name': 'core-payments',
     'workspace-id': 'ws-contract',
-    'baseline-collection-id': `${OWNER_ID}-5a8a796b-0000-4111-8222-333344445555`,
+    'baseline-collection-id': BASELINE_UID,
     'smoke-collection-id': SMOKE_UID,
     'contract-collection-id': CONTRACT_UID,
     'postman-api-key': 'pmak-test',
@@ -78,6 +80,7 @@ describe.each(['canonical', 'preview'] as const)(
       const platform = createPlatform({
         userId: OWNER_ID,
         existingCollections: [
+          { id: BASELINE_MODEL_ID, collection: collection('core-payments', BASELINE_MODEL_ID) },
           { id: SMOKE_MODEL_ID, collection: collection('[Smoke] core-payments', SMOKE_MODEL_ID) },
           {
             id: CONTRACT_MODEL_ID,
@@ -102,17 +105,19 @@ describe.each(['canonical', 'preview'] as const)(
       const exportEvents = platform.events.filter((event) =>
         event.startsWith('proxy:collection GET /v3/collections/')
       );
-      expect(exportEvents.length).toBeGreaterThanOrEqual(2);
+      expect(exportEvents.length).toBeGreaterThanOrEqual(3);
       const exportedUids = new Set<string>();
       for (const event of exportEvents) {
         const match = /\/v3\/collections\/([^/]+)\/export$/.exec(event);
         expect(match).not.toBeNull();
         const uid = match![1]!;
         expect(uid).toMatch(/^\d+-[0-9a-f-]+$/);
+        expect(uid).not.toBe(BASELINE_MODEL_ID);
         expect(uid).not.toBe(SMOKE_MODEL_ID);
         expect(uid).not.toBe(CONTRACT_MODEL_ID);
         exportedUids.add(uid);
       }
+      expect(exportedUids.has(BASELINE_UID)).toBe(true);
       expect(exportedUids.has(SMOKE_UID)).toBe(true);
       expect(exportedUids.has(CONTRACT_UID)).toBe(true);
 
@@ -125,7 +130,7 @@ describe.each(['canonical', 'preview'] as const)(
       const patchedIds = patchEvents.map(
         (event) => event.split('/v3/collections/')[1] ?? ''
       );
-      expect(patchedIds).toEqual([SMOKE_UID, CONTRACT_UID]);
+      expect(patchedIds).toEqual([BASELINE_UID, SMOKE_UID, CONTRACT_UID]);
       for (const patchedId of patchedIds) {
         const patchGlobalIndex = platform.events.findIndex((event) =>
           event.includes(`/v3/collections/${patchedId}`) &&
