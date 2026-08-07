@@ -132,6 +132,12 @@ export const postmanRepoSyncActionContract: {
       description: 'Contract collection ID used for exported artifacts.',
       required: false
     },
+    'onboarding-scope': {
+      description: 'Onboarding scope. Use full for the complete pipeline or spec-only for repository linking and workspace/spec state only.',
+      required: false,
+      default: 'full',
+      allowedValues: ['full', 'spec-only']
+    },
     'prebuilt-collections-json': {
       description:
         'Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.',

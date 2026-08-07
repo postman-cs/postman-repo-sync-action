@@ -593,6 +593,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
       baselineCollectionId: COLLECTION_UID,
       smokeCollectionId: '10490519-smoke-uid-0000-0000-000000000001',
       contractCollectionId: '',
+      onboardingScope: 'full',
       collectionSyncMode: 'refresh',
       specSyncMode: 'update',
       releaseLabel: undefined,

@@ -116987,6 +116987,12 @@ var postmanRepoSyncActionContract = {
       description: "Contract collection ID used for exported artifacts.",
       required: false
     },
+    "onboarding-scope": {
+      description: "Onboarding scope. Use full for the complete pipeline or spec-only for repository linking and workspace/spec state only.",
+      required: false,
+      default: "full",
+      allowedValues: ["full", "spec-only"]
+    },
     "prebuilt-collections-json": {
       description: "Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.",
       required: false,
@@ -119448,6 +119454,12 @@ function parseBooleanInput(value, defaultValue) {
   if (["false", "0", "no", "off"].includes(normalized)) return false;
   return defaultValue;
 }
+function parseOnboardingScope(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "full";
+  if (normalized === "full" || normalized === "spec-only") return normalized;
+  throw new Error(`onboarding-scope must be either full or spec-only; received "${value}"`);
+}
 function normalizeInputValue(value) {
   return String(value ?? "").trim();
 }
@@ -119604,6 +119616,7 @@ function resolveInputs(env = process.env) {
     baselineCollectionId: getInput2("baseline-collection-id", env),
     smokeCollectionId: getInput2("smoke-collection-id", env),
     contractCollectionId: getInput2("contract-collection-id", env),
+    onboardingScope: parseOnboardingScope(getInput2("onboarding-scope", env)),
     prebuiltCollectionsJson: getInput2("prebuilt-collections-json", env),
     specId: getInput2("spec-id", env),
     specContentChanged: parseBooleanInput(getInput2("spec-content-changed", env), true),
@@ -120025,6 +120038,7 @@ function readActionInputs(actionCore) {
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, "baseline-collection-id"),
     INPUT_SMOKE_COLLECTION_ID: readInput(actionCore, "smoke-collection-id"),
     INPUT_CONTRACT_COLLECTION_ID: readInput(actionCore, "contract-collection-id"),
+    INPUT_ONBOARDING_SCOPE: readInput(actionCore, "onboarding-scope"),
     INPUT_PREBUILT_COLLECTIONS_JSON: readInput(actionCore, "prebuilt-collections-json"),
     INPUT_SPEC_ID: readInput(actionCore, "spec-id"),
     INPUT_SPEC_PATH: readInput(actionCore, "spec-path"),
@@ -120088,7 +120102,7 @@ function readActionInputs(actionCore) {
   if (inputs.sslClientKey) actionCore.setSecret(inputs.sslClientKey);
   if (inputs.sslClientPassphrase) actionCore.setSecret(inputs.sslClientPassphrase);
   if (inputs.sslExtraCaCerts) actionCore.setSecret(inputs.sslExtraCaCerts);
-  if (inputs.sslClientCert) {
+  if (inputs.onboardingScope === "full" && inputs.sslClientCert) {
     if (!inputs.sslClientKey) {
       throw new Error("ssl-client-key is required when ssl-client-cert is provided");
     }
@@ -120123,6 +120137,9 @@ function buildGhCliEnv(env, token) {
   return filtered;
 }
 async function persistSslSecrets(inputs, actionCore, actionExec, repository, env = process.env) {
+  if (inputs.onboardingScope === "spec-only") {
+    return;
+  }
   if (!inputs.sslClientCert) {
     return;
   }
@@ -120437,7 +120454,7 @@ function resolveDurableWorkspaceId(options) {
   }
   return prior === candidate ? prior : void 0;
 }
-function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState) {
+function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState, preserveGeneratedAssets = false) {
   const manifest = { ...priorState ?? {} };
   delete manifest.version;
   delete manifest.workspace;
@@ -120449,13 +120466,18 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir,
     manifest.workspace = { id: workspaceId };
   }
   const cloudResources = {};
-  const collectionKeys = Object.keys(collectionMap);
+  const effectiveCollectionMap = preserveGeneratedAssets ? { ...priorState?.cloudResources?.collections ?? {}, ...collectionMap } : collectionMap;
+  const collectionKeys = Object.keys(effectiveCollectionMap);
   if (collectionKeys.length > 0) {
-    cloudResources.collections = collectionMap;
+    cloudResources.collections = effectiveCollectionMap;
   }
+  const priorEnvironmentMap = preserveGeneratedAssets ? { ...priorState?.cloudResources?.environments ?? {} } : {};
   const envEntries = Object.entries(envMap);
+  if (Object.keys(priorEnvironmentMap).length > 0 || envEntries.length > 0) {
+    cloudResources.environments = priorEnvironmentMap;
+  }
   if (envEntries.length > 0) {
-    cloudResources.environments = {};
+    cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
       cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
     }
@@ -121006,8 +121028,10 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   if (!inputs.workspaceId) {
     return;
   }
-  assertPathWithinCwd(inputs.artifactDir, "artifact-dir");
-  if (inputs.generateCiWorkflow) {
+  if (inputs.onboardingScope === "full") {
+    assertPathWithinCwd(inputs.artifactDir, "artifact-dir");
+  }
+  if (inputs.onboardingScope === "full" && inputs.generateCiWorkflow) {
     assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
   }
   const collectionsDir = `${inputs.artifactDir}/collections`;
@@ -121018,7 +121042,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   const specsDir = `${inputs.artifactDir}/specs`;
   const manifestCollections = {};
   const artifactDirPrefix = canonicalizeRelativePath(inputs.artifactDir);
-  const { discoveredSpecs, mappedSpec } = resolveLocalSpecReferences(inputs.specPath, ".", {
+  const { discoveredSpecs, mappedSpec } = inputs.onboardingScope === "spec-only" && !inputs.specId ? { discoveredSpecs: [], mappedSpec: void 0 } : resolveLocalSpecReferences(inputs.specPath, ".", {
     ignoredPrefixes: artifactDirPrefix ? [artifactDirPrefix, ".postman"] : [".postman"]
   });
   const mappedSpecCloudKey = mappedSpec && inputs.specId ? buildMappedSpecCloudKey(
@@ -121026,6 +121050,42 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     inputs.specSyncMode,
     options.releaseLabel
   ) : void 0;
+  const durableWorkspaceId = resolveDurableWorkspaceId({
+    candidateId: inputs.workspaceId,
+    priorId: options.priorWorkspaceId,
+    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
+    workspaceLinkStatus: options.workspaceLinkStatus
+  });
+  const priorWorkspaceId = options.priorWorkspaceId?.trim();
+  const preservePriorWorkspaceResources = Boolean(
+    durableWorkspaceId && priorWorkspaceId && durableWorkspaceId === priorWorkspaceId
+  );
+  if (inputs.onboardingScope === "spec-only") {
+    if (!options.isCanonicalWriter) {
+      dependencies.core.info(
+        "onboarding-scope=spec-only; skipping .postman/resources.yaml write on non-canonical run."
+      );
+      return;
+    }
+    ensureDir(".postman");
+    assertPathWithinCwd(".postman/resources.yaml", "resources state target");
+    (0, import_node_fs5.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
+      durableWorkspaceId,
+      {},
+      {},
+      inputs.artifactDir,
+      discoveredSpecs.map((spec) => spec.configRelativePath),
+      mappedSpecCloudKey,
+      inputs.specId || void 0,
+      preservePriorWorkspaceResources ? options.existingSpecs : void 0,
+      options.priorState,
+      preservePriorWorkspaceResources
+    ));
+    dependencies.core.info(
+      "onboarding-scope=spec-only; updated only workspace/spec state in .postman/resources.yaml."
+    );
+    return;
+  }
   const prebuiltByRole = options.preparedPrebuiltCollections;
   const privateMockAuth = options.privateMockAuth === true;
   const collectionSpecs = [
@@ -121122,12 +121182,6 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
       true
     );
   }
-  const durableWorkspaceId = resolveDurableWorkspaceId({
-    candidateId: inputs.workspaceId,
-    priorId: options.priorWorkspaceId,
-    workspaceLinkEnabled: inputs.workspaceLinkEnabled,
-    workspaceLinkStatus: options.workspaceLinkStatus
-  });
   assertPathWithinCwd(".postman/resources.yaml", "resources state target");
   (0, import_node_fs5.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
     durableWorkspaceId,
@@ -121196,7 +121250,7 @@ function createRepoSummary(outputs, envUids, pushed) {
   });
 }
 async function commitAndPushGeneratedFiles(inputs, dependencies, privateMockAuth) {
-  if (inputs.generateCiWorkflow) {
+  if (inputs.onboardingScope === "full" && inputs.generateCiWorkflow) {
     const ciWorkflow = renderCiWorkflow(inputs, privateMockAuth);
     assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
     const parts = inputs.ciWorkflowPath.split("/");
@@ -121221,13 +121275,13 @@ async function commitAndPushGeneratedFiles(inputs, dependencies, privateMockAuth
   const provisionExists = inputs.provider === "github" && (0, import_node_fs5.existsSync)(provisionPath);
   const gcWorkflowPath = ".github/workflows/postman-preview-gc.yml";
   const gcExists = inputs.generateCiWorkflow && (0, import_node_fs5.existsSync)(gcWorkflowPath);
-  const stagePaths = [
+  const stagePaths = (inputs.onboardingScope === "spec-only" ? [".postman/resources.yaml"] : [
     inputs.artifactDir,
     ".postman",
     inputs.generateCiWorkflow ? inputs.ciWorkflowPath : null,
     gcExists ? gcWorkflowPath : null,
     provisionExists ? provisionPath : null
-  ].filter((entry) => typeof entry === "string" && ((0, import_node_fs5.existsSync)(entry) || entry === provisionPath));
+  ]).filter((entry) => typeof entry === "string" && ((0, import_node_fs5.existsSync)(entry) || entry === provisionPath));
   if (stagePaths.length === 0) {
     dependencies.core.info("No generated repository paths were found; skipping repo mutation.");
     return {
@@ -121251,7 +121305,7 @@ async function commitAndPushGeneratedFiles(inputs, dependencies, privateMockAuth
     adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
     githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
     fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
-    removePaths: provisionExists ? [provisionPath] : [],
+    removePaths: inputs.onboardingScope === "spec-only" || !provisionExists ? [] : [provisionPath],
     stagePaths
   });
   return {
@@ -121296,10 +121350,14 @@ async function runRepoSync(inputs, dependencies, executionContext) {
   }
 }
 async function runRepoSyncInner(inputs, dependencies, executionContext) {
+  inputs = { ...inputs, onboardingScope: inputs.onboardingScope ?? "full" };
   const mask = resolveRepoSyncMasker(dependencies);
   const logger = resolveRepoSyncLogger(dependencies);
   const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
-  assertBranchAssetIds(inputs, branchDecision);
+  const onboardingScope = inputs.onboardingScope;
+  if (onboardingScope === "full") {
+    assertBranchAssetIds(inputs, branchDecision);
+  }
   const isCanonicalWriter = branchDecision.tier === "legacy" || branchDecision.tier === "canonical";
   if (!isCanonicalWriter) {
     if (branchDecision.tier === "preview" && branchDecision.identity.headBranch) {
@@ -121324,7 +121382,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     );
   }
   const outputs = createOutputs(inputs);
-  const versionRequested = inputs.collectionSyncMode === "version" || inputs.specSyncMode === "version";
+  const versionRequested = inputs.specSyncMode === "version" || onboardingScope === "full" && inputs.collectionSyncMode === "version";
   const releaseLabel = deriveReleaseLabel(inputs);
   if (versionRequested && !releaseLabel) {
     throw new Error("release-label is required when collection-sync-mode or spec-sync-mode is version");
@@ -121338,29 +121396,49 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
       dependencies.core.info("Resolved workspace-id from .postman/resources.yaml");
     }
     const cloudCollections = resourcesState.cloudResources?.collections;
-    if (!inputs.baselineCollectionId) {
+    if (onboardingScope === "full" && !inputs.baselineCollectionId) {
       inputs.baselineCollectionId = findCloudResourceId(cloudCollections, (filePath) => matchesBaselineCollectionResource(filePath, assetProjectName)) || "";
       if (inputs.baselineCollectionId) {
         dependencies.core.info("Resolved baseline-collection-id from .postman/resources.yaml");
       }
     }
-    if (!inputs.smokeCollectionId) {
+    if (onboardingScope === "full" && !inputs.smokeCollectionId) {
       inputs.smokeCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Smoke]")) || "";
       if (inputs.smokeCollectionId) {
         dependencies.core.info("Resolved smoke-collection-id from .postman/resources.yaml");
       }
     }
-    if (!inputs.contractCollectionId) {
+    if (onboardingScope === "full" && !inputs.contractCollectionId) {
       inputs.contractCollectionId = findCloudResourceId(cloudCollections, (filePath) => filePath.includes("[Contract]")) || "";
       if (inputs.contractCollectionId) {
         dependencies.core.info("Resolved contract-collection-id from .postman/resources.yaml");
       }
     }
   }
-  const preparedPrebuiltCollections = await logger.phase(
-    "prepare-collections",
-    async () => preparePrebuiltCollections(inputs)
-  );
+  if (onboardingScope === "spec-only") {
+    inputs = {
+      ...inputs,
+      baselineCollectionId: "",
+      smokeCollectionId: "",
+      contractCollectionId: "",
+      prebuiltCollectionsJson: void 0,
+      environments: [],
+      environmentUids: {},
+      envRuntimeUrls: {},
+      environmentSyncEnabled: false,
+      systemEnvMap: {},
+      generateCiWorkflow: false,
+      monitorId: "",
+      monitorCron: "",
+      monitorType: "cli",
+      mockUrl: "",
+      mockEnvironmentEnabled: false
+    };
+    dependencies.core.info(
+      "onboarding-scope=spec-only; skipping collections, environments, mocks, monitors, exports, and generated CI."
+    );
+  }
+  const preparedPrebuiltCollections = onboardingScope === "full" ? await logger.phase("prepare-collections", async () => preparePrebuiltCollections(inputs)) : /* @__PURE__ */ new Map();
   let skipRepositoryLinkPost = false;
   let repositoryLinkPreflightWasFree = false;
   if (inputs.workspaceLinkEnabled && inputs.workspaceId && inputs.repoUrl && dependencies.internalIntegration?.findWorkspaceForRepo) {
@@ -121395,10 +121473,10 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     }
   }
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = await logger.phase(
+  const envUids = onboardingScope === "full" ? await logger.phase(
     "sync-environments",
     async () => upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
-  );
+  ) : {};
   outputs["environment-uids-json"] = JSON.stringify(envUids);
   dependencies.core.setOutput("environment-uids-json", outputs["environment-uids-json"]);
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
@@ -121760,6 +121838,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
   await logger.phase(
     "export-artifacts",
     async () => exportArtifacts(inputs, dependencies, envUids, assetProjectName, {
+      isCanonicalWriter,
       workspaceLinkStatus: outputs["workspace-link-status"],
       priorWorkspaceId: resourcesState?.workspace?.id,
       existingSpecs: resourcesState?.cloudResources?.specs,
@@ -121890,7 +121969,10 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, mas
       }
     }
   }
-  if (!keyValid) {
+  if (!keyValid && options.allowApiKeyCreation === false) {
+    apiKey = "";
+    actionCore.info("Skipping Postman API key creation because onboarding-scope=spec-only.");
+  } else if (!keyValid) {
     if (!inputs.postmanAccessToken) {
       throw new Error("postman-api-key is missing or invalid, and no postman-access-token provided to generate a new one.");
     }
@@ -122252,6 +122334,8 @@ async function runAction(actionCore = core_exports, actionExec = exec_exports) {
     }
   });
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {
+    allowApiKeyCreation: inputs.onboardingScope === "full",
+    persistGeneratedApiKeySecret: inputs.onboardingScope === "full",
     env: process.env
   });
   const repository = inputs.repository;

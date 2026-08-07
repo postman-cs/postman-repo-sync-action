@@ -22,6 +22,8 @@ const packageManifest = JSON.parse(
     build: string;
     bundle?: string;
     'verify:dist'?: string;
+    'verify:dist:shape'?: string;
+    'verify:dist:parity'?: string;
     'verify:dist:assert'?: string;
   };
 };
@@ -40,6 +42,7 @@ describe('postman-repo-sync-action contract', () => {
       'monitor-type',
       'smoke-collection-id',
       'contract-collection-id',
+      'onboarding-scope',
       'prebuilt-collections-json',
       'collection-sync-mode',
       'spec-sync-mode',
@@ -246,8 +249,12 @@ describe('postman-repo-sync-action contract', () => {
     expect(packageManifest.scripts.bundle).toContain("process.platform!=='win32'");
     expect(packageManifest.scripts.bundle).toContain("chmodSync('dist/cli.cjs',0o755)");
     expect(packageManifest.scripts.build).toBe('npm run typecheck && npm run bundle');
+    expect(packageManifest.scripts['verify:dist:shape']).toBe('node scripts/verify-dist-artifact.mjs');
+    expect(packageManifest.scripts['verify:dist:parity']).toBe(
+      'git diff --ignore-space-at-eol --text --exit-code -- dist'
+    );
     expect(packageManifest.scripts['verify:dist:assert']).toBe(
-      'git diff --ignore-space-at-eol --text --exit-code -- dist && node scripts/verify-dist-artifact.mjs'
+      'npm run verify:dist:shape && npm run verify:dist:parity'
     );
     expect(packageManifest.scripts['verify:dist']).toBe('npm run build && npm run verify:dist:assert');
 
@@ -438,5 +445,27 @@ describe('postman-repo-sync-action contract', () => {
     // Standalone behavior absent input unchanged
     const plan = createExecutionPlan();
     expect(plan.outputs).toBeDefined();
+  });
+
+  it('defaults onboarding scope to full and supports a spec-only opt-in', () => {
+    const inputDef = postmanRepoSyncActionContract.inputs['onboarding-scope'];
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string }>;
+    };
+
+    expect(inputDef).toMatchObject({
+      required: false,
+      default: 'full',
+      allowedValues: ['full', 'spec-only']
+    });
+    expect(actionYaml.inputs['onboarding-scope']).toMatchObject({
+      required: false,
+      default: 'full'
+    });
+    expect(resolveInputs({}).onboardingScope).toBe('full');
+    expect(resolveInputs({ INPUT_ONBOARDING_SCOPE: 'spec-only' }).onboardingScope).toBe('spec-only');
+    expect(() =>
+      resolveInputs({ INPUT_ONBOARDING_SCOPE: 'specs-only' })
+    ).toThrow('onboarding-scope must be either full or spec-only');
   });
 });

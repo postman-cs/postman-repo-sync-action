@@ -112,6 +112,7 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     baselineCollectionId: 'col-baseline',
     smokeCollectionId: 'col-smoke',
     contractCollectionId: 'col-contract',
+    onboardingScope: 'full',
     prebuiltCollectionsJson: '',
     collectionSyncMode: 'refresh',
     specSyncMode: 'update',
@@ -583,6 +584,25 @@ describe('repo sync action', () => {
     expect(() => readActionInputs(core)).toThrow(
       'ssl-client-key is required when ssl-client-cert is provided'
     );
+  });
+
+  it('skips generated-CI SSL validation in spec-only scope', () => {
+    const sslClientCert = Buffer.from('stale-cert').toString('base64');
+    const { core, secrets } = createCoreStub({
+      'project-name': 'core-payments',
+      'postman-access-token': 'postman-access-token',
+      'onboarding-scope': 'spec-only',
+      'ssl-client-cert': sslClientCert,
+      'environments-json': '["prod"]',
+      'system-env-map-json': '{}',
+      'environment-uids-json': '{}',
+      'env-runtime-urls-json': '{}'
+    });
+
+    const inputs = readActionInputs(core);
+
+    expect(inputs.onboardingScope).toBe('spec-only');
+    expect(secrets).toContain(sslClientCert);
   });
 
   it('materializes repo sync outputs and files', async () => {
@@ -2221,6 +2241,209 @@ describe('repo sync action', () => {
       );
     });
 
+    it('preserves legacy tracked collection ids in full scope without workspace state', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/core-payments: col-baseline-tracked',
+          '    ../postman/collections/[Smoke] core-payments: col-smoke-tracked',
+          '    ../postman/collections/[Contract] core-payments: col-contract-tracked',
+          ''
+        ].join('\n')
+      );
+      const postman = createExportPostmanStub();
+
+      await runRepoSync(
+        createInputs({
+          baselineCollectionId: '',
+          smokeCollectionId: '',
+          contractCollectionId: '',
+          onboardingScope: 'full',
+          environments: [],
+          environmentSyncEnabled: false,
+          workspaceLinkEnabled: false,
+          generateCiWorkflow: false,
+          repoWriteMode: 'none'
+        }),
+        deps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline-tracked');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-tracked');
+      expect(postman.getCollection).toHaveBeenCalledWith('col-contract-tracked');
+    });
+
+    it('skips local spec discovery for workspace-only runs in spec-only scope', async () => {
+      seedCandidateJsonFiles(201);
+
+      await expect(
+        runRepoSync(
+          createInputs({
+            specId: '',
+            specPath: '',
+            onboardingScope: 'spec-only',
+            generateCiWorkflow: false
+          }),
+          deps(createExportPostmanStub())
+        )
+      ).resolves.toBeDefined();
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources.workspace).toEqual({ id: 'ws-123' });
+      expect(resources.canonical?.specs).toBeUndefined();
+    });
+
+    it('does not preserve generated resource ids when spec-only sync targets a different workspace', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'workspace:',
+          '  id: ws-old',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/old: col-old',
+          '  environments:',
+          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '  specs:',
+          '    ../old.yaml: spec-old',
+          ''
+        ].join('\n')
+      );
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({
+          workspaceId: 'ws-new',
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources).toEqual({
+        version: 2,
+        workspace: { id: 'ws-new' },
+        canonical: { specs: { '../openapi.yaml': 'spec-new' } }
+      });
+    });
+
+    it('does not attach legacy generated mappings to a new workspace when state has no workspace id', async () => {
+      mkdirSync('.postman', { recursive: true });
+      writeFileSync(
+        '.postman/resources.yaml',
+        [
+          'version: 2',
+          'canonical:',
+          '  collections:',
+          '    ../postman/collections/old: col-old',
+          '  environments:',
+          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '  specs:',
+          '    ../old.yaml: spec-old',
+          ''
+        ].join('\n')
+      );
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({
+          workspaceId: 'ws-new',
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+      expect(resources).toEqual({
+        version: 2,
+        workspace: { id: 'ws-new' },
+        canonical: {
+          specs: {
+            '../openapi.yaml': 'spec-new'
+          }
+        }
+      });
+    });
+
+    it('does not rewrite canonical resources during a spec-only preview run', async () => {
+      mkdirSync('.postman', { recursive: true });
+      const originalResources = [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  collections:',
+        '    ../postman/collections/existing: col-existing',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-existing',
+        '  specs:',
+        '    ../openapi.yaml: spec-existing',
+        ''
+      ].join('\n');
+      writeFileSync('.postman/resources.yaml', originalResources);
+      seedOpenApiSpec('openapi.yaml');
+
+      await runRepoSync(
+        createInputs({
+          branchStrategy: 'preview',
+          canonicalBranch: 'main',
+          currentRef: 'refs/heads/feature/spec-only',
+          githubRefName: 'feature/spec-only',
+          specId: 'spec-preview',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false
+        }),
+        deps(createExportPostmanStub())
+      );
+
+      expect(readFileSync('.postman/resources.yaml', 'utf8')).toBe(originalResources);
+    });
+
+    it('stages only the resources state file during spec-only sync', async () => {
+      seedOpenApiSpec('openapi.yaml');
+      const dependencies = deps(createExportPostmanStub());
+      const commitAndPush = vi.fn().mockResolvedValue({
+        commitSha: 'commit-spec-only',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      });
+      dependencies.repoMutation = {
+        commitAndPush
+      } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>;
+
+      await runRepoSync(
+        createInputs({
+          specId: 'spec-new',
+          specPath: 'openapi.yaml',
+          onboardingScope: 'spec-only',
+          generateCiWorkflow: false,
+          repoWriteMode: 'commit-only'
+        }),
+        dependencies
+      );
+
+      expect(commitAndPush).toHaveBeenCalledWith(
+        expect.objectContaining({
+          removePaths: [],
+          stagePaths: ['.postman/resources.yaml']
+        })
+      );
+    });
+
     it('fails closed when local spec discovery exceeds the directory-depth budget', async () => {
       const deepDir = seedDeepDirectoryChain(7);
       seedOpenApiSpec(join(deepDir, 'openapi.json'));
@@ -2776,6 +2999,117 @@ describe('repo sync action', () => {
     expect(postman.createEnvironment).not.toHaveBeenCalled();
     expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('supports workspace and spec sync without generated assets or cloud monitors', async () => {
+    mkdirSync('.github/workflows', { recursive: true });
+    writeFileSync('.github/workflows/provision.yml', 'name: Existing Provision\n');
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  collections:',
+        '    ../postman/collections/existing: col-existing',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-existing',
+        '  specs:',
+        '    ../existing.yaml: spec-existing',
+        ''
+      ].join('\n')
+    );
+    writeFileSync(
+      'openapi.yaml',
+      'openapi: 3.1.0\ninfo:\n  title: Specs Only\n  version: 1.0.0\npaths: {}\n'
+    );
+
+    const postman = {
+      createEnvironment: vi.fn(),
+      updateEnvironment: vi.fn(),
+      findEnvironmentByName: vi.fn(),
+      createMock: vi.fn(),
+      findMockByCollection: vi.fn(),
+      createMonitor: vi.fn(),
+      findMonitorByCollection: vi.fn(),
+      runMonitor: vi.fn(),
+      getCollection: vi.fn(),
+      getEnvironment: vi.fn()
+    } as unknown as RepoSyncDependencies['postman'];
+    const internalIntegration = {
+      associateSystemEnvironments: vi.fn(),
+      connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+      findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+    };
+    const repoMutation = {
+      commitAndPush: vi.fn().mockResolvedValue({
+        commitSha: 'spec-only-commit',
+        pushed: false,
+        resolvedCurrentRef: 'feature/repo-sync'
+      })
+    };
+
+    const result = await runRepoSync(
+      createInputs({
+        specId: 'spec-new',
+        specPath: 'openapi.yaml',
+        onboardingScope: 'spec-only'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        internalIntegration,
+        repoMutation: repoMutation as unknown as RepoSyncDependencies['repoMutation']
+      }
+    );
+
+    expect(result).toMatchObject({
+      'workspace-link-status': 'success',
+      'environment-sync-status': 'skipped',
+      'environment-uids-json': '{}',
+      'mock-url': '',
+      'monitor-id': ''
+    });
+    expect(internalIntegration.connectWorkspaceToRepository).toHaveBeenCalledWith(
+      'ws-123',
+      'https://github.com/postman-cs/repo-sync-demo',
+      { preflightWasFree: true }
+    );
+    expect(internalIntegration.associateSystemEnvironments).not.toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+    expect(postman.createMock).not.toHaveBeenCalled();
+    expect(postman.findMockByCollection).not.toHaveBeenCalled();
+    expect(postman.createMonitor).not.toHaveBeenCalled();
+    expect(postman.findMonitorByCollection).not.toHaveBeenCalled();
+    expect(postman.runMonitor).not.toHaveBeenCalled();
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(existsSync('postman')).toBe(false);
+    expect(existsSync('.github/workflows/ci.yml')).toBe(false);
+    expect(readFileSync('.github/workflows/provision.yml', 'utf8')).toBe('name: Existing Provision\n');
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources).toEqual({
+      version: 2,
+      workspace: { id: 'ws-123' },
+      canonical: {
+        collections: { '../postman/collections/existing': 'col-existing' },
+        environments: {
+          '../postman/environments/prod.postman_environment.json': 'env-existing'
+        },
+        specs: {
+          '../existing.yaml': 'spec-existing',
+          '../openapi.yaml': 'spec-new'
+        }
+      }
+    });
+    expect(repoMutation.commitAndPush).toHaveBeenCalledWith(
+      expect.objectContaining({ stagePaths: ['.postman/resources.yaml'], removePaths: [] })
+    );
   });
 
   it('refresh reruns keep the same tracked collection ids in .postman/resources.yaml', async () => {
@@ -5042,6 +5376,42 @@ describe('org-mode auto-detection', () => {
       return new Response('', { status: 404 });
     });
   }
+
+  it('does not create or persist a Postman API key in spec-only scope', async () => {
+    const actionCore = {
+      info: vi.fn(),
+      setSecret: vi.fn(),
+      warning: vi.fn()
+    };
+    const execLike = {
+      getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stderr: '', stdout: '' })
+    };
+    const masker = createSecretMasker(['postman-access-token']);
+    const inputs = createInputs({
+      postmanApiKey: '',
+      postmanAccessToken: 'postman-access-token',
+      teamId: '10490519',
+      orgMode: true
+    });
+    vi.mocked(createInternalIntegrationAdapter).mockClear();
+
+    const result = await resolvePostmanApiKeyAndTeamId(
+      inputs,
+      actionCore,
+      execLike,
+      masker,
+      {
+        allowApiKeyCreation: false,
+        persistGeneratedApiKeySecret: false,
+        env: {}
+      }
+    );
+
+    expect(result).toEqual({ apiKey: '', teamId: '10490519' });
+    expect(createInternalIntegrationAdapter).not.toHaveBeenCalled();
+    expect(execLike.getExecOutput).not.toHaveBeenCalled();
+    expect(actionCore.setSecret).not.toHaveBeenCalled();
+  });
 
   it('sets orgMode=true when ums squads returns a non-empty squad list (org-mode team)', async () => {
     const actionCore = {
