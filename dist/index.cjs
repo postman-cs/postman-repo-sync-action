@@ -117023,7 +117023,7 @@ var postmanRepoSyncActionContract = {
     "mock-visibility": {
       description: "Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync.",
       required: false,
-      default: "public",
+      default: "private",
       allowedValues: ["public", "private"]
     },
     "mock-environment-enabled": {
@@ -118255,7 +118255,7 @@ var PostmanGatewayAssetsClient = class {
     return data?.collection ?? null;
   }
   // --- mocks (service: mock) ---
-  async createMock(workspaceId, name, collectionUid, environmentUid, requestedVisibility = "public") {
+  async createMock(workspaceId, name, collectionUid, environmentUid, requestedVisibility = "private") {
     const ws = workspaceId || this.workspaceId;
     const mockName = String(name ?? "").trim();
     const collection = String(collectionUid ?? "").trim();
@@ -119544,7 +119544,7 @@ function parseCredentialPreflight(value) {
 function parseMockVisibility(value) {
   const definition = postmanRepoSyncActionContract.inputs["mock-visibility"];
   const allowed = definition.allowedValues ?? [];
-  const normalized = String(value || "").trim() || (definition.default ?? "public");
+  const normalized = String(value || "").trim() || (definition.default ?? "private");
   if (allowed.includes(normalized)) return normalized;
   throw new Error(
     `Unsupported mock-visibility "${normalized}". Supported values: ${allowed.join(", ")}`
@@ -120301,7 +120301,7 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
     return "";
   }
   const displayName = `${assetProjectName} - Mock`;
-  const values = buildEnvironmentValues("mock", mockUrl, {
+  let values = buildEnvironmentValues("mock", mockUrl, {
     privateMockAuth,
     secretsResolverProvider: inputs.secretsResolverProvider
   });
@@ -120315,7 +120315,27 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
       try {
         const existing = await dependencies.postman.getEnvironment(discovered.uid);
         const currentValues = existing.data?.values ?? existing.values ?? [];
-        if (currentValues.some((value) => value.key === "baseUrl" && value.value === mockUrl)) {
+        const preservedCredentialValues = currentValues.filter(
+          (value) => typeof value?.key === "string"
+        ).map((value) => ({
+          key: value.key,
+          value: value.type === "secret" ? "" : typeof value.value === "string" ? value.value : "",
+          type: value.type === "secret" ? "secret" : "default",
+          ...typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}
+        }));
+        values = buildEnvironmentValues("mock", mockUrl, {
+          privateMockAuth,
+          secretsResolverProvider: inputs.secretsResolverProvider,
+          preservedCredentialValues
+        });
+        const baseUrlMatches = currentValues.some(
+          (value) => value.key === "baseUrl" && value.value === mockUrl
+        );
+        const privateMockAuthSlot = currentValues.find(
+          (value) => value.key === PRIVATE_MOCK_AUTH_VARIABLE2 && value.type === "secret" && value.enabled !== false
+        );
+        const privateMockAuthSlotExistsAndEmpty = typeof privateMockAuthSlot?.value === "string" ? privateMockAuthSlot.value === "" : false;
+        if (baseUrlMatches && (!privateMockAuth || privateMockAuthSlotExistsAndEmpty)) {
           dependencies.core.info(`Mock environment already points to ${mockUrl}: ${discovered.uid}`);
           return discovered.uid;
         }
@@ -120384,6 +120404,33 @@ function stripVolatileFields(obj) {
 function writeJsonFile(path9, content, normalize4 = false) {
   const data = normalize4 ? stripVolatileFields(content) : content;
   (0, import_node_fs5.writeFileSync)(path9, JSON.stringify(data, null, 2));
+}
+function sanitizeMockEnvironmentArtifact(content) {
+  if (Array.isArray(content)) {
+    return content.map((entry) => sanitizeMockEnvironmentArtifact(entry));
+  }
+  if (!content || typeof content !== "object") {
+    return content;
+  }
+  const record = content;
+  const sanitized = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "values" && Array.isArray(value)) {
+      sanitized[key] = value.map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return entry;
+        }
+        const variable = entry;
+        if (variable.type === "secret" || variable.key === PRIVATE_MOCK_AUTH_VARIABLE2) {
+          return { ...variable, value: "" };
+        }
+        return variable;
+      });
+      continue;
+    }
+    sanitized[key] = sanitizeMockEnvironmentArtifact(value);
+  }
+  return sanitized;
 }
 function buildMappedSpecCloudKey(mappedSource, specSyncMode, releaseLabel) {
   if (specSyncMode !== "version") {
@@ -120903,7 +120950,7 @@ async function runBoundedInOrder(items, width, worker) {
 async function acquireCollectionArtifact(options) {
   const { role, collectionId, dirName, collectionsDir, prebuiltByRole, postman, core, privateMockAuth = false } = options;
   const expectedPath = `${collectionsDir}/${dirName}`;
-  const forceCloudExport = privateMockAuth && (role === "smoke" || role === "contract");
+  const forceCloudExport = privateMockAuth;
   const entry = prebuiltByRole.get(role);
   if (entry && !forceCloudExport && tryReusePrebuiltCollection({
     prepared: entry,
@@ -121131,7 +121178,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     assertPathWithinCwd(spec.filePath, "environment target");
     writeJsonFile(
       spec.filePath,
-      environmentPayloads[index],
+      spec.envName === "manual-validation" ? sanitizeMockEnvironmentArtifact(environmentPayloads[index]) : environmentPayloads[index],
       true
     );
   }
@@ -121165,7 +121212,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     );
   }
 }
-function renderCiWorkflow(inputs) {
+function renderCiWorkflow(inputs, privateMockAuth) {
   if (inputs.ciWorkflowBase64) {
     return Buffer.from(inputs.ciWorkflowBase64, "base64").toString("utf8");
   }
@@ -121175,7 +121222,7 @@ function renderCiWorkflow(inputs) {
       postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
       runnerOs: inputs.ciRunnerOs,
       postmanRegion: inputs.postmanRegion,
-      privateMockAuth: inputs.mockVisibility === "private"
+      privateMockAuth
     });
   }
   return renderCiWorkflowTemplate({
@@ -121183,7 +121230,7 @@ function renderCiWorkflow(inputs) {
     postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
     runnerOs: inputs.ciRunnerOs,
     postmanRegion: inputs.postmanRegion,
-    privateMockAuth: inputs.mockVisibility === "private"
+    privateMockAuth
   });
 }
 function createRepoSummary(outputs, envUids, pushed) {
@@ -121202,9 +121249,9 @@ function createRepoSummary(outputs, envUids, pushed) {
     workspaceLinkStatus: outputs["workspace-link-status"]
   });
 }
-async function commitAndPushGeneratedFiles(inputs, dependencies) {
+async function commitAndPushGeneratedFiles(inputs, dependencies, privateMockAuth) {
   if (inputs.onboardingScope === "full" && inputs.generateCiWorkflow) {
-    const ciWorkflow = renderCiWorkflow(inputs);
+    const ciWorkflow = renderCiWorkflow(inputs, privateMockAuth);
     assertPathWithinCwd(inputs.ciWorkflowPath, "ci-workflow-path");
     const parts = inputs.ciWorkflowPath.split("/");
     if (parts.length > 1) {
@@ -121592,13 +121639,16 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
           );
         }
         const configured = [];
+        const configuredUids = /* @__PURE__ */ new Set();
         for (const { role, collectionUid } of [
+          { role: "baseline", collectionUid: inputs.baselineCollectionId },
           { role: "smoke", collectionUid: inputs.smokeCollectionId },
           { role: "contract", collectionUid: inputs.contractCollectionId }
         ]) {
-          if (!collectionUid) {
+          if (!collectionUid || configuredUids.has(collectionUid)) {
             continue;
           }
+          configuredUids.add(collectionUid);
           try {
             await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
             configured.push(collectionUid);
@@ -121796,12 +121846,16 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
       releaseLabel,
       priorState: resourcesState,
       preparedPrebuiltCollections,
-      privateMockAuth: inputs.mockVisibility === "private"
+      privateMockAuth: outputs["mock-auth-required"] === "true"
     })
   );
   const commit = await logger.phase(
     "commit-and-push",
-    async () => commitAndPushGeneratedFiles(inputs, dependencies)
+    async () => commitAndPushGeneratedFiles(
+      inputs,
+      dependencies,
+      outputs["mock-auth-required"] === "true"
+    )
   );
   outputs["commit-sha"] = commit.commitSha;
   if (commit.resolvedCurrentRef) {

@@ -64,7 +64,7 @@ inputs:
   mock-visibility:
     description: Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync.
     required: false
-    default: public
+    default: private
   mock-environment-enabled:
     description: Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential.
     required: false

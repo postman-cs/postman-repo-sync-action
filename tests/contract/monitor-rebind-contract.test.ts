@@ -163,6 +163,7 @@ function baseInputs(overrides: Record<string, string> = {}): Record<string, stri
     'generate-ci-workflow': 'false',
     'workspace-link-enabled': 'false',
     'environment-sync-enabled': 'false',
+    'mock-visibility': 'public',
     ...overrides
   };
 }

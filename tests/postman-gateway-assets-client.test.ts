@@ -119,7 +119,7 @@ describe('PostmanGatewayAssetsClient', () => {
       .mockResolvedValue(jsonResponse({ id: 'mock-uuid', name: 'm', collection: PUBLIC_UID, environment: ENV_PUBLIC_UID, url: 'https://mock-uuid.mock.pstmn.io', published: true }));
     const { assets } = buildClient(fetchImpl);
 
-    await assets.createMock('ws-1', 'm', PUBLIC_UID, ENV_PUBLIC_UID);
+    await assets.createMock('ws-1', 'm', PUBLIC_UID, ENV_PUBLIC_UID, 'public');
 
     const env = parseEnvelope(fetchImpl.mock.calls[1]);
     // public uid passed straight through — the bare model id 403s the mock service
@@ -127,61 +127,61 @@ describe('PostmanGatewayAssetsClient', () => {
     expect((env.body as Record<string, unknown>).environment).toBe(ENV_PUBLIC_UID);
   });
 
-  it('createMock sends the live-probed bare body via the mock service and parses id/url', async () => {
+  it('createMock defaults to a private mock and sends the live-probed bare body', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValue(
-        jsonResponse({ id: 'mock-uuid', name: 'm', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1', published: true })
+        jsonResponse({ id: 'mock-uuid', name: 'm', url: 'https://mock-uuid.mock.pstmn.io', collection: 'col-1', published: false })
       );
     const { assets } = buildClient(fetchImpl);
 
     const result = await assets.createMock('ws-1', 'm', 'col-1', '');
-    expect(result).toEqual({ uid: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', visibility: 'public' });
+    expect(result).toEqual({ uid: 'mock-uuid', url: 'https://mock-uuid.mock.pstmn.io', visibility: 'private' });
 
     const env = parseEnvelope(fetchImpl.mock.calls[1]);
     expect(env.service).toBe('mock');
     expect(env.method).toBe('post');
     expect(env.path).toBe('/mocks?workspace=ws-1');
     // bare body, NOT wrapped in { mock: { ... } }
-    expect(env.body).toEqual({ name: 'm', collection: 'col-1', private: false });
+    expect(env.body).toEqual({ name: 'm', collection: 'col-1', private: true });
     const headers = (fetchImpl.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-access-token']).toBe('tok-initial');
     expect(headers['X-Api-Key']).toBeUndefined();
   });
 
-  it('createMock refuses a mock the service reports as private', async () => {
+  it('createMock refuses a mock the service reports as public under the private default', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValue(
-        jsonResponse({ id: 'mock-private', name: 'm', collection: 'col-1', url: 'https://mock-private.mock.pstmn.io', published: false })
+        jsonResponse({ id: 'mock-public', name: 'm', collection: 'col-1', url: 'https://mock-public.mock.pstmn.io', published: true })
       );
     const { assets } = buildClient(fetchImpl);
 
     await expect(assets.createMock('ws-1', 'm', 'col-1', '')).rejects.toThrow(
-      /MOCK_NOT_PUBLIC.*mock-private/
+      /MOCK_NOT_PRIVATE.*mock-public/
     );
   });
 
-  it('createMock requests and accepts a private mock only when explicitly configured', async () => {
+  it('createMock requests and accepts a public mock only when explicitly configured', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValue(
-        jsonResponse({ id: 'mock-private', name: 'm', collection: 'col-1', url: 'https://mock-private.mock.pstmn.io', published: false })
+        jsonResponse({ id: 'mock-public', name: 'm', collection: 'col-1', url: 'https://mock-public.mock.pstmn.io', published: true })
       );
     const { assets } = buildClient(fetchImpl);
 
-    await expect(assets.createMock('ws-1', 'm', 'col-1', '', 'private')).resolves.toEqual({
-      uid: 'mock-private',
-      url: 'https://mock-private.mock.pstmn.io',
-      visibility: 'private'
+    await expect(assets.createMock('ws-1', 'm', 'col-1', '', 'public')).resolves.toEqual({
+      uid: 'mock-public',
+      url: 'https://mock-public.mock.pstmn.io',
+      visibility: 'public'
     });
     expect(parseEnvelope(fetchImpl.mock.calls[1]).body).toEqual({
       name: 'm',
       collection: 'col-1',
-      private: true
+      private: false
     });
   });
 
