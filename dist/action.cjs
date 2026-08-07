@@ -2459,7 +2459,7 @@ var require_request = __commonJS({
         return this.#paused;
       }
     };
-    var Request = class {
+    var Request2 = class {
       constructor(origin, {
         path: path9,
         method,
@@ -2808,7 +2808,7 @@ var require_request = __commonJS({
         request.headers.push(key, val);
       }
     }
-    module2.exports = Request;
+    module2.exports = Request2;
   }
 });
 
@@ -9194,7 +9194,7 @@ var require_client = __commonJS({
     var util = require_util();
     var { ClientStats } = require_stats();
     var { channels } = require_diagnostics();
-    var Request = require_request();
+    var Request2 = require_request();
     var DispatcherBase = require_dispatcher_base();
     var {
       InvalidArgumentError,
@@ -9463,7 +9463,7 @@ var require_client = __commonJS({
         this.once("connect", cb);
       }
       [kDispatch](opts, handler) {
-        const request = new Request(this[kUrl].origin, opts, handler);
+        const request = new Request2(this[kUrl].origin, opts, handler);
         this[kQueue].push(request);
         if (this[kResuming]) {
         } else if (util.bodyLength(request.body) == null && util.isIterable(request.body)) {
@@ -20204,7 +20204,7 @@ var require_request2 = __commonJS({
       }
     }
     var patchMethodWarning = false;
-    var Request = class _Request {
+    var Request2 = class _Request {
       /** @type {AbortSignal} */
       #signal;
       /** @type {import('../../dispatcher/dispatcher')} */
@@ -20709,15 +20709,15 @@ var require_request2 = __commonJS({
         request.#abortCleanup?.();
       }
     };
-    var { setRequestSignal, getRequestDispatcher, setRequestDispatcher, setRequestHeaders, getRequestState, setRequestState, removeRequestAbortListener } = Request;
-    Reflect.deleteProperty(Request, "setRequestSignal");
-    Reflect.deleteProperty(Request, "getRequestDispatcher");
-    Reflect.deleteProperty(Request, "setRequestDispatcher");
-    Reflect.deleteProperty(Request, "setRequestHeaders");
-    Reflect.deleteProperty(Request, "getRequestState");
-    Reflect.deleteProperty(Request, "setRequestState");
-    Reflect.deleteProperty(Request, "removeRequestAbortListener");
-    mixinBody(Request, getRequestState);
+    var { setRequestSignal, getRequestDispatcher, setRequestDispatcher, setRequestHeaders, getRequestState, setRequestState, removeRequestAbortListener } = Request2;
+    Reflect.deleteProperty(Request2, "setRequestSignal");
+    Reflect.deleteProperty(Request2, "getRequestDispatcher");
+    Reflect.deleteProperty(Request2, "setRequestDispatcher");
+    Reflect.deleteProperty(Request2, "setRequestHeaders");
+    Reflect.deleteProperty(Request2, "getRequestState");
+    Reflect.deleteProperty(Request2, "setRequestState");
+    Reflect.deleteProperty(Request2, "removeRequestAbortListener");
+    mixinBody(Request2, getRequestState);
     function makeRequest(init) {
       return {
         method: init.method ?? "GET",
@@ -20771,7 +20771,7 @@ var require_request2 = __commonJS({
       return newRequest;
     }
     function fromInnerRequest(innerRequest, dispatcher, signal, guard) {
-      const request = new Request(kConstruct);
+      const request = new Request2(kConstruct);
       setRequestState(request, innerRequest);
       setRequestDispatcher(request, dispatcher);
       setRequestSignal(request, signal);
@@ -20781,7 +20781,7 @@ var require_request2 = __commonJS({
       setHeadersGuard(headers, guard);
       return request;
     }
-    Object.defineProperties(Request.prototype, {
+    Object.defineProperties(Request2.prototype, {
       method: kEnumerableProperty,
       url: kEnumerableProperty,
       headers: kEnumerableProperty,
@@ -20807,7 +20807,7 @@ var require_request2 = __commonJS({
         configurable: true
       }
     });
-    webidl.is.Request = webidl.util.MakeTypeAssertion(Request);
+    webidl.is.Request = webidl.util.MakeTypeAssertion(Request2);
     webidl.converters.RequestInfo = function(V) {
       if (typeof V === "string") {
         return webidl.converters.USVString(V);
@@ -20906,7 +20906,7 @@ var require_request2 = __commonJS({
       }
     ]);
     module2.exports = {
-      Request,
+      Request: Request2,
       makeRequest,
       fromInnerRequest,
       cloneRequest,
@@ -21069,7 +21069,7 @@ var require_fetch = __commonJS({
       getResponseState
     } = require_response();
     var { HeadersList } = require_headers();
-    var { Request, cloneRequest, getRequestDispatcher, getRequestState, removeRequestAbortListener } = require_request2();
+    var { Request: Request2, cloneRequest, getRequestDispatcher, getRequestState, removeRequestAbortListener } = require_request2();
     var zlib = require("node:zlib");
     var {
       makePolicyContainer,
@@ -21189,7 +21189,7 @@ var require_fetch = __commonJS({
       let p = Promise.withResolvers();
       let requestObject;
       try {
-        requestObject = new Request(input, init);
+        requestObject = new Request2(input, init);
       } catch (e) {
         p.reject(e);
         return p.promise;
@@ -22244,7 +22244,7 @@ var require_cache3 = __commonJS({
     var { kEnumerableProperty, isDisturbed } = require_util();
     var { webidl } = require_webidl();
     var { cloneResponse, fromInnerResponse, getResponseState } = require_response();
-    var { Request, fromInnerRequest, getRequestState } = require_request2();
+    var { Request: Request2, fromInnerRequest, getRequestState } = require_request2();
     var { fetching } = require_fetch();
     var { urlIsHttpHttpsScheme, readAllBytes } = require_util2();
     var Cache = class _Cache {
@@ -22316,7 +22316,7 @@ var require_cache3 = __commonJS({
         }
         const fetchControllers = [];
         for (const request of requests) {
-          const r = getRequestState(new Request(request));
+          const r = getRequestState(new Request2(request));
           if (!urlIsHttpHttpsScheme(r.url)) {
             throw webidl.errors.exception({
               header: prefix,
@@ -22403,7 +22403,7 @@ var require_cache3 = __commonJS({
         if (webidl.is.Request(request)) {
           innerRequest = getRequestState(request);
         } else {
-          innerRequest = getRequestState(new Request(request));
+          innerRequest = getRequestState(new Request2(request));
         }
         if (!urlIsHttpHttpsScheme(innerRequest.url) || innerRequest.method !== "GET") {
           throw webidl.errors.exception({
@@ -22488,7 +22488,7 @@ var require_cache3 = __commonJS({
           }
         } else {
           assert(typeof request === "string");
-          r = getRequestState(new Request(request));
+          r = getRequestState(new Request2(request));
         }
         const operations = [];
         const operation = {
@@ -22533,7 +22533,7 @@ var require_cache3 = __commonJS({
               return [];
             }
           } else if (typeof request === "string") {
-            r = getRequestState(new Request(request));
+            r = getRequestState(new Request2(request));
           }
         }
         const promise = Promise.withResolvers();
@@ -22706,7 +22706,7 @@ var require_cache3 = __commonJS({
               return [];
             }
           } else if (typeof request === "string") {
-            r = getRequestState(new Request(request));
+            r = getRequestState(new Request2(request));
           }
         }
         const responses = [];
@@ -74578,7 +74578,7 @@ var require_request13 = __commonJS({
     var HeaderList = require_header_list().HeaderList;
     var RequestBody = require_request_body2().RequestBody;
     var RequestAuth = require_request_auth().RequestAuth;
-    var Request;
+    var Request2;
     var DEFAULT_REQ_METHOD = "GET";
     var CONTENT_LENGTH = "Content-Length";
     var SP = " ";
@@ -74597,8 +74597,8 @@ var require_request13 = __commonJS({
        * @extends {Property}
        * @param {Request.definition} options -
        */
-      Request = function PostmanRequest(options) {
-        Request.super_.apply(this, arguments);
+      Request2 = function PostmanRequest(options) {
+        Request2.super_.apply(this, arguments);
         typeof options === "string" && (options = {
           url: options
         });
@@ -74628,7 +74628,7 @@ var require_request13 = __commonJS({
       Property
     );
     _.assign(
-      Request.prototype,
+      Request2.prototype,
       /** @lends Request.prototype */
       {
         /**
@@ -74830,12 +74830,12 @@ var require_request13 = __commonJS({
          * @returns {Request}
          */
         clone: function() {
-          return new Request(this.toJSON());
+          return new Request2(this.toJSON());
         }
       }
     );
     _.assign(
-      Request,
+      Request2,
       /** @lends Request */
       {
         /**
@@ -74853,12 +74853,12 @@ var require_request13 = __commonJS({
          * @returns {Boolean}
          */
         isRequest: function(obj) {
-          return Boolean(obj) && (obj instanceof Request || _.inSuperChain(obj.constructor, "_postman_propertyName", Request._postman_propertyName));
+          return Boolean(obj) && (obj instanceof Request2 || _.inSuperChain(obj.constructor, "_postman_propertyName", Request2._postman_propertyName));
         }
       }
     );
     module2.exports = {
-      Request
+      Request: Request2
     };
   }
 });
@@ -78838,7 +78838,7 @@ var require_response2 = __commonJS({
     var LJSON = require_liquid_json();
     var Property = require_property().Property;
     var PropertyBase = require_property_base().PropertyBase;
-    var Request = require_request13().Request;
+    var Request2 = require_request13().Request;
     var CookieList = require_cookie_list().CookieList;
     var HeaderList = require_header_list().HeaderList;
     var contentInfo = require_content_info().contentInfo;
@@ -78909,7 +78909,7 @@ var require_response2 = __commonJS({
               /**
                * @type {Request}
                */
-              originalRequest: options.originalRequest ? new Request(options.originalRequest) : void 0,
+              originalRequest: options.originalRequest ? new Request2(options.originalRequest) : void 0,
               /**
                * @type {String}
                */
@@ -79256,7 +79256,7 @@ var require_item = __commonJS({
     var Property = require_property().Property;
     var PropertyList = require_property_list().PropertyList;
     var EventList = require_event_list().EventList;
-    var Request = require_request13().Request;
+    var Request2 = require_request13().Request;
     var RequestAuth = require_request_auth().RequestAuth;
     var Response2 = require_response2().Response;
     var Item;
@@ -79317,7 +79317,7 @@ var require_item = __commonJS({
              *
              * @type {Request}
              */
-            request: definition && new Request(definition.request),
+            request: definition && new Request2(definition.request),
             /**
              * An Item also contains a list of sample responses that is expected when the request defined in the item is
              * executed. The sample responses are useful in elaborating API usage and is also useful for other
@@ -79504,7 +79504,7 @@ var require_item = __commonJS({
          */
         authorizeRequestUsing: function(type, options) {
           if (!this.request) {
-            this.request = new Request();
+            this.request = new Request2();
           }
           return this.request.authorizeUsing(type, options);
         },
@@ -79560,7 +79560,7 @@ var require_item_group = __commonJS({
     var PropertyList = require_property_list().PropertyList;
     var EventList = require_event_list().EventList;
     var Item = require_item().Item;
-    var Request = require_request13().Request;
+    var Request2 = require_request13().Request;
     var RequestAuth = require_request_auth().RequestAuth;
     var ItemGroup;
     var OBJECT = "object";
@@ -79800,7 +79800,7 @@ var require_item_group = __commonJS({
          * @note This function was previously (in v2 of SDK) used to clone request and populate headers. Now it is used to
          * only set auth information to request
          */
-        authorizeRequestsUsing: Request.prototype.authorizeUsing
+        authorizeRequestsUsing: Request2.prototype.authorizeUsing
       }
     );
     _.assign(
@@ -110943,6 +110943,11 @@ var binaryTag = defineScalarTag("tag:yaml.org,2002:binary", {
 });
 var YAML_DATE_REGEXP = /* @__PURE__ */ new RegExp("^([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])$");
 var YAML_TIMESTAMP_REGEXP = /* @__PURE__ */ new RegExp("^([0-9][0-9][0-9][0-9])-([0-9][0-9]?)-([0-9][0-9]?)(?:[Tt]|[ \\t]+)([0-9][0-9]?):([0-9][0-9]):([0-9][0-9])(?:\\.([0-9]*))?(?:[ \\t]*(Z|([-+])([0-9][0-9]?)(?::([0-9][0-9]))?))?$");
+function makeUtcDate(year, month, day, hour = 0, minute = 0, second = 0, fraction = 0) {
+  const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+  date.setUTCFullYear(year, month, day);
+  return date;
+}
 function resolveYamlTimestamp(source) {
   let match = YAML_DATE_REGEXP.exec(source);
   if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(source);
@@ -110951,7 +110956,7 @@ function resolveYamlTimestamp(source) {
   const month = +match[2] - 1;
   const day = +match[3];
   if (!match[4]) {
-    const date2 = new Date(Date.UTC(year, month, day));
+    const date2 = makeUtcDate(year, month, day);
     if (date2.getUTCFullYear() !== year || date2.getUTCMonth() !== month || date2.getUTCDate() !== day) return NOT_RESOLVED;
     return date2;
   }
@@ -110965,7 +110970,7 @@ function resolveYamlTimestamp(source) {
     while (value.length < 3) value += "0";
     fraction = +value;
   }
-  const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+  const date = makeUtcDate(year, month, day, hour, minute, second, fraction);
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return NOT_RESOLVED;
   if (match[9]) {
     const offsetHour = +match[10];
@@ -111063,7 +111068,11 @@ var mapTag = defineMappingTag("tag:yaml.org,2002:map", {
     return Object.prototype.hasOwnProperty.call(container, String(key));
   },
   keys: (container) => Object.keys(container),
-  get: (container, key) => container[String(key)]
+  get: (container, key) => {
+    const normalizedKey = String(key);
+    if (!Object.prototype.hasOwnProperty.call(container, normalizedKey)) return null;
+    return container[normalizedKey];
+  }
 });
 var setTag = defineMappingTag("tag:yaml.org,2002:set", {
   create: () => /* @__PURE__ */ new Set(),
@@ -111084,9 +111093,9 @@ var setTag = defineMappingTag("tag:yaml.org,2002:set", {
 });
 function createTagDefinitionMap() {
   return {
-    scalar: {},
-    sequence: {},
-    mapping: {}
+    scalar: /* @__PURE__ */ Object.create(null),
+    sequence: /* @__PURE__ */ Object.create(null),
+    mapping: /* @__PURE__ */ Object.create(null)
   };
 }
 function createTagDefinitionListMap() {
@@ -111256,7 +111265,11 @@ var legacyMapTag = defineMappingTag("tag:yaml.org,2002:map", {
     return normalizedKey !== null && Object.prototype.hasOwnProperty.call(container, normalizedKey);
   },
   keys: (container) => Object.keys(container),
-  get: (container, key) => container[String(key)]
+  get: (container, key) => {
+    const normalizedKey = String(key);
+    if (!Object.prototype.hasOwnProperty.call(container, normalizedKey)) return null;
+    return container[normalizedKey];
+  }
 });
 var DEFAULT_SNIPPET_OPTIONS = {
   maxLength: 79,
@@ -111592,10 +111605,10 @@ function getScalarValue(input, scalar) {
       return getPlainValue(input, valueStart, valueEnd);
   }
 }
-var DEFAULT_TAG_HANDLERS = {
+var DEFAULT_TAG_HANDLERS = Object.assign(/* @__PURE__ */ Object.create(null), {
   "!": "!",
   "!!": "tag:yaml.org,2002:"
-};
+});
 function tagPercentEncode(source) {
   return encodeURI(source).replace(/!/g, "%21");
 }
@@ -111848,6 +111861,10 @@ function constructFromEvents(events2, options) {
       }
       case 6: {
         const frame = state.frames.pop();
+        if (frame.kind === "mapping" && frame.hasKey) {
+          state.position = frame.keyPosition;
+          throwError$1(state, "incomplete mapping pair in event stream");
+        }
         if (frame.kind === "document") state.documents.push(frame.value);
         else {
           const value = frame.tag.carrierIsResult ? frame.value : finalizeCollection(state, frame.position, frame.tag, frame.value);
@@ -112518,10 +112535,6 @@ function parseNode(state, parentIndent, nodeContext, allowToSeek, allowCompact, 
     else if (state.lineIndent === parentIndent) indentStatus = 0;
     else indentStatus = -1;
   }
-  if (state.position === state.lineStart && testDocumentSeparator(state)) {
-    state.depth--;
-    return false;
-  }
   if (indentStatus === 1) while (true) {
     const ch = state.input.charCodeAt(state.position);
     const propertyState = snapshotState(state);
@@ -113070,14 +113083,14 @@ function chooseScalarStyle(state, string, layout, singleLineOnly, forceQuote, in
       if (char === CHAR_LINE_FEED) {
         hasLineBreak = true;
         if (shouldTrackWidth) {
-          hasFoldableLine = hasFoldableLine || i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ";
+          hasFoldableLine = hasFoldableLine || i - previousLineBreak - 1 > lineWidth && !isMoreIndented(string[previousLineBreak + 1]);
           previousLineBreak = i;
         }
       } else if (!isPrintable(char)) return STYLE_DOUBLE;
       plain = plain && isPlainSafe(char, prevChar, inblock);
       prevChar = char;
     }
-    hasFoldableLine = hasFoldableLine || shouldTrackWidth && i - previousLineBreak - 1 > lineWidth && string[previousLineBreak + 1] !== " ";
+    hasFoldableLine = hasFoldableLine || shouldTrackWidth && i - previousLineBreak - 1 > lineWidth && !isMoreIndented(string[previousLineBreak + 1]);
   }
   if (!hasLineBreak && !hasFoldableLine) {
     if (plain && !forceQuote) return STYLE_PLAIN;
@@ -113142,27 +113155,30 @@ function encodeFlowBreaks(string, indent) {
 function dropEndingNewline(string) {
   return string[string.length - 1] === "\n" ? string.slice(0, -1) : string;
 }
+function isMoreIndented(char) {
+  return char === " " || char === "	";
+}
 function foldBlockScalar(string, width) {
   const lineRe = /(\n+)([^\n]*)/g;
   let nextLF = string.indexOf("\n");
   if (nextLF === -1) nextLF = string.length;
   lineRe.lastIndex = nextLF;
   let result = foldLine(string.slice(0, nextLF), width);
-  let prevMoreIndented = string[0] === "\n" || string[0] === " ";
+  let prevMoreIndented = string[0] === "\n" || isMoreIndented(string[0]);
   let moreIndented;
   let match;
   while (match = lineRe.exec(string)) {
     const prefix = match[1];
     const line = match[2];
-    moreIndented = line[0] === " ";
+    moreIndented = line !== "" && isMoreIndented(line[0]);
     result += prefix + (!prevMoreIndented && !moreIndented && line !== "" ? "\n" : "") + foldLine(line, width);
     prevMoreIndented = moreIndented;
   }
   return result;
 }
 function foldLine(line, width) {
-  if (line === "" || line[0] === " ") return line;
-  const breakRe = / [^ ]/g;
+  if (line === "" || isMoreIndented(line[0])) return line;
+  const breakRe = / [^ \t]/g;
   let match;
   let start = 0;
   let end;
@@ -122379,5 +122395,5 @@ postman-collection/index.js:
    *)
 
 js-yaml/dist/js-yaml.mjs:
-  (*! js-yaml 5.2.2 https://github.com/nodeca/js-yaml @license MIT *)
+  (*! js-yaml 5.2.3 https://github.com/nodeca/js-yaml @license MIT *)
 */
