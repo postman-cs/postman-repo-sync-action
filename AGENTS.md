@@ -35,7 +35,10 @@ tests/
 ## Commands
 
 ```bash
-npm ci && npm test && npm run typecheck && npm run build
+npm ci
+npm test
+npm run typecheck
+npm run build
 npm run verify:dist:assert  # CI: inspect dist; no build
 npm run verify:dist         # build, diff, inspect
 ```
