@@ -31,6 +31,8 @@ jobs:
           cache: npm
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/393031adb9afb225ee52ae2ccd7a5af5525e03e8/scripts/download-actionlint.bash) 1.7.11 "$RUNNER_TEMP"
@@ -61,7 +63,7 @@ jobs:
             while [ "${#pid[@]}" -ge "$MAX_PARALLEL_GATES" ]; do finish_one; done
             local n=$1; shift
             names+=("$n")
-            ( "$@" ) >"$n.log" 2>&1 & pid[$n]=$!
+            ( "$@" ) >"$RUNNER_TEMP/$n.log" 2>&1 & pid[$n]=$!
           }
 
           run lint       npm run lint
@@ -81,7 +83,7 @@ jobs:
             if [ "${result[$n]}" -eq 0 ]; then echo "gate:$n=pass"; else echo "gate:$n=fail"; fail=1; fi
           done
           for n in "${names[@]}"; do
-            echo "::group::$n"; cat "$n.log"; echo "::endgroup::"
+            echo "::group::$n"; cat "$RUNNER_TEMP/$n.log"; echo "::endgroup::"
           done
           exit $fail
       - name: Git smart-HTTP transport lane
@@ -165,6 +167,8 @@ jobs:
           cache: npm
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm run bundle
       - run: npm run verify:dist:parity
       - name: Upload expected dist on mismatch
@@ -190,6 +194,8 @@ jobs:
           key: Windows/node-24/exact-${{ hashFiles('package-lock.json') }}
       - if: steps.windows-node-modules.outputs.cache-hit != 'true'
         run: npm ci --prefer-offline --no-audit --no-fund
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: node --run test
 
   ready:
