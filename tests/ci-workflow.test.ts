@@ -131,6 +131,8 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(runGates).toContain('gate:$n=pass');
     expect(runGates).toContain('gate:$n=fail');
     expect(runGates).toContain('::group::$n');
+    expect(runGates).toContain('>"$RUNNER_TEMP/$n.log"');
+    expect(runGates).toContain('cat "$RUNNER_TEMP/$n.log"');
     expect(runGates).toContain('exit $fail');
   });
 
@@ -196,6 +198,9 @@ describe('CI and SEA PR workflow contracts', () => {
 
     expect(windows).toContain("if: steps.windows-node-modules.outputs.cache-hit != 'true'");
     expect(windows).toContain('run: npm ci --prefer-offline --no-audit --no-fund');
+    expect(windows).toMatch(
+      /run: npm ci --prefer-offline --no-audit --no-fund\n {8}env:\n {10}NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/,
+    );
     // Cache hit skips only install; the full unfiltered package.json "test"
     // script runs via Node's built-in runner (no npm.cmd boot on Windows).
     expect(windows).toMatch(/^\s*- run: node --run test\s*$/m);
@@ -220,6 +225,12 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(windows).not.toContain('npm run bundle');
     expect(windows).not.toContain('actionlint');
     expect(windows).not.toContain('commitlint');
+  });
+
+  it('scopes the locked-registry token to each npm ci install step', () => {
+    expect(ciWorkflow.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/g) ?? []).toHaveLength(3);
+    expect(namedStep(linux, 'Run gates')).not.toContain('NPM_TOKEN');
+    expect(windows).not.toMatch(/- run: node --run test\n\s+env:/);
   });
 
   it('uploads candidate dist from gate and expected-dist from dist-parity on mismatch', () => {
