@@ -132,7 +132,7 @@ with:
   mock-environment-enabled: true
 ```
 
-On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.postman_environment.json`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
+On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.environment.yaml`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
 
 ### mTLS certificates for Postman CLI runs
 
@@ -274,7 +274,7 @@ postman/collections/[Smoke] core-payments/
   <folder>.yaml
   <request>.yaml
 postman/environments/
-  prod.postman_environment.json
+  <project-slug> - prod.environment.yaml
 .postman/
   resources.yaml
 ```

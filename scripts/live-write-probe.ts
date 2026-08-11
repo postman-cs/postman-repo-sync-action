@@ -472,7 +472,7 @@ async function main(): Promise<void> {
         mockEnvironmentUid = first['mock-environment-uid'];
         const runtimeUids = JSON.parse(first['environment-uids-json']) as Record<string, string>;
         const resources = readFileSync('.postman/resources.yaml', 'utf8');
-        const artifactExists = existsSync('postman/mocks/manual-validation.postman_environment.json');
+        const artifactExists = existsSync('postman/mocks/manual-validation.environment.yaml');
         if (!mockEnvironmentUid || runtimeUids.prod !== envUid || Object.keys(runtimeUids).length !== 1) {
           fail('mock environment output', JSON.stringify({ mockEnvironmentUid, runtimeUids }));
         } else if (resources.includes(mockEnvironmentUid) || !artifactExists) {

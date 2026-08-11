@@ -679,7 +679,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
             '    ../postman/collections/[Smoke] Core: smoke-uid',
             '    ../postman/collections/[Contract] Core: contract-uid',
             '  environments:',
-            '    ../postman/environments/prod.postman_environment.json: env-uid',
+            '    ../postman/environments/core - prod.environment.yaml: env-uid',
             ''
           ].join('\n'),
           'utf8'

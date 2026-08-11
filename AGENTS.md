@@ -32,6 +32,14 @@ tests/
   - `convertAndSplitV3Collection(v3Export, dir)` — gateway v3 -> canonical v3, written directly
 - Output: canonical layout w/ definition file, folder dirs, request YAML, `$kind:` markers. Legacy `collection.yaml`/`type:` rejected by `postman collection lint` (FMT015). `splitCollection` owns long-name truncation + duplicate-sibling naming.
 
+## Environment v3 Invariant
+
+- **Source = access-token gateway.** `GET /environment/:uid/sync?since_id=0` returns the sync-service env body.
+- **Always write v3 YAML, never v2 JSON.** The v12 Postman client emits `{name, values:[{key,value}]}` YAML in Local Mode; matching that keeps repo-sync's output round-trip-compatible with the client and avoids the v12 "Upgrade to v3" warning banner.
+- **environment-converter.ts owns the reshape**: `convertEnvironmentToYaml(body)` reduces to `{name, values:[{key,value}]}` and dumps via `js-yaml`. `slugifyEnvironmentName` and `environmentFileName(workspace, envName)` build the on-disk `<workspace-slug> - <env-slug>.environment.yaml` filename the client uses.
+- **Migration on write**: repo-sync unlinks any paired legacy `<env>.postman_environment.json` alongside every YAML write, and `buildResourcesManifest` strips legacy JSON keys from prior state so the manifest only tracks the new extension.
+- **Mock env exception**: `manual-validation.environment.yaml` under `postman/mocks/` skips the workspace-slug prefix — the mock env is action-synthetic and never emitted by the v12 client.
+
 ## Commands
 
 ```bash
@@ -62,7 +70,7 @@ postman/
     [Smoke] name/collection.yaml
     [Contract] name/collection.yaml
   environments/
-    prod.postman_environment.json
+    <project-slug> - prod.environment.yaml
   mocks/
 .postman/
   resources.yaml  # PostmanResourcesConfig
