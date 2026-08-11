@@ -746,8 +746,8 @@ describe('repo sync action', () => {
           '../postman/collections/[Contract] core-payments': 'col-contract'
         },
         environments: {
-          '../postman/environments/prod.postman_environment.json': 'env-prod',
-          '../postman/environments/stage.postman_environment.json': 'env-stage'
+          '../postman/environments/core-payments - prod.environment.yaml': 'env-prod',
+          '../postman/environments/core-payments - stage.environment.yaml': 'env-stage'
         },
         specs: {
           '../packages/sdk/openapi.json': 'spec-123'
@@ -1066,8 +1066,8 @@ describe('repo sync action', () => {
       await Promise.resolve();
       expect(rejected).toBe(false);
       expect(postman.getEnvironment).not.toHaveBeenCalledWith('env-mock');
-      expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
-      expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(false);
+      expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(false);
+      expect(existsSync('postman/mocks/manual-validation.environment.yaml')).toBe(false);
       expect(existsSync('.postman/resources.yaml')).toBe(false);
 
       stage.resolve({ values: [{ key: 'stage', value: 'two' }] });
@@ -1151,15 +1151,15 @@ describe('repo sync action', () => {
       pending.get('env-stage')!.resolve({ values: [{ key: 'stage', value: 'two' }] });
       await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(3));
       expect(postman.getEnvironment.mock.calls.map(([id]) => id)).toEqual(['env-prod', 'env-stage', 'env-mock']);
-      expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
-      expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(false);
+      expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(false);
+      expect(existsSync('postman/mocks/manual-validation.environment.yaml')).toBe(false);
       expect(existsSync('.postman/resources.yaml')).toBe(false);
       pending.get('env-prod')!.resolve({ values: [{ key: 'prod', value: 'one' }] });
       pending.get('env-mock')!.resolve({ values: [{ key: 'mock', value: 'three' }] });
       await sync;
-      expect(readFileSync('postman/environments/prod.postman_environment.json', 'utf8')).toContain('prod');
-      expect(readFileSync('postman/environments/stage.postman_environment.json', 'utf8')).toContain('stage');
-      expect(readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')).toContain('mock');
+      expect(readFileSync('postman/environments/core-payments - prod.environment.yaml', 'utf8')).toContain('prod');
+      expect(readFileSync('postman/environments/core-payments - stage.environment.yaml', 'utf8')).toContain('stage');
+      expect(readFileSync('postman/mocks/manual-validation.environment.yaml', 'utf8')).toContain('mock');
       expect(infos.some((line) => /environment-artifact-acquisition.*count=3.*width=2.*ms=.*status=success/.test(line))).toBe(true);
     });
 
@@ -1179,7 +1179,7 @@ describe('repo sync action', () => {
 
       await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(2));
       mkdirSync('postman/environments', { recursive: true });
-      symlinkSync(outside, 'postman/environments/prod.postman_environment.json');
+      symlinkSync(outside, 'postman/environments/core-payments - prod.environment.yaml');
       prod.resolve({ values: [{ key: 'prod', value: 'one' }] });
       stage.resolve({ values: [{ key: 'stage', value: 'two' }] });
 
@@ -2310,7 +2310,7 @@ describe('repo sync action', () => {
           '  collections:',
           '    ../postman/collections/old: col-old',
           '  environments:',
-          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '    ../postman/environments/core-payments - prod.environment.yaml: env-old',
           '  specs:',
           '    ../old.yaml: spec-old',
           ''
@@ -2347,7 +2347,7 @@ describe('repo sync action', () => {
           '  collections:',
           '    ../postman/collections/old: col-old',
           '  environments:',
-          '    ../postman/environments/prod.postman_environment.json: env-old',
+          '    ../postman/environments/core-payments - prod.environment.yaml: env-old',
           '  specs:',
           '    ../old.yaml: spec-old',
           ''
@@ -2388,7 +2388,7 @@ describe('repo sync action', () => {
         '  collections:',
         '    ../postman/collections/existing: col-existing',
         '  environments:',
-        '    ../postman/environments/prod.postman_environment.json: env-existing',
+        '    ../postman/environments/core-payments - prod.environment.yaml: env-existing',
         '  specs:',
         '    ../openapi.yaml: spec-existing',
         ''
@@ -3015,7 +3015,7 @@ describe('repo sync action', () => {
         '  collections:',
         '    ../postman/collections/existing: col-existing',
         '  environments:',
-        '    ../postman/environments/prod.postman_environment.json: env-existing',
+        '    ../postman/environments/core-payments - prod.environment.yaml: env-existing',
         '  specs:',
         '    ../existing.yaml: spec-existing',
         ''
@@ -3099,7 +3099,7 @@ describe('repo sync action', () => {
       canonical: {
         collections: { '../postman/collections/existing': 'col-existing' },
         environments: {
-          '../postman/environments/prod.postman_environment.json': 'env-existing'
+          '../postman/environments/core-payments - prod.environment.yaml': 'env-existing'
         },
         specs: {
           '../existing.yaml': 'spec-existing',
@@ -4191,7 +4191,7 @@ describe('state ownership persistence', () => {
       '../postman/collections/[Contract] core-payments': 'col-contract'
     });
     expect(resources.canonical?.environments).toMatchObject({
-      '../postman/environments/prod.postman_environment.json': 'env-prod'
+      '../postman/environments/core-payments - prod.environment.yaml': 'env-prod'
     });
   });
 
@@ -5001,7 +5001,7 @@ describe('mock resolution paths', () => {
       mockEnvironmentUid: 'env-mock',
       mockEnvironmentStatus: 'success'
     });
-    expect(existsSync('postman/mocks/manual-validation.postman_environment.json')).toBe(true);
+    expect(existsSync('postman/mocks/manual-validation.environment.yaml')).toBe(true);
     expect(readFileSync('.postman/resources.yaml', 'utf8')).not.toContain('env-mock');
   });
 
@@ -5134,8 +5134,8 @@ describe('mock resolution paths', () => {
         { key: 'AWS_SECRET_ACCESS_KEY', value: '', type: 'secret', enabled: false }
       ])
     );
-    const exported = JSON.parse(
-      readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')
+    const exported = loadYaml(
+      readFileSync('postman/mocks/manual-validation.environment.yaml', 'utf8')
     ) as { values: Array<{ key: string; value: string }> };
     expect(exported.values.find((value) => value.key === 'AWS_REGION')?.value).toBe('us-east-2');
     expect(exported.values.find((value) => value.key === 'AWS_SECRET_ACCESS_KEY')?.value).toBe('');
@@ -5199,8 +5199,8 @@ describe('mock resolution paths', () => {
     expect(result['mock-environment-uid']).toBe('env-mock');
     expect(updateEnvironment.mock.calls.some(([, name]) => name === 'core-payments - Mock')).toBe(false);
     expect(JSON.parse(result['environment-uids-json'])).toEqual({ prod: 'env-prod' });
-    const exported = JSON.parse(
-      readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')
+    const exported = loadYaml(
+      readFileSync('postman/mocks/manual-validation.environment.yaml', 'utf8')
     ) as { values: Array<{ key: string; value: string }> };
     expect(exported.values.find((value) => value.key === 'postmanPrivateMockApiKey')?.value).toBe('');
     expect(JSON.stringify(exported)).not.toContain('pmak-user-filled');
@@ -6084,8 +6084,8 @@ describe('repo-variable fallback resolution', () => {
         '  id: ws-123',
         'cloudResources:',
         '  environments:',
-        '    "../postman/environments/prod.postman_environment.json": env-prod-file',
-        '    "../postman/environments/stage.postman_environment.json": env-stage-file',
+        '    "../postman/environments/core-payments - prod.environment.yaml": env-prod-file',
+        '    "../postman/environments/core-payments - stage.environment.yaml": env-stage-file',
         ''
       ].join('\n')
     );
