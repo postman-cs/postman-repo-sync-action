@@ -262,6 +262,8 @@ The action syncs a Postman workspace into the checked-out repository and can con
 
 The generated files are intended to be committed when `repo-write-mode` is `commit-only` or `commit-and-push`. Treat `postman/` and `.postman/` as reviewable source artifacts for the onboarding workflow; commit and review them like any other tracked source.
 
+Environment exports mirror Postman v12 Local Mode's environment filesystem YAML contract, including disabled entries, descriptions, resolved secret references, and valid colors. Resolved secrets omit values, and legacy `type: secret` values are redacted into canonical secret entries before repository serialization. Filenames use the same sanitization rules on the stable full `<project> - <environment>` cloud display name, including on versioned runs. A full export atomically promotes the YAML and resources manifest before deleting a legacy `.postman_environment.json` only when its prior manifest UID matches; conflicting ownership fails closed and untracked files are preserved with a warning. Spec-only runs do not migrate or delete environment state. Names that would collapse under Unicode normalization or case-folding fail before any Postman or repository mutation.
+
 A typical export looks like:
 
 ```text

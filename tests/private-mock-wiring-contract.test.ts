@@ -321,7 +321,7 @@ function createStatefulPrivateMockPostman(
     findEnvironmentByName: vi.fn().mockResolvedValue(null),
     createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
     createMonitor: vi.fn().mockResolvedValue('mon-1'),
-    getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+    getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
     listMonitors: vi.fn().mockResolvedValue([]),
     listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
     monitorExists: vi.fn().mockResolvedValue(false),

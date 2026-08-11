@@ -35,10 +35,11 @@ tests/
 ## Environment v3 Invariant
 
 - **Source = access-token gateway.** `GET /environment/:uid/sync?since_id=0` returns the sync-service env body.
-- **Always write v3 YAML, never v2 JSON.** The v12 Postman client emits `{name, values:[{key,value}]}` YAML in Local Mode; matching that keeps repo-sync's output round-trip-compatible with the client and avoids the v12 "Upgrade to v3" warning banner.
-- **environment-converter.ts owns the reshape**: `convertEnvironmentToYaml(body)` reduces to `{name, values:[{key,value}]}` and dumps via `js-yaml`. `slugifyEnvironmentName` and `environmentFileName(workspace, envName)` build the on-disk `<workspace-slug> - <env-slug>.environment.yaml` filename the client uses.
-- **Migration on write**: repo-sync unlinks any paired legacy `<env>.postman_environment.json` alongside every YAML write, and `buildResourcesManifest` strips legacy JSON keys from prior state so the manifest only tracks the new extension.
-- **Mock env exception**: `manual-validation.environment.yaml` under `postman/mocks/` skips the workspace-slug prefix — the mock env is action-synthetic and never emitted by the v12 client.
+- **Always write canonical environment YAML, never v2 JSON.** Repo-sync mirrors Postman v12 Local Mode's environment filesystem serializer: ordered `key`, optional `value`, `disabled`, `description`, `secret`, and `source` fields, plus a valid environment `color`. Resolved `secret: true` entries never persist `value`; every legacy `type: secret` value is redacted and emitted as canonical `secret: true` without `type`.
+- **environment-converter.ts owns the adapter**: `convertEnvironmentToYaml(body)` reconciles the sync-service body with the Local Mode on-disk shape and dumps with `indent: 2`, `lineWidth: -1`, `noRefs: true`, and `sortKeys: false`. `environmentFileName(project, envName)` applies the same `sanitizeFilename` options to the full stable `${project} - ${envName}` cloud display name.
+- **Atomic migration on write**: repo-sync writes every environment YAML to a confined same-filesystem candidate, validates and atomically promotes it, then atomically promotes `resources.yaml`, and only then deletes an exact confined legacy `<env>.postman_environment.json` whose prior manifest UID matches. Conflicting ownership fails before cloud mutation; untracked files are preserved with a warning. The fixed mock artifact is action-owned. Spec-only runs preserve environment mappings and files unchanged.
+- **Stable identity**: environment filenames use the stable project name even on versioned runs. Logical names map explicitly to filenames; empty filesystem names, path separators/control characters, truncation collisions, and Unicode-normalized/case-folded filename collisions fail before cloud mutation.
+- **Mock env exception**: `manual-validation.environment.yaml` under `postman/mocks/` skips the cloud display-name convention — the mock env is action-synthetic and never emitted by the app.
 
 ## Commands
 

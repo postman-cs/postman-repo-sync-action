@@ -215,7 +215,7 @@ describe('verify-dist-artifact canonical contract', () => {
       // Specs-only mode has an earlier state-only write. The final occurrence
       // remains the generated-assets path whose ordering this contract protects.
       const resourcesMaterialization = bundle.lastIndexOf(
-        'writeFileSync)(".postman/resources.yaml", buildResourcesManifest('
+        'writeFileAtomicSync(".postman/resources.yaml", resourcesManifest,'
       );
 
       expect(collectionAcquisition, entrypoint).toBeGreaterThanOrEqual(0);

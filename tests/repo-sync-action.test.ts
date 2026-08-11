@@ -457,7 +457,7 @@ function createExportPostmanStub() {
       .mockResolvedValueOnce(createCollectionFixture('core-payments'))
       .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
       .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-    getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+    getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
     listMonitors: vi.fn().mockResolvedValue([]),
     listMocks: vi.fn().mockResolvedValue([]),
     monitorExists: vi.fn().mockResolvedValue(false),
@@ -511,6 +511,232 @@ describe('repo sync action', () => {
     delete process.env.GITHUB_HEAD_REF;
     vi.unstubAllEnvs();
   }, 120_000);
+
+  function environmentOnlyInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
+    return createInputs({
+      baselineCollectionId: '',
+      smokeCollectionId: '',
+      contractCollectionId: '',
+      generateCiWorkflow: false,
+      environmentSyncEnabled: false,
+      workspaceLinkEnabled: false,
+      mockEnvironmentEnabled: false,
+      repoWriteMode: 'none',
+      ...overrides
+    });
+  }
+
+  function environmentOnlyDependencies(postman = createExportPostmanStub()): RepoSyncDependencies {
+    return {
+      core: createCoreStub().core,
+      postman
+    };
+  }
+
+  it('migrates an exact legacy JSON name containing ` - ` only after YAML and manifest promotion', async () => {
+    mkdirSync('postman/environments', { recursive: true });
+    mkdirSync('.postman', { recursive: true });
+    const legacyPath = 'postman/environments/qa - west.postman_environment.json';
+    writeFileSync(legacyPath, '{"name":"legacy"}\n');
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  environments:',
+        '    ../postman/environments/qa - west.postman_environment.json: env-qa-west',
+        ''
+      ].join('\n')
+    );
+    const postman = createExportPostmanStub();
+    postman.getEnvironment.mockResolvedValue({
+      name: 'core-payments - qa - west',
+      values: [
+        { key: 'baseUrl', value: 'https://qa.example.com' },
+        { key: 'TOKEN', value: 'must-not-be-committed', type: 'secret' }
+      ]
+    });
+
+    await runRepoSync(
+      environmentOnlyInputs({ environments: ['qa - west'], environmentUids: {} }),
+      environmentOnlyDependencies(postman)
+    );
+
+    const yamlPath = 'postman/environments/core-payments - qa - west.environment.yaml';
+    expect(existsSync(yamlPath)).toBe(true);
+    const environmentYaml = readFileSync(yamlPath, 'utf8');
+    expect(environmentYaml).not.toContain('must-not-be-committed');
+    expect(loadYaml(environmentYaml)).toMatchObject({
+      values: [
+        { key: 'baseUrl', value: 'https://qa.example.com' },
+        { key: 'TOKEN', secret: true }
+      ]
+    });
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.canonical?.environments).toEqual({
+      '../postman/environments/core-payments - qa - west.environment.yaml': 'env-qa-west'
+    });
+
+    await runRepoSync(
+      environmentOnlyInputs({ environments: ['qa - west'], environmentUids: {} }),
+      environmentOnlyDependencies(postman)
+    );
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+    expect(Object.keys((loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape)
+      .canonical?.environments ?? {})).toEqual([
+      '../postman/environments/core-payments - qa - west.environment.yaml'
+    ]);
+  });
+
+  it('keeps stable environment filenames in version mode', async () => {
+    await runRepoSync(
+      environmentOnlyInputs({
+        environments: ['prod'],
+        environmentUids: { prod: 'env-prod' },
+        specSyncMode: 'version',
+        releaseLabel: 'v42'
+      }),
+      environmentOnlyDependencies()
+    );
+
+    expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(true);
+    expect(existsSync('postman/environments/core-payments-v42 - prod.environment.yaml')).toBe(false);
+  });
+
+  it.each([
+    { environments: ['Prod', 'prod'], message: /same artifact filename/ },
+    {
+      environments: [`${'x'.repeat(80)}-one`, `${'x'.repeat(80)}-two`],
+      message: /same artifact filename/
+    },
+    { environments: ['caf\u00e9', 'cafe\u0301'], message: /same artifact filename/ },
+    { environments: ['stra\u00dfe', 'strasse'], message: /same artifact filename/ },
+    { environments: [''], message: /non-empty filesystem name/ },
+    { environments: ['..\\..\\outside'], message: /path separators/ }
+  ])('rejects unsafe or colliding environment identities before cloud mutation: $environments', async ({ environments, message }) => {
+    const postman = createExportPostmanStub();
+    await expect(
+      runRepoSync(environmentOnlyInputs({ environments }), environmentOnlyDependencies(postman))
+    ).rejects.toThrow(message);
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy JSON and a recoverable promoted YAML when manifest promotion fails', async () => {
+    mkdirSync('postman/environments', { recursive: true });
+    mkdirSync('.postman', { recursive: true });
+    const legacyPath = 'postman/environments/prod.postman_environment.json';
+    writeFileSync(legacyPath, '{"name":"legacy"}\n');
+    const outside = mkdtempSync(join(tmpdir(), 'repo-sync-manifest-outside-'));
+    const outsideManifest = join(outside, 'resources.yaml');
+    const priorManifest = [
+      'version: 2',
+      'workspace:',
+      '  id: ws-123',
+      'canonical:',
+      '  environments:',
+      '    ../postman/environments/prod.postman_environment.json: env-prod',
+      ''
+    ].join('\n');
+    writeFileSync(outsideManifest, priorManifest);
+    symlinkSync(outsideManifest, '.postman/resources.yaml');
+
+    try {
+      await expect(
+        runRepoSync(
+          environmentOnlyInputs({ environments: ['prod'], environmentUids: { prod: 'env-prod' } }),
+          environmentOnlyDependencies()
+        )
+      ).rejects.toThrow(/resources state target.*repository root/);
+      expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(true);
+      expect(existsSync(legacyPath)).toBe(true);
+      expect(readFileSync(outsideManifest, 'utf8')).toBe(priorManifest);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('fails before cloud mutation when a tracked legacy file belongs to another explicit UID', async () => {
+    mkdirSync('.postman', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-prior',
+        ''
+      ].join('\n')
+    );
+    const postman = createExportPostmanStub();
+
+    await expect(
+      runRepoSync(
+        environmentOnlyInputs({ environments: ['prod'], environmentUids: { prod: 'env-explicit' } }),
+        environmentOnlyDependencies(postman)
+      )
+    ).rejects.toThrow(/belongs to env-prior, not explicit UID env-explicit/);
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('preserves and warns about an untracked legacy JSON file', async () => {
+    mkdirSync('postman/environments', { recursive: true });
+    const legacyPath = 'postman/environments/prod.postman_environment.json';
+    writeFileSync(legacyPath, '{"name":"untracked"}\n');
+    const postman = createExportPostmanStub();
+    const { core, warnings } = createCoreStub();
+
+    await runRepoSync(
+      environmentOnlyInputs({ environments: ['prod'], environmentUids: { prod: 'env-prod' } }),
+      { core, postman }
+    );
+
+    expect(existsSync(legacyPath)).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Preserving untracked legacy environment artifact')
+      ])
+    );
+  });
+
+  it('preserves legacy environment state and artifacts during same-workspace spec-only sync', async () => {
+    mkdirSync('postman/environments', { recursive: true });
+    mkdirSync('.postman', { recursive: true });
+    const legacyPath = 'postman/environments/prod.postman_environment.json';
+    writeFileSync(legacyPath, '{"name":"legacy"}\n');
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'version: 2',
+        'workspace:',
+        '  id: ws-123',
+        'canonical:',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-prod',
+        ''
+      ].join('\n')
+    );
+
+    const postman = createExportPostmanStub();
+    await runRepoSync(
+      environmentOnlyInputs({ onboardingScope: 'spec-only' }),
+      environmentOnlyDependencies(postman)
+    );
+
+    expect(existsSync(legacyPath)).toBe(true);
+    expect(readFileSync('.postman/resources.yaml', 'utf8')).toContain(
+      '../postman/environments/prod.postman_environment.json: env-prod'
+    );
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+  });
 
   it('marks secrets during input resolution', () => {
     const { core, secrets } = createCoreStub({
@@ -624,7 +850,7 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -1116,9 +1342,9 @@ describe('repo sync action', () => {
 
     it('joins bounded environment acquisition before writes in finalized serial env spec order despite reverse read completion', async () => {
       const pending = new Map([
-        ['env-prod', deferred<{ values: Array<{ key: string; value: string }> }>()],
-        ['env-stage', deferred<{ values: Array<{ key: string; value: string }> }>()],
-        ['env-mock', deferred<{ values: Array<{ key: string; value: string }> }>()]
+        ['env-prod', deferred<{ name: string; values: Array<{ key: string; value: string }> }>()],
+        ['env-stage', deferred<{ name: string; values: Array<{ key: string; value: string }> }>()],
+        ['env-mock', deferred<{ name: string; values: Array<{ key: string; value: string }> }>()]
       ]);
       let active = 0;
       let peak = 0;
@@ -1148,14 +1374,14 @@ describe('repo sync action', () => {
       expect(peak).toBeGreaterThan(1);
       expect(peak).toBeLessThanOrEqual(2);
       expect(existsSync('.postman/resources.yaml')).toBe(false);
-      pending.get('env-stage')!.resolve({ values: [{ key: 'stage', value: 'two' }] });
+      pending.get('env-stage')!.resolve({ name: 'core-payments - stage', values: [{ key: 'stage', value: 'two' }] });
       await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(3));
       expect(postman.getEnvironment.mock.calls.map(([id]) => id)).toEqual(['env-prod', 'env-stage', 'env-mock']);
       expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(false);
       expect(existsSync('postman/mocks/manual-validation.environment.yaml')).toBe(false);
       expect(existsSync('.postman/resources.yaml')).toBe(false);
-      pending.get('env-prod')!.resolve({ values: [{ key: 'prod', value: 'one' }] });
-      pending.get('env-mock')!.resolve({ values: [{ key: 'mock', value: 'three' }] });
+      pending.get('env-prod')!.resolve({ name: 'core-payments - prod', values: [{ key: 'prod', value: 'one' }] });
+      pending.get('env-mock')!.resolve({ name: 'core-payments - Mock', values: [{ key: 'mock', value: 'three' }] });
       await sync;
       expect(readFileSync('postman/environments/core-payments - prod.environment.yaml', 'utf8')).toContain('prod');
       expect(readFileSync('postman/environments/core-payments - stage.environment.yaml', 'utf8')).toContain('stage');
@@ -2952,7 +3178,7 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3124,7 +3350,7 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3188,7 +3414,7 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3320,7 +3546,7 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3420,7 +3646,7 @@ describe('repo sync action', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3479,7 +3705,7 @@ describe('repo sync action', () => {
         .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -3558,7 +3784,7 @@ describe('state ownership persistence', () => {
         .mockResolvedValueOnce(createCollectionFixture('core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Smoke] core-payments'))
         .mockResolvedValueOnce(createCollectionFixture('[Contract] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -4436,7 +4662,7 @@ describe('monitor resolution paths', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-new'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -4790,7 +5016,7 @@ describe('mock resolution paths', () => {
         }
         return Promise.resolve(createCollectionFixture('core-payments'));
       }),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -4977,6 +5203,7 @@ describe('mock resolution paths', () => {
       createEnvironment,
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
+        name: uid === 'env-mock' ? 'core-payments - Mock' : 'core-payments - prod',
         values: uid === 'env-mock' ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io' }] : []
       }))
     });
@@ -5058,6 +5285,7 @@ describe('mock resolution paths', () => {
       ),
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
+        name: uid === 'env-mock' ? 'core-payments - Mock' : 'core-payments - prod',
         values: uid === 'env-mock'
           ? [{ key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' }]
           : []
@@ -5102,6 +5330,7 @@ describe('mock resolution paths', () => {
       ),
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
+        name: uid === 'env-mock' ? 'core-payments - Mock' : 'core-payments - prod',
         values: uid === 'env-mock'
           ? [
               { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
@@ -5136,9 +5365,13 @@ describe('mock resolution paths', () => {
     );
     const exported = loadYaml(
       readFileSync('postman/mocks/manual-validation.environment.yaml', 'utf8')
-    ) as { values: Array<{ key: string; value: string }> };
+    ) as { values: Array<{ key: string; value?: string; secret?: boolean }> };
     expect(exported.values.find((value) => value.key === 'AWS_REGION')?.value).toBe('us-east-2');
-    expect(exported.values.find((value) => value.key === 'AWS_SECRET_ACCESS_KEY')?.value).toBe('');
+    expect(exported.values.find((value) => value.key === 'AWS_SECRET_ACCESS_KEY')).toEqual({
+      key: 'AWS_SECRET_ACCESS_KEY',
+      disabled: true,
+      secret: true
+    });
     expect(JSON.stringify(exported)).not.toContain('preserved-secret');
   });
 
@@ -5176,6 +5409,7 @@ describe('mock resolution paths', () => {
       ),
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
+        name: uid === 'env-mock' ? 'core-payments - Mock' : 'core-payments - prod',
         values: uid === 'env-mock'
           ? [
               { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
@@ -5201,8 +5435,11 @@ describe('mock resolution paths', () => {
     expect(JSON.parse(result['environment-uids-json'])).toEqual({ prod: 'env-prod' });
     const exported = loadYaml(
       readFileSync('postman/mocks/manual-validation.environment.yaml', 'utf8')
-    ) as { values: Array<{ key: string; value: string }> };
-    expect(exported.values.find((value) => value.key === 'postmanPrivateMockApiKey')?.value).toBe('');
+    ) as { values: Array<{ key: string; value?: string; secret?: boolean }> };
+    expect(exported.values.find((value) => value.key === 'postmanPrivateMockApiKey')).toEqual({
+      key: 'postmanPrivateMockApiKey',
+      secret: true
+    });
     expect(JSON.stringify(exported)).not.toContain('pmak-user-filled');
   });
 
@@ -5972,7 +6209,7 @@ describe('repo-variable fallback resolution', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('[Smoke] core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),
@@ -6174,7 +6411,7 @@ describe('repo-link admission guard', () => {
       createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockResolvedValue(createCollectionFixture('core-payments')),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMonitors: vi.fn().mockResolvedValue([]),
       listMocks: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),

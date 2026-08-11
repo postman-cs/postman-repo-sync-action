@@ -111,7 +111,7 @@ function makePostman(overrides: Record<string, unknown> = {}) {
     createEnvironment: vi.fn().mockResolvedValue('env-prod'),
     updateEnvironment: vi.fn().mockResolvedValue(undefined),
     findEnvironmentByName: vi.fn().mockResolvedValue(null),
-    getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+    getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
     createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
     createMonitor: vi.fn().mockResolvedValue('mon-1'),
     getCollection: vi.fn().mockResolvedValue({
