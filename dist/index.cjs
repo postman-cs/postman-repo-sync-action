@@ -114509,6 +114509,29 @@ async function writeSplitCollection(v3, outputDir) {
   await pruneEmptyDirs(outputDir);
 }
 
+// src/postman-v3/environment-converter.ts
+function convertEnvironmentToYaml(env) {
+  const body = env ?? {};
+  const rawValues = Array.isArray(body.values) ? body.values : [];
+  const shape = {
+    name: typeof body.name === "string" ? body.name : "",
+    values: rawValues.map((entry) => {
+      const record = entry ?? {};
+      return {
+        key: typeof record.key === "string" ? record.key : "",
+        value: typeof record.value === "string" ? record.value : ""
+      };
+    })
+  };
+  return dump(shape, { lineWidth: -1, noRefs: true });
+}
+function slugifyEnvironmentName(input) {
+  return input.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9._-]/g, "-").replace(/-+/g, "-").replace(/^[._-]+|[._-]+$/g, "");
+}
+function environmentFileName(workspaceName, envName) {
+  return `${slugifyEnvironmentName(workspaceName)} - ${slugifyEnvironmentName(envName)}.environment.yaml`;
+}
+
 // src/lib/postman/base-urls.ts
 var POSTMAN_ENDPOINT_PROFILES = {
   prod: {
@@ -114693,7 +114716,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "          environments = cloud.fetch('environments', {})",
     "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
     "          contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
-    "          environment = environments.find { |path, _| path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
+    "          environment = environments.find { |path, _| path.end_with?(' - prod.environment.yaml') || path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
     "          missing = []",
     "          missing << 'smoke collection' unless smoke",
     "          missing << 'contract collection' unless contract",
@@ -114859,7 +114882,7 @@ function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAu
     "        if ($section -eq 'collections' -and $key -match '\\[Contract\\]') { $contract = $value }",
     "        if ($section -eq 'environments') {",
     "          if ([string]::IsNullOrWhiteSpace($fallbackEnvironment)) { $fallbackEnvironment = $value }",
-    "          if ($key -match 'prod\\.postman_environment\\.json$') { $environment = $value }",
+    "          if ($key -match '(?:- prod\\.environment\\.yaml|prod\\.postman_environment\\.json)$') { $environment = $value }",
     "        }",
     "      }",
     "      if ([string]::IsNullOrWhiteSpace($environment)) { $environment = $fallbackEnvironment }",
@@ -114924,8 +114947,8 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "  - script: |",
     "      SMOKE=$(grep '\\[Smoke\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
     "      CONTRACT=$(grep '\\[Contract\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-    "      ENV=$(grep 'prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-    "      ENV=${ENV:-$(grep '\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
+    "      ENV=$(grep -E ' - prod\\.environment\\.yaml|prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
+    "      ENV=${ENV:-$(grep -E '\\.environment\\.yaml|\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
     '      [ -n "$SMOKE" ] || { echo "Missing smoke collection UID in .postman/resources.yaml"; exit 1; }',
     '      [ -n "$CONTRACT" ] || { echo "Missing contract collection UID in .postman/resources.yaml"; exit 1; }',
     '      [ -n "$ENV" ] || { echo "Missing environment UID in .postman/resources.yaml"; exit 1; }',
@@ -120649,7 +120672,7 @@ function getEnvironmentUidsFromResources(resourcesState) {
   }
   return Object.fromEntries(
     Object.entries(cloudEnvironments).map(([filePath, uid]) => {
-      const match = filePath.match(/\/environments\/(.+)\.postman_environment\.json$/);
+      const match = filePath.match(/\/environments\/(?:.+ - )?([^/]+?)\.(?:environment\.yaml|postman_environment\.json)$/);
       return match ? [match[1], uid] : null;
     }).filter((entry) => Boolean(entry))
   );
@@ -121217,37 +121240,6 @@ function getCollectionDirectoryName(kind, projectName) {
   }
   return `[${kind}] ${projectName}`;
 }
-var VOLATILE_KEYS = /* @__PURE__ */ new Set([
-  "createdAt",
-  "updatedAt",
-  "lastUpdatedBy"
-]);
-function stripVolatileFields(obj) {
-  if (Array.isArray(obj)) {
-    return obj.map(stripVolatileFields);
-  }
-  if (obj !== null && typeof obj === "object") {
-    const result = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (VOLATILE_KEYS.has(key)) {
-        continue;
-      }
-      if (key === "id" && typeof value === "string" && /^[0-9a-f-]{36}$/.test(value)) {
-        continue;
-      }
-      if (key === "uid" && typeof value === "string" && /^\d+-[0-9a-f-]{36}$/.test(value)) {
-        continue;
-      }
-      result[key] = stripVolatileFields(value);
-    }
-    return result;
-  }
-  return obj;
-}
-function writeJsonFile(path9, content, normalize4 = false) {
-  const data = normalize4 ? stripVolatileFields(content) : content;
-  (0, import_node_fs5.writeFileSync)(path9, JSON.stringify(data, null, 2));
-}
 function sanitizeMockEnvironmentArtifact(content) {
   if (Array.isArray(content)) {
     return content.map((entry) => sanitizeMockEnvironmentArtifact(entry));
@@ -121297,7 +121289,7 @@ function resolveDurableWorkspaceId(options) {
   }
   return prior === candidate ? prior : void 0;
 }
-function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState, preserveGeneratedAssets = false) {
+function buildResourcesManifest(workspaceId, collectionMap, envMap, assetProjectName, artifactDir, localSpecRefs, mappedSpecRef, specId, existingSpecs, priorState, preserveGeneratedAssets = false) {
   const manifest = { ...priorState ?? {} };
   delete manifest.version;
   delete manifest.workspace;
@@ -121315,6 +121307,11 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir,
     cloudResources.collections = effectiveCollectionMap;
   }
   const priorEnvironmentMap = preserveGeneratedAssets ? { ...priorState?.cloudResources?.environments ?? {} } : {};
+  for (const key of Object.keys(priorEnvironmentMap)) {
+    if (key.endsWith(".postman_environment.json")) {
+      delete priorEnvironmentMap[key];
+    }
+  }
   const envEntries = Object.entries(envMap);
   if (Object.keys(priorEnvironmentMap).length > 0 || envEntries.length > 0) {
     cloudResources.environments = priorEnvironmentMap;
@@ -121322,7 +121319,8 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, artifactDir,
   if (envEntries.length > 0) {
     cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
-      cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
+      const fileName = environmentFileName(assetProjectName, envName);
+      cloudResources.environments[`../${artifactDir}/environments/${fileName}`] = envUid;
     }
   }
   void localSpecRefs;
@@ -121916,6 +121914,7 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
       durableWorkspaceId,
       {},
       {},
+      assetProjectName,
       inputs.artifactDir,
       discoveredSpecs.map((spec) => spec.configRelativePath),
       mappedSpecCloudKey,
@@ -121992,12 +121991,14 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
     ...Object.entries(envUids).map(([envName, envUid]) => ({
       envName,
       envUid,
-      filePath: `${environmentsDir}/${envName}.postman_environment.json`
+      filePath: `${environmentsDir}/${environmentFileName(assetProjectName, envName)}`,
+      legacyFilePath: `${environmentsDir}/${envName}.postman_environment.json`
     })),
     ...options.mockEnvironmentUid ? [{
       envName: "manual-validation",
       envUid: options.mockEnvironmentUid,
-      filePath: `${mocksDir}/manual-validation.postman_environment.json`
+      filePath: `${mocksDir}/manual-validation.environment.yaml`,
+      legacyFilePath: `${mocksDir}/manual-validation.postman_environment.json`
     }] : []
   ];
   const environmentStartedAt = Date.now();
@@ -122019,17 +122020,18 @@ async function exportArtifacts(inputs, dependencies, envUids, assetProjectName, 
   }
   for (const [index, spec] of environmentSpecs.entries()) {
     assertPathWithinCwd(spec.filePath, "environment target");
-    writeJsonFile(
-      spec.filePath,
-      spec.envName === "manual-validation" ? sanitizeMockEnvironmentArtifact(environmentPayloads[index]) : environmentPayloads[index],
-      true
-    );
+    const payload = spec.envName === "manual-validation" ? sanitizeMockEnvironmentArtifact(environmentPayloads[index]) : environmentPayloads[index];
+    (0, import_node_fs5.writeFileSync)(spec.filePath, convertEnvironmentToYaml(payload));
+    if (spec.legacyFilePath !== spec.filePath && (0, import_node_fs5.existsSync)(spec.legacyFilePath)) {
+      (0, import_node_fs5.rmSync)(spec.legacyFilePath, { force: true });
+    }
   }
   assertPathWithinCwd(".postman/resources.yaml", "resources state target");
   (0, import_node_fs5.writeFileSync)(".postman/resources.yaml", buildResourcesManifest(
     durableWorkspaceId,
     manifestCollections,
     envUids,
+    assetProjectName,
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpecCloudKey,
