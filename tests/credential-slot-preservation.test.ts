@@ -159,7 +159,7 @@ function makeDeps(postman: ReturnType<typeof makePostman>, github: ReturnType<ty
 }
 
 /**
- * Regression: ADO pipeline 155 (Cust-Clean-Harbors-Drum-API) run 2858.
+ * Regression: ADO pipeline 155 (Cust-Example-Fixture-API) run 2858.
  *
  * A consumer that onboarded before provider-scoped credential slots has a
  * `00 - Resolve Secrets` request baked into an existing collection, and that
