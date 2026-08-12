@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,7 @@ import {
   renderCiWorkflowTemplate,
   renderGcWorkflowTemplate
 } from '../src/lib/ci-workflow-template.js';
+import { environmentFileName } from '../src/lib/postman/environment-yaml.js';
 
 type ExecPwshOptions = {
   cwd?: string;
@@ -273,6 +274,45 @@ function getWindowsSmokeAndContractSteps(): {
   return { smokeStep, contractStep };
 }
 
+const PROD_PROJECT_NAME = "O'Brien # API " + 'core-payments-service-'.repeat(5) + 'prod';
+const TRUNCATED_PROD_ENVIRONMENT_FILE = environmentFileName(PROD_PROJECT_NAME, 'prod');
+
+function writeTruncatedProdResourcesFixture(sandbox: string): void {
+  mkdirSync(path.join(sandbox, '.postman'), { recursive: true });
+  mkdirSync(path.join(sandbox, 'postman', 'environments'), { recursive: true });
+  writeFileSync(
+    path.join(sandbox, '.postman', 'resources.yaml'),
+    [
+      'version: 2',
+      'canonical:',
+      '  collections:',
+      '    ../postman/collections/[Smoke] Core: smoke-uid',
+      '    ../postman/collections/[Contract] Core: contract-uid',
+      '  environments:',
+      '    ../postman/environments/core-payments - stage.environment.yaml: env-stage',
+      '    ../postman/environments/core-payments - qa-prod.environment.yaml: env-qa-prod',
+      '    "../postman/environments/' + TRUNCATED_PROD_ENVIRONMENT_FILE + '": env-prod',
+      ''
+    ].join('\n'),
+    'utf8'
+  );
+  writeFileSync(
+    path.join(sandbox, 'postman', 'environments', 'core-payments - stage.environment.yaml'),
+    'name: core-payments - stage\nvalues: []\n',
+    'utf8'
+  );
+  writeFileSync(
+    path.join(sandbox, 'postman', 'environments', 'core-payments - qa-prod.environment.yaml'),
+    'name: ' + PROD_PROJECT_NAME + ' - qa - prod\nvalues: []\n',
+    'utf8'
+  );
+  writeFileSync(
+    path.join(sandbox, 'postman', 'environments', TRUNCATED_PROD_ENVIRONMENT_FILE),
+    'name: ' + PROD_PROJECT_NAME + ' - prod\nvalues: []\n',
+    'utf8'
+  );
+}
+
 describe('renderCiWorkflowTemplate', () => {
   it('keys concurrency on the resolved head branch rather than the raw merge ref', () => {
     const workflow = renderCiWorkflowTemplate();
@@ -354,6 +394,26 @@ describe('renderCiWorkflowTemplate', () => {
     expect(stepNames).toContain('Decode SSL certificates');
     expect(stepNames).toContain('Run Smoke Tests');
     expect(stepNames).toContain('Run Contract Tests');
+  });
+
+  it('resolves prod from its stable filename when the project name is quoted and truncated', () => {
+    const parsed = parse(renderCiWorkflowTemplate({ projectName: PROD_PROJECT_NAME }));
+    const resolveStep = parsed.jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Resolve Postman Resource IDs'
+    );
+    const sandbox = mkdtempSync(path.join(tmpdir(), 'repo-sync-github-resources-'));
+    const githubEnv = path.join(sandbox, 'github.env');
+    try {
+      writeTruncatedProdResourcesFixture(sandbox);
+      execFileSync('bash', ['-c', resolveStep.run], {
+        cwd: sandbox,
+        env: { ...process.env, GITHUB_ENV: githubEnv },
+        encoding: 'utf8'
+      });
+      expect(readFileSync(githubEnv, 'utf8')).toContain('POSTMAN_ENVIRONMENT_UID=env-prod');
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 
   it('routes install URL via env var, not shell interpolation', () => {
@@ -633,6 +693,29 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     expect(ciWorkflow).not.toContain('RESPONSE_TIME_THRESHOLD');
   });
 
+  it('resolves prod from its stable filename on Azure DevOps Linux', () => {
+    const parsed = parse(getCiWorkflowTemplate('azure-devops', {
+      projectName: PROD_PROJECT_NAME
+    }));
+    const resolveStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Resolve Postman Resource IDs'
+    );
+    const sandbox = mkdtempSync(path.join(tmpdir(), 'repo-sync-linux-resources-'));
+    try {
+      writeTruncatedProdResourcesFixture(sandbox);
+      const output = execFileSync('bash', ['-c', resolveStep.script], {
+        cwd: sandbox,
+        env: process.env,
+        encoding: 'utf8'
+      });
+      expect(output).toContain(
+        '##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]env-prod'
+      );
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it('forwards RESPONSE_TIME_THRESHOLD with a 10000 default on Windows smoke and contract steps', () => {
     const ciWorkflow = getCiWorkflowTemplate('azure-devops', { runnerOs: 'windows' });
     const parsed = parse(ciWorkflow);
@@ -657,10 +740,26 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     }
   });
 
+  it('uses the stable prod filename on Windows without parsing YAML scalar text', () => {
+    const parsed = parse(getCiWorkflowTemplate('azure-devops', {
+      projectName: PROD_PROJECT_NAME,
+      runnerOs: 'windows'
+    }));
+    const resolveStep = parsed.steps.find(
+      (step: { displayName?: string }) => step.displayName === 'Resolve Postman Resource IDs'
+    );
+
+    expect(resolveStep.pwsh).toContain('[IO.Path]::GetFileName($key).Equals($expectedProdFile');
+    expect(resolveStep.pwsh).toContain(".Replace(\"''\", \"'\")");
+    expect(resolveStep.pwsh).not.toContain('$nameLine');
+    expect(resolveStep.pwsh).not.toContain('Get-Content -LiteralPath $artifactPath');
+  });
+
   describe.sequential('PowerShell Azure DevOps execution', () => {
     it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const parsed = parse(
         getCiWorkflowTemplate('azure-devops', {
+          projectName: PROD_PROJECT_NAME,
           runnerOs: 'windows'
         })
       );
@@ -669,21 +768,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
       );
       const sandbox = mkdtempSync(path.join(tmpdir(), 'repo-sync-windows-resources-'));
       try {
-        mkdirSync(path.join(sandbox, '.postman'), { recursive: true });
-        writeFileSync(
-          path.join(sandbox, '.postman', 'resources.yaml'),
-          [
-            'version: 2',
-            'canonical:',
-            '  collections:',
-            '    ../postman/collections/[Smoke] Core: smoke-uid',
-            '    ../postman/collections/[Contract] Core: contract-uid',
-            '  environments:',
-            '    ../postman/environments/prod.postman_environment.json: env-uid',
-            ''
-          ].join('\n'),
-          'utf8'
-        );
+        writeTruncatedProdResourcesFixture(sandbox);
 
         const output = execPwsh(resolveStep.pwsh, { cwd: sandbox });
         expect(output).toContain(
@@ -693,7 +778,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
           '##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]contract-uid'
         );
         expect(output).toContain(
-          '##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]env-uid'
+          '##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]env-prod'
         );
       } finally {
         rmSync(sandbox, { recursive: true, force: true });

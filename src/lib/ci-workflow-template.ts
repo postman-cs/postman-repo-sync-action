@@ -1,4 +1,5 @@
 import { POSTMAN_ENDPOINT_PROFILES } from './postman/base-urls.js';
+import { environmentFileName } from './postman/environment-yaml.js';
 import type { GitProvider } from './repo/context.js';
 
 export const DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
@@ -11,6 +12,7 @@ type CiWorkflowTemplateOptions = {
   postmanCliInstallUrl?: string;
   postmanCliWindowsInstallUrl?: string;
   postmanRegion?: string;
+  projectName?: string;
   runnerOs?: CiRunnerOs;
   /**
    * A private mock refuses anonymous calls, so the generated run steps forward the
@@ -59,13 +61,23 @@ export function renderCiWorkflowTemplate(options: CiWorkflowTemplateOptions = {}
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
   const postmanRegion = resolvePostmanRegion(options.postmanRegion);
-  return buildCiWorkflowLines(installUrl, postmanRegion, options.privateMockAuth === true).join('\n');
+  const expectedProdFileBase64 = Buffer.from(
+    options.projectName ? environmentFileName(options.projectName, 'prod') : '',
+    'utf8'
+  ).toString('base64');
+  return buildCiWorkflowLines(
+    installUrl,
+    postmanRegion,
+    options.privateMockAuth === true,
+    expectedProdFileBase64
+  ).join('\n');
 }
 
 function buildCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  expectedProdFileBase64: string
 ): string[] {
   return [
   'name: CI/CD Pipeline',
@@ -96,6 +108,7 @@ function buildCiWorkflowLines(
   '      - name: Resolve Postman Resource IDs',
   '        run: |',
   '          ruby <<\'RUBY\'',
+  "          require 'base64'",
   "          require 'yaml'",
   "          config = YAML.load_file('.postman/resources.yaml') || {}",
   "          cloud = config.fetch('canonical', config.fetch('cloudResources', {}))",
@@ -103,7 +116,16 @@ function buildCiWorkflowLines(
   "          environments = cloud.fetch('environments', {})",
   "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
   "          contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
-  "          environment = environments.find { |path, _| path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
+  `          expected_prod_file = Base64.strict_decode64('${expectedProdFileBase64}')`,
+  "          prod_matches = environments.each_with_object([]) do |(resource_path, uid), matches|",
+  "            if resource_path.end_with?('/prod.postman_environment.json')",
+  "              matches << uid",
+  "              next",
+  "            end",
+  "            matches << uid if !expected_prod_file.empty? && File.basename(resource_path) == expected_prod_file",
+  "          end",
+  "          abort('Ambiguous prod environments in .postman/resources.yaml') if prod_matches.length > 1",
+  "          environment = prod_matches.first || environments.values.first",
   "          missing = []",
   "          missing << 'smoke collection' unless smoke",
   "          missing << 'contract collection' unless contract",
@@ -231,7 +253,8 @@ function buildAdoWindowsCollectionRunLines(
 function buildAdoWindowsCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  expectedProdFileBase64: string
 ): string[] {
   return [
     'trigger:',
@@ -276,19 +299,32 @@ function buildAdoWindowsCiWorkflowLines(
     "      $smoke = ''",
     "      $contract = ''",
     "      $environment = ''",
+    "      $environmentMatches = @()",
     "      $fallbackEnvironment = ''",
+    `      $expectedProdFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${expectedProdFileBase64}'))`,
     "      foreach ($line in Get-Content -LiteralPath '.postman/resources.yaml') {",
     "        if ($line -match '^  (collections|environments):\\s*$') { $section = $Matches[1]; continue }",
     "        if ($line -notmatch '^    (.+?):\\s+(.+?)\\s*$') { continue }",
-    "        $key = $Matches[1].Trim().Trim(\"'\").Trim('\"')",
+    "        $rawKey = $Matches[1].Trim()",
+    "        if ($rawKey.Length -ge 2 -and $rawKey.StartsWith(\"'\") -and $rawKey.EndsWith(\"'\")) {",
+    "          $key = $rawKey.Substring(1, $rawKey.Length - 2).Replace(\"''\", \"'\")",
+    "        } else {",
+    "          $key = $rawKey.Trim('\"')",
+    "        }",
     "        $value = $Matches[2].Trim().Trim(\"'\").Trim('\"')",
     "        if ($section -eq 'collections' -and $key -match '\\[Smoke\\]') { $smoke = $value }",
     "        if ($section -eq 'collections' -and $key -match '\\[Contract\\]') { $contract = $value }",
     "        if ($section -eq 'environments') {",
     "          if ([string]::IsNullOrWhiteSpace($fallbackEnvironment)) { $fallbackEnvironment = $value }",
-    "          if ($key -match 'prod\\.postman_environment\\.json$') { $environment = $value }",
+    "          if ($key -match 'prod\\.postman_environment\\.json$') {",
+    "            $environmentMatches += $value",
+    "          } elseif (-not [string]::IsNullOrEmpty($expectedProdFile) -and [IO.Path]::GetFileName($key).Equals($expectedProdFile, [StringComparison]::Ordinal)) {",
+    "            $environmentMatches += $value",
+    "          }",
     '        }',
     '      }',
+    "      if ($environmentMatches.Count -gt 1) { throw 'Ambiguous prod environments in .postman/resources.yaml' }",
+    "      if ($environmentMatches.Count -eq 1) { $environment = $environmentMatches[0] }",
     '      if ([string]::IsNullOrWhiteSpace($environment)) { $environment = $fallbackEnvironment }',
     "      if ([string]::IsNullOrWhiteSpace($smoke)) { throw 'Missing smoke collection UID in .postman/resources.yaml' }",
     "      if ([string]::IsNullOrWhiteSpace($contract)) { throw 'Missing contract collection UID in .postman/resources.yaml' }",
@@ -326,7 +362,8 @@ function buildAdoWindowsCiWorkflowLines(
 function buildAdoCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  expectedProdFileBase64: string
 ): string[] {
   return [
   'trigger:',
@@ -355,10 +392,30 @@ function buildAdoCiWorkflowLines(
   '    env:',
   '      POSTMAN_API_KEY: $(POSTMAN_API_KEY)',
   '  - script: |',
-  "      SMOKE=$(grep '\\[Smoke\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      CONTRACT=$(grep '\\[Contract\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      ENV=$(grep 'prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      ENV=${ENV:-$(grep '\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
+  "      read -r SMOKE CONTRACT ENV <<EOF",
+  "      $(ruby <<'RUBY'",
+  "      require 'base64'",
+  "      require 'yaml'",
+  "      config = YAML.load_file('.postman/resources.yaml') || {}",
+  "      cloud = config.fetch('canonical', config.fetch('cloudResources', {}))",
+  "      collections = cloud.fetch('collections', {})",
+  "      environments = cloud.fetch('environments', {})",
+  "      smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
+  "      contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
+  `      expected_prod_file = Base64.strict_decode64('${expectedProdFileBase64}')`,
+  "      prod_matches = environments.each_with_object([]) do |(resource_path, uid), matches|",
+  "        if resource_path.end_with?('/prod.postman_environment.json')",
+  "          matches << uid",
+  "          next",
+  "        end",
+  "        matches << uid if !expected_prod_file.empty? && File.basename(resource_path) == expected_prod_file",
+  "      end",
+  "      abort('Ambiguous prod environments in .postman/resources.yaml') if prod_matches.length > 1",
+  "      environment = prod_matches.first || environments.values.first",
+  "      puts [smoke, contract, environment].map(&:to_s).join(' ')",
+  "      RUBY",
+  "      )",
+  "      EOF",
   '      [ -n "$SMOKE" ] || { echo "Missing smoke collection UID in .postman/resources.yaml"; exit 1; }',
   '      [ -n "$CONTRACT" ] || { echo "Missing contract collection UID in .postman/resources.yaml"; exit 1; }',
   '      [ -n "$ENV" ] || { echo "Missing environment UID in .postman/resources.yaml"; exit 1; }',
@@ -529,9 +586,23 @@ export function getCiWorkflowTemplate(
     const postmanRegion = resolvePostmanRegion(options.postmanRegion);
     const installUrl = validateHttpsInstallUrl(rawUrl);
     const privateMockAuth = options.privateMockAuth === true;
+    const expectedProdFileBase64 = Buffer.from(
+      options.projectName ? environmentFileName(options.projectName, 'prod') : '',
+      'utf8'
+    ).toString('base64');
     return (runnerOs === 'windows'
-      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
-      : buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
+      ? buildAdoWindowsCiWorkflowLines(
+          installUrl,
+          postmanRegion,
+          privateMockAuth,
+          expectedProdFileBase64
+        )
+      : buildAdoCiWorkflowLines(
+          installUrl,
+          postmanRegion,
+          privateMockAuth,
+          expectedProdFileBase64
+        )
     ).join('\n');
   }
   return renderCiWorkflowTemplate(options);

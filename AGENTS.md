@@ -32,6 +32,15 @@ tests/
   - `convertAndSplitV3Collection(v3Export, dir)` — gateway v3 -> canonical v3, written directly
 - Output: canonical layout w/ definition file, folder dirs, request YAML, `$kind:` markers. Legacy `collection.yaml`/`type:` rejected by `postman collection lint` (FMT015). `splitCollection` owns long-name truncation + duplicate-sibling naming.
 
+## Environment v3 Invariant
+
+- **Source = access-token gateway.** `GET /environment/:uid/sync?since_id=0` returns the sync-service env body.
+- **Always write canonical environment YAML, never v2 JSON.** Repo-sync mirrors Postman v12 Local Mode's environment filesystem serializer: ordered `key`, optional `value`, `disabled`, `description`, `secret`, and `source` fields, plus a valid environment `color`. Resolved `secret: true` entries never persist `value`; every legacy `type: secret` value is redacted and emitted as canonical `secret: true` without `type`.
+- **environment-yaml.ts owns the local serializer**: `serializeEnvironmentYaml(body)` reconciles the sync-service body with the Local Mode on-disk shape and dumps with `indent: 2`, `lineWidth: -1`, `noRefs: true`, and `sortKeys: false`. `environmentFileName(project, envName)` applies the same `sanitizeFilename` options to the full stable `${project} - ${envName}` cloud display name.
+- **Atomic migration on write**: repo-sync writes every environment YAML to a confined same-filesystem candidate, validates and atomically promotes it, then atomically promotes `resources.yaml`, and only then deletes an exact confined legacy `<env>.postman_environment.json` whose prior manifest UID matches. Conflicting ownership and untracked current YAML targets fail before cloud mutation; untracked legacy JSON is preserved with a warning. The fixed mock artifact is action-owned. Spec-only runs preserve environment mappings and files unchanged.
+- **Stable identity**: environment filenames use the stable project name even on versioned runs. Logical names map explicitly to filenames; empty filesystem names, path separators/control characters, truncation collisions, and Unicode-normalized/case-folded filename collisions fail before cloud mutation.
+- **Mock env exception**: `manual-validation.environment.yaml` under `postman/mocks/` skips the cloud display-name convention — the mock env is action-synthetic and never emitted by the app.
+
 ## Commands
 
 ```bash
@@ -62,7 +71,7 @@ postman/
     [Smoke] name/collection.yaml
     [Contract] name/collection.yaml
   environments/
-    prod.postman_environment.json
+    <project-slug> - prod.environment.yaml
   mocks/
 .postman/
   resources.yaml  # PostmanResourcesConfig

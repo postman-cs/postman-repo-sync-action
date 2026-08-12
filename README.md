@@ -132,7 +132,7 @@ with:
   mock-environment-enabled: true
 ```
 
-On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.postman_environment.json`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
+On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.environment.yaml`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
 
 ### mTLS certificates for Postman CLI runs
 
@@ -262,6 +262,8 @@ The action syncs a Postman workspace into the checked-out repository and can con
 
 The generated files are intended to be committed when `repo-write-mode` is `commit-only` or `commit-and-push`. Treat `postman/` and `.postman/` as reviewable source artifacts for the onboarding workflow; commit and review them like any other tracked source.
 
+Environment exports mirror Postman v12 Local Mode's environment filesystem YAML contract, including disabled entries, descriptions, resolved secret references, and valid colors. Resolved secrets omit values, and legacy `type: secret` values are redacted into canonical secret entries before repository serialization. Filenames use the same sanitization rules on the stable full `<project> - <environment>` cloud display name, including on versioned runs. A full export atomically promotes the YAML and resources manifest before deleting a legacy `.postman_environment.json` only when its prior manifest UID matches; conflicting ownership and untracked current YAML targets fail closed before cloud mutation, while untracked legacy JSON is preserved with a warning. Spec-only runs do not migrate or delete environment state. Names that would collapse under Unicode normalization or case-folding fail before any Postman or repository mutation.
+
 A typical export looks like:
 
 ```text
@@ -274,7 +276,7 @@ postman/collections/[Smoke] core-payments/
   <folder>.yaml
   <request>.yaml
 postman/environments/
-  prod.postman_environment.json
+  <project-slug> - prod.environment.yaml
 .postman/
   resources.yaml
 ```

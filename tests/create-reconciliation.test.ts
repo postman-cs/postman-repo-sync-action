@@ -695,7 +695,7 @@ describe('fresh-process orchestration live discovery reuse', () => {
         },
         item: []
       }),
-      getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+      getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
       listMocks: vi.fn().mockResolvedValue([]),
       listMonitors: vi.fn().mockResolvedValue([]),
       monitorExists: vi.fn().mockResolvedValue(false),

@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
@@ -21,6 +22,26 @@ import {
   ArtifactDigestStreamError,
   convertAndSplitAnyCollection
 } from './postman-v3/converter.js';
+import {
+  assertEnvironmentYamlRoundTrip,
+  assertUniqueEnvironmentFileNames,
+  serializeEnvironmentYaml,
+  environmentFileName
+} from './lib/postman/environment-yaml.js';
+import {
+  assertEnvironmentArtifactOwnership,
+  canonicalizeManifestRef,
+  currentEnvironmentManifestRef,
+  getEnvironmentUidsFromResources,
+  getExistingEnvironmentFileNames,
+  getPreservedEnvironmentFileNames,
+  getTrackedLegacyEnvironmentUid,
+  StateUnreadableError,
+  type CloudResourceMap,
+  type PostmanResourcesState
+} from './lib/postman/environment-reconciliation.js';
+import { writeFileAtomicSync } from './lib/fs/atomic-file.js';
+import { assertPathWithinCwd, hasControlCharacter } from './lib/repo/path-sandbox.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
@@ -89,6 +110,9 @@ import {
   type BranchDecision,
   type BranchStrategy
 } from './lib/repo/branch-decision.js';
+
+export { StateUnreadableError } from './lib/postman/environment-reconciliation.js';
+export { assertPathWithinCwd } from './lib/repo/path-sandbox.js';
 
 type EnvironmentValues = {
   key: string;
@@ -801,40 +825,10 @@ function buildEnvironmentValues(
   ];
 }
 
-type CloudResourceMap = Record<string, string>;
-
 const LEGACY_BASELINE_COLLECTION_PREFIX = '[Baseline]';
-
-type PostmanResourcesState = {
-  /** State schema version. Absent = v1 (legacy). v2 is canonical-only. */
-  version?: number;
-  workspace?: {
-    id?: string;
-  };
-  localResources?: Record<string, string[]>;
-  cloudResources?: {
-    collections?: CloudResourceMap;
-    environments?: CloudResourceMap;
-    specs?: CloudResourceMap;
-  };
-  canonical?: {
-    collections?: CloudResourceMap;
-    environments?: CloudResourceMap;
-    specs?: CloudResourceMap;
-  };
-} & Record<string, unknown>;
 
 const RESOURCES_STATE_VERSION = 2;
 const SUPPORTED_STATE_VERSIONS = new Set([1, RESOURCES_STATE_VERSION]);
-
-/** Contract violation raised when tracked state exists but cannot be trusted. */
-export class StateUnreadableError extends Error {
-  readonly code = 'CONTRACT_STATE_UNREADABLE';
-  constructor(message: string) {
-    super(`CONTRACT_STATE_UNREADABLE: ${message}`);
-    this.name = 'StateUnreadableError';
-  }
-}
 
 type SpecReference = {
   repoRelativePath: string;
@@ -901,24 +895,6 @@ function matchesBaselineCollectionResource(filePath: string, assetProjectName: s
   return (
     matchesCollectionDirectory(filePath, assetProjectName) ||
     matchesCollectionDirectory(filePath, `${LEGACY_BASELINE_COLLECTION_PREFIX} ${assetProjectName}`)
-  );
-}
-
-function getEnvironmentUidsFromResources(
-  resourcesState: PostmanResourcesState | null
-): Record<string, string> {
-  const cloudEnvironments = resourcesState?.cloudResources?.environments;
-  if (!cloudEnvironments) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(cloudEnvironments)
-      .map(([filePath, uid]) => {
-        const match = filePath.match(/\/environments\/(.+)\.postman_environment\.json$/);
-        return match ? [match[1], uid] : null;
-      })
-      .filter((entry): entry is [string, string] => Boolean(entry))
   );
 }
 
@@ -1390,7 +1366,11 @@ async function upsertEnvironments(
   assetMarker?: AssetMarker
 ): Promise<Record<string, string>> {
   const envUids = {
-    ...getEnvironmentUidsFromResources(resourcesState),
+    ...getEnvironmentUidsFromResources(
+      resourcesState,
+      inputs.projectName,
+      new Set([...inputs.environments, ...Object.keys(inputs.environmentUids)])
+    ),
     ...inputs.environmentUids
   };
   if (!inputs.workspaceId) {
@@ -1613,53 +1593,9 @@ function getCollectionDirectoryName(kind: 'Baseline' | 'Smoke' | 'Contract', pro
   return `[${kind}] ${projectName}`;
 }
 
-/**
- * Keys that Postman regenerates on every export even when the underlying
- * content has not changed. Stripping them prevents cosmetic no-op commits.
- */
-const VOLATILE_KEYS = new Set([
-  'createdAt',
-  'updatedAt',
-  'lastUpdatedBy'
-]);
-
-/**
- * Item-level `id` fields are regenerated on every Postman API export.
- * We strip them from request/folder entries but preserve `_postman_id`
- * and `uid` which are the stable collection/environment identifiers.
- */
-function stripVolatileFields(obj: unknown): unknown {
-  if (Array.isArray(obj)) {
-    return obj.map(stripVolatileFields);
-  }
-  if (obj !== null && typeof obj === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      if (VOLATILE_KEYS.has(key)) {
-        continue;
-      }
-      // Strip item-level `id` and `uid` but preserve top-level `_postman_id`
-      if (key === 'id' && typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value)) {
-        continue;
-      }
-      if (key === 'uid' && typeof value === 'string' && /^\d+-[0-9a-f-]{36}$/.test(value)) {
-        continue;
-      }
-      result[key] = stripVolatileFields(value);
-    }
-    return result;
-  }
-  return obj;
-}
-
-function writeJsonFile(path: string, content: unknown, normalize = false): void {
-  const data = normalize ? stripVolatileFields(content) : content;
-  writeFileSync(path, JSON.stringify(data, null, 2));
-}
-
-function sanitizeMockEnvironmentArtifact(content: unknown): unknown {
+function sanitizeEnvironmentArtifact(content: unknown): unknown {
   if (Array.isArray(content)) {
-    return content.map((entry) => sanitizeMockEnvironmentArtifact(entry));
+    return content.map((entry) => sanitizeEnvironmentArtifact(entry));
   }
   if (!content || typeof content !== 'object') {
     return content;
@@ -1674,13 +1610,13 @@ function sanitizeMockEnvironmentArtifact(content: unknown): unknown {
         }
         const variable = entry as Record<string, unknown>;
         if (variable.type === 'secret' || variable.key === PRIVATE_MOCK_AUTH_VARIABLE) {
-          return { ...variable, value: '' };
+          return { ...variable, value: '', secret: true };
         }
         return variable;
       });
       continue;
     }
-    sanitized[key] = sanitizeMockEnvironmentArtifact(value);
+    sanitized[key] = sanitizeEnvironmentArtifact(value);
   }
   return sanitized;
 }
@@ -1733,13 +1669,15 @@ function buildResourcesManifest(
   workspaceId: string | undefined,
   collectionMap: Record<string, string>,
   envMap: Record<string, string>,
+  projectName: string,
   artifactDir: string,
   localSpecRefs: string[],
   mappedSpecRef?: string,
   specId?: string,
   existingSpecs?: CloudResourceMap,
   priorState?: PostmanResourcesState | null,
-  preserveGeneratedAssets = false
+  preserveGeneratedAssets = false,
+  retainOwnedLegacyEnvironmentRefs = false
 ): string {
   // Merge-preserving writer (state v2): round-trip every unknown field from
   // the prior tracked state instead of rebuilding the document from scratch,
@@ -1767,7 +1705,10 @@ function buildResourcesManifest(
   }
 
   // Environments
-  const priorEnvironmentMap = preserveGeneratedAssets
+  const preservePriorEnvironments = preserveGeneratedAssets || Boolean(
+    workspaceId && priorState?.workspace?.id?.trim() === workspaceId.trim()
+  );
+  const priorEnvironmentMap = preservePriorEnvironments
     ? { ...(priorState?.cloudResources?.environments ?? {}) }
     : {};
   const envEntries = Object.entries(envMap);
@@ -1777,7 +1718,22 @@ function buildResourcesManifest(
   if (envEntries.length > 0) {
     cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
-      cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
+      const currentSuffix = `/environments/${environmentFileName(projectName, envName)}`;
+      const legacySuffix = `/environments/${envName}.postman_environment.json`;
+      for (const [priorRef, priorUid] of Object.entries(cloudResources.environments)) {
+        const canonicalRef = canonicalizeManifestRef(priorRef);
+        if (canonicalRef.endsWith(currentSuffix)) {
+          delete cloudResources.environments[priorRef];
+        } else if (
+          canonicalRef.endsWith(legacySuffix) &&
+          (!retainOwnedLegacyEnvironmentRefs || priorUid !== envUid)
+        ) {
+          delete cloudResources.environments[priorRef];
+        }
+      }
+      cloudResources.environments[
+        currentEnvironmentManifestRef(artifactDir, projectName, envName)
+      ] = envUid;
     }
   }
 
@@ -2469,56 +2425,6 @@ async function exportCollectionArtifact(options: {
   return `../${expectedPath}`;
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) {
-      return true;
-    }
-  }
-  return false;
-}
-
-
-export function assertPathWithinCwd(targetPath: string, fieldName: string): void {
-  const originalPath = String(targetPath || '');
-  const rawPath = originalPath.trim();
-  const segments = rawPath.split(/[\\/]+/).filter(Boolean);
-  if (
-    !rawPath ||
-    hasControlCharacter(originalPath) ||
-    path.isAbsolute(rawPath) ||
-    path.win32.isAbsolute(rawPath) ||
-    segments.includes('..') ||
-    rawPath.startsWith(':') ||
-    hasControlCharacter(rawPath)
-  ) {
-    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
-  }
-
-  const base = realpathSync(process.cwd());
-  const resolved = path.resolve(base, rawPath);
-  const relative = path.relative(base, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
-  }
-
-  let existingPath = resolved;
-  while (!existsSync(existingPath)) {
-    const parent = path.dirname(existingPath);
-    if (parent === existingPath) {
-      break;
-    }
-    existingPath = parent;
-  }
-
-  const realExistingPath = realpathSync(existingPath);
-  const realRelative = path.relative(base, realExistingPath);
-  if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
-    throw new Error(`${fieldName} must stay within the repository root; received ${targetPath}`);
-  }
-}
-
 async function exportArtifacts(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
@@ -2593,10 +2499,11 @@ async function exportArtifacts(
     }
     ensureDir('.postman');
     assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
-    writeFileSync('.postman/resources.yaml', buildResourcesManifest(
+    const resourcesManifest = buildResourcesManifest(
       durableWorkspaceId,
       {},
       {},
+      inputs.projectName,
       inputs.artifactDir,
       discoveredSpecs.map((spec) => spec.configRelativePath),
       mappedSpecCloudKey,
@@ -2604,7 +2511,10 @@ async function exportArtifacts(
       preservePriorWorkspaceResources ? options.existingSpecs : undefined,
       options.priorState,
       preservePriorWorkspaceResources
-    ));
+    );
+    writeFileAtomicSync('.postman/resources.yaml', resourcesManifest, (candidatePath) => {
+      loadYaml(readFileSync(candidatePath, 'utf8'));
+    });
     dependencies.core.info(
       'onboarding-scope=spec-only; updated only workspace/spec state in .postman/resources.yaml.'
     );
@@ -2672,17 +2582,33 @@ async function exportArtifacts(
   }
 
   const environmentSpecs = [
-    ...Object.entries(envUids).map(([envName, envUid]) => ({
-      envName,
-      envUid,
-      filePath: `${environmentsDir}/${envName}.postman_environment.json`
-    })),
+    ...Object.entries(envUids).map(([envName, envUid]) => {
+      return {
+        envName,
+        envUid,
+        filePath: `${environmentsDir}/${environmentFileName(inputs.projectName, envName)}`,
+        legacyFilePath: `${environmentsDir}/${envName}.postman_environment.json`,
+        legacyTrackedUid: getTrackedLegacyEnvironmentUid(
+          options.priorState,
+          inputs.artifactDir,
+          envName
+        ),
+        legacyOwnedByAction: false
+      };
+    }),
     ...(options.mockEnvironmentUid ? [{
       envName: 'manual-validation',
       envUid: options.mockEnvironmentUid,
-      filePath: `${mocksDir}/manual-validation.postman_environment.json`
+      filePath: `${mocksDir}/manual-validation.environment.yaml`,
+      legacyFilePath: `${mocksDir}/manual-validation.postman_environment.json`,
+      legacyTrackedUid: undefined,
+      legacyOwnedByAction: true
     }] : [])
   ];
+  for (const spec of environmentSpecs) {
+    assertPathWithinCwd(spec.filePath, 'environment target');
+    assertPathWithinCwd(spec.legacyFilePath, 'legacy environment target');
+  }
   const environmentStartedAt = Date.now();
   let environmentStatus = 'success';
   let environmentPayloads: unknown[];
@@ -2700,29 +2626,101 @@ async function exportArtifacts(
       `environment-artifact-acquisition count=${environmentSpecs.length} width=${ARTIFACT_ACQUISITION_WIDTH} ms=${Date.now() - environmentStartedAt} status=${environmentStatus}`
     );
   }
-  for (const [index, spec] of environmentSpecs.entries()) {
+  for (const spec of environmentSpecs) {
     assertPathWithinCwd(spec.filePath, 'environment target');
-    writeJsonFile(
-      spec.filePath,
-      spec.envName === 'manual-validation'
-        ? sanitizeMockEnvironmentArtifact(environmentPayloads[index])
-        : environmentPayloads[index],
+  }
+  const environmentSnapshots = environmentSpecs.map((spec) => ({
+    filePath: spec.filePath,
+    priorContent: existsSync(spec.filePath) ? readFileSync(spec.filePath, 'utf8') : undefined
+  }));
+  try {
+    for (const [index, spec] of environmentSpecs.entries()) {
+      assertPathWithinCwd(spec.filePath, 'environment target');
+      // Repository artifacts must never persist a legacy typed secret value.
+      // Resolved `secret: true` entries are value-less in the converter; this
+      // pass upgrades sync-service `type: secret` values to value-less secrets.
+      const sanitizedPayload = sanitizeEnvironmentArtifact(environmentPayloads[index]);
+      // Normal environment artifacts are owned by the logical input identity,
+      // not by potentially stale or incomplete display-name bytes returned by
+      // the sync endpoint. The synthetic mock keeps its cloud-provided name.
+      const payload = spec.legacyOwnedByAction
+        ? sanitizedPayload
+        : {
+            ...(sanitizedPayload && typeof sanitizedPayload === 'object' && !Array.isArray(sanitizedPayload)
+              ? sanitizedPayload as Record<string, unknown>
+              : {}),
+            name: `${inputs.projectName} - ${spec.envName}`
+          };
+      const yaml = serializeEnvironmentYaml(payload);
+      writeFileAtomicSync(spec.filePath, yaml, (candidatePath) => {
+        assertEnvironmentYamlRoundTrip(readFileSync(candidatePath, 'utf8'), yaml);
+      });
+    }
+
+    assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
+    const resourcesManifest = buildResourcesManifest(
+      durableWorkspaceId,
+      manifestCollections,
+      envUids,
+      inputs.projectName,
+      inputs.artifactDir,
+      discoveredSpecs.map((spec) => spec.configRelativePath),
+      mappedSpecCloudKey,
+      inputs.specId || undefined,
+      options.existingSpecs,
+      options.priorState,
+      false,
       true
     );
+    writeFileAtomicSync('.postman/resources.yaml', resourcesManifest, (candidatePath) => {
+      loadYaml(readFileSync(candidatePath, 'utf8'));
+    });
+  } catch (error) {
+    for (const snapshot of environmentSnapshots.reverse()) {
+      if (snapshot.priorContent === undefined) {
+        rmSync(snapshot.filePath, { force: true });
+      } else {
+        writeFileAtomicSync(snapshot.filePath, snapshot.priorContent);
+      }
+    }
+    throw error;
   }
 
-  assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
-  writeFileSync('.postman/resources.yaml', buildResourcesManifest(
+  // Legacy JSON is migration input only. Keep it until every replacement YAML
+  // and the authoritative resources manifest have been promoted successfully.
+  for (const spec of environmentSpecs) {
+    assertPathWithinCwd(spec.legacyFilePath, 'legacy environment target');
+    if (!existsSync(spec.legacyFilePath)) {
+      continue;
+    }
+    if (spec.legacyOwnedByAction || spec.legacyTrackedUid === spec.envUid) {
+      rmSync(spec.legacyFilePath, { force: true });
+    } else {
+      dependencies.core.warning(
+        `Preserving untracked legacy environment artifact ${spec.legacyFilePath}; ` +
+        'delete it manually after confirming it belongs to this environment.'
+      );
+    }
+  }
+
+  // The provisional manifest deliberately kept UID-matched legacy ownership.
+  // Finalize it only after deletion succeeds so an interrupted migration remains
+  // self-describing and can safely resume on the next run.
+  const finalizedResourcesManifest = buildResourcesManifest(
     durableWorkspaceId,
     manifestCollections,
     envUids,
+    inputs.projectName,
     inputs.artifactDir,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpecCloudKey,
     inputs.specId || undefined,
     options.existingSpecs,
     options.priorState
-  ));
+  );
+  writeFileAtomicSync('.postman/resources.yaml', finalizedResourcesManifest, (candidatePath) => {
+    loadYaml(readFileSync(candidatePath, 'utf8'));
+  });
 
   // Only reconcile when a mapped spec exists and at least one collection was
   // actually exported. Env-only / zero-collection runs must leave prior bytes alone.
@@ -2755,6 +2753,7 @@ function renderCiWorkflow(inputs: ResolvedInputs, privateMockAuth: boolean): str
       postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
       runnerOs: inputs.ciRunnerOs,
       postmanRegion: inputs.postmanRegion,
+      projectName: inputs.projectName,
       privateMockAuth
     });
   }
@@ -2763,6 +2762,7 @@ function renderCiWorkflow(inputs: ResolvedInputs, privateMockAuth: boolean): str
     postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
     runnerOs: inputs.ciRunnerOs,
     postmanRegion: inputs.postmanRegion,
+    projectName: inputs.projectName,
     privateMockAuth
   });
 }
@@ -2975,7 +2975,35 @@ async function runRepoSyncInner(
     throw new Error('release-label is required when collection-sync-mode or spec-sync-mode is version');
   }
   const assetProjectName = createAssetProjectName(inputs, releaseLabel);
+  const environmentNames = new Set([
+    ...inputs.environments,
+    ...Object.keys(inputs.environmentUids)
+  ]);
   const trackedState = readResourcesState();
+  if (onboardingScope === 'full') {
+    const durableWorkspaceId = inputs.workspaceId.trim() || trackedState?.workspace?.id?.trim() || '';
+    const preservedFileNames = isCanonicalWriter
+      ? getPreservedEnvironmentFileNames(
+        trackedState,
+        inputs.artifactDir,
+        inputs.projectName,
+        environmentNames,
+        durableWorkspaceId
+      )
+      : [];
+    assertUniqueEnvironmentFileNames(
+      inputs.projectName,
+      environmentNames,
+      new Set([
+        ...preservedFileNames,
+        ...getExistingEnvironmentFileNames(
+          inputs.artifactDir,
+          inputs.projectName,
+          environmentNames
+        )
+      ])
+    );
+  }
   // State v2 (canonical-only): asset ids in tracked state belong to the
   // canonical set; non-canonical runs may reuse the workspace id (shared
   // infrastructure) but never canonical asset ids (ref-aware v1 migration).
@@ -2984,6 +3012,17 @@ async function runRepoSyncInner(
     : trackedState?.workspace
       ? { workspace: trackedState.workspace }
       : null;
+
+  if (onboardingScope === 'full') {
+    assertEnvironmentArtifactOwnership(
+      trackedState,
+      inputs.artifactDir,
+      inputs.projectName,
+      environmentNames,
+      inputs.environmentUids,
+      isCanonicalWriter
+    );
+  }
 
   // .postman/ file fallback (works for all CI providers, not just GitHub)
   if (resourcesState) {

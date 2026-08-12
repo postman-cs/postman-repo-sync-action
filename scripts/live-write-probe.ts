@@ -21,9 +21,17 @@ import {
   requirePublicMock
 } from '../src/lib/postman/postman-gateway-assets-client.js';
 import { POSTMAN_ENDPOINT_PROFILES } from '../src/lib/postman/base-urls.js';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { load as loadYaml } from 'js-yaml';
 
 import { resolveInputs, runRepoSync } from '../src/index.js';
 
@@ -451,6 +459,32 @@ async function main(): Promise<void> {
       const runDir = mkdtempSync(join(tmpdir(), 'repo-sync-mock-environment-'));
       try {
         process.chdir(runDir);
+        const legacyEnvironmentPath =
+          'postman/environments/prod.postman_environment.json';
+        const environmentYamlPath =
+          'postman/environments/Write Probe - prod.environment.yaml';
+        const legacyManifestRef =
+          '../postman/environments/prod.postman_environment.json';
+        const environmentManifestRef =
+          '../postman/environments/Write Probe - prod.environment.yaml';
+        mkdirSync('postman/environments', { recursive: true });
+        mkdirSync('.postman', { recursive: true });
+        writeFileSync(
+          legacyEnvironmentPath,
+          '{"name":"Write Probe - prod","values":[]}\n'
+        );
+        writeFileSync(
+          '.postman/resources.yaml',
+          [
+            'version: 2',
+            'workspace:',
+            '  id: ' + workspaceId,
+            'canonical:',
+            '  environments:',
+            '    ' + legacyManifestRef + ': ' + envUid,
+            ''
+          ].join('\n')
+        );
         const inputs = resolveInputs({
           INPUT_PROJECT_NAME: 'Write Probe',
           INPUT_WORKSPACE_ID: workspaceId,
@@ -471,20 +505,48 @@ async function main(): Promise<void> {
         const first = await runRepoSync(inputs, { core, postman: assets });
         mockEnvironmentUid = first['mock-environment-uid'];
         const runtimeUids = JSON.parse(first['environment-uids-json']) as Record<string, string>;
-        const resources = readFileSync('.postman/resources.yaml', 'utf8');
-        const artifactExists = existsSync('postman/mocks/manual-validation.postman_environment.json');
+        const firstResources = readFileSync('.postman/resources.yaml', 'utf8');
+        const firstEnvironmentYaml = readFileSync(environmentYamlPath, 'utf8');
+        const firstManifest = loadYaml(firstResources) as {
+          canonical?: { environments?: Record<string, string> };
+        };
+        const firstEnvironmentMap = firstManifest.canonical?.environments ?? {};
+        const artifactExists = existsSync('postman/mocks/manual-validation.environment.yaml');
         if (!mockEnvironmentUid || runtimeUids.prod !== envUid || Object.keys(runtimeUids).length !== 1) {
           fail('mock environment output', JSON.stringify({ mockEnvironmentUid, runtimeUids }));
-        } else if (resources.includes(mockEnvironmentUid) || !artifactExists) {
-          fail('mock environment isolation', `stateContainsUid=${resources.includes(mockEnvironmentUid)} artifactExists=${artifactExists}`);
+        } else if (firstResources.includes(mockEnvironmentUid) || !artifactExists) {
+          fail('mock environment isolation', `stateContainsUid=${firstResources.includes(mockEnvironmentUid)} artifactExists=${artifactExists}`);
         } else {
           console.log(`  [ok] mock environment uid emitted outside runtime map; artifact=${artifactExists}`);
+        }
+        if (
+          !existsSync(environmentYamlPath) ||
+          existsSync(legacyEnvironmentPath) ||
+          firstEnvironmentMap[environmentManifestRef] !== envUid ||
+          legacyManifestRef in firstEnvironmentMap
+        ) {
+          fail(
+            'environment YAML migration',
+            'stable YAML, same-UID manifest replacement, or legacy cleanup invariant failed'
+          );
+        } else {
+          console.log('  [ok] tracked legacy environment migrated to stable same-UID YAML');
         }
         const second = await runRepoSync(inputs, { core, postman: assets });
         if (second['mock-environment-uid'] !== mockEnvironmentUid) {
           fail('mock environment idempotency', 'second run returned a different environment uid');
         } else {
           console.log('  [ok] second run reused the same mock environment uid');
+        }
+        const secondEnvironmentYaml = readFileSync(environmentYamlPath, 'utf8');
+        const secondResources = readFileSync('.postman/resources.yaml', 'utf8');
+        if (
+          secondEnvironmentYaml !== firstEnvironmentYaml ||
+          secondResources !== firstResources
+        ) {
+          fail('environment YAML convergence', 'second run changed YAML or manifest bytes');
+        } else {
+          console.log('  [ok] second run converged with byte-identical YAML and manifest');
         }
         if (privateMockUid) {
           const privateInputs = resolveInputs({

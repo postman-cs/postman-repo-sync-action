@@ -110,7 +110,7 @@ function makePostman(overrides: Record<string, unknown> = {}) {
     createEnvironment: vi.fn().mockResolvedValue('env-prod'),
     updateEnvironment: vi.fn().mockResolvedValue(undefined),
     findEnvironmentByName: vi.fn().mockResolvedValue(null),
-    getEnvironment: vi.fn().mockResolvedValue({ values: [] }),
+    getEnvironment: vi.fn().mockResolvedValue({ name: 'core-payments - prod', values: [] }),
     createMock: vi.fn().mockResolvedValue({ uid: 'mock-1', url: 'https://mock.pstmn.io' }),
     createMonitor: vi.fn().mockResolvedValue('mon-1'),
     getCollection: vi.fn().mockResolvedValue({
@@ -196,6 +196,7 @@ describe('credential slot preservation on environment refresh', () => {
       updateEnvironment,
       findEnvironmentByName: vi.fn().mockResolvedValue({ uid: 'env-existing', name: 'core-payments prod' }),
       getEnvironment: vi.fn().mockResolvedValue({
+        name: 'core-payments - prod',
         values: [
           { key: 'baseUrl', value: 'https://api.example.com', type: 'default' },
           { key: 'AWS_ACCESS_KEY_ID', value: '', type: 'secret' },
@@ -247,6 +248,7 @@ describe('credential slot preservation on environment refresh', () => {
       updateEnvironment,
       findEnvironmentByName: vi.fn().mockResolvedValue({ uid: 'env-existing', name: 'core-payments prod' }),
       getEnvironment: vi.fn().mockResolvedValue({
+        name: 'core-payments - prod',
         values: [{ key: 'AWS_REGION', value: 'eu-west-2', type: 'default' }]
       })
     });

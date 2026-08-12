@@ -34,6 +34,8 @@ postman/collections/[Smoke] core-payments/
 
 Definitions and request files use `$kind:` discriminators (for example, `$kind: collection` and `$kind: http-request`). The legacy `collection.yaml`/`folder.yaml`/`type:` layout is not written; `postman collection lint` rejects it. This layout keeps diffs reviewable: a change to one request shows up as a change to one file.
 
+Environment files mirror Postman v12 Local Mode's canonical filesystem serializer: values contain `key`, optional `value`, `disabled`, `description`, `secret`, and `source` fields, and the environment can carry a valid integer `color`. Resolved `secret: true` entries omit `value`, and legacy `type: secret` values are redacted into canonical secret entries before repository serialization. Filenames use the same sanitization rules on the full stable cloud display name and remain unchanged across versioned runs; names that collide under Unicode normalization or case-folding fail closed. During legacy migration, repo-sync atomically promotes each validated YAML and `.postman/resources.yaml` before deleting a JSON file whose prior manifest UID matches. Conflicting ownership and untracked current YAML targets fail before cloud mutation; untracked legacy JSON is preserved with a warning. A failed manifest promotion leaves the legacy JSON recoverable; spec-only runs preserve environment mappings and artifacts as-is.
+
 Note that v3 collections are run with `postman collection run` (Postman CLI). Newman cannot execute the v3 format.
 
 ## Spec and workflow metadata
@@ -48,7 +50,7 @@ canonical:
   collections:
     ../postman/collections/core-payments: <collection UID>
   environments:
-    ../postman/environments/prod.postman_environment.json: <environment UID>
+    ../postman/environments/<project-slug> - prod.environment.yaml: <environment UID>
   specs:
     ../openapi.yaml: <spec UID>
 ```
