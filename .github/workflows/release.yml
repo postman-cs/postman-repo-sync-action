@@ -114,6 +114,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    outputs:
+      published: ${{ steps.npm-publish.outputs.published }}
     steps:
       - uses: actions/setup-node@v7
         with:
@@ -132,11 +134,24 @@ jobs:
           ACTUAL_SHA256="$(sha256sum "$VERIFIER" | awk '{print $1}')"
           test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
           node "$VERIFIER" release-artifacts
-      - name: Publish npm package or verify registry identity
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          files: |
+            release-artifacts/release.tgz
+            release-artifacts/release-manifest.json
+            release-artifacts/postman-repo-sync-*-linux-x64
+            release-artifacts/postman-repo-sync-*-linux-x64.sha256
+      - name: Publish npm package
+        id: npm-publish
+        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"; fi
+          echo "published=false" >> "$GITHUB_OUTPUT"
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
           SRI=$(node -e "const fs=require('fs'),crypto=require('crypto');console.log('sha512-'+crypto.createHash('sha512').update(fs.readFileSync('release-artifacts/release.tgz')).digest('base64'))")
@@ -159,15 +174,27 @@ jobs:
               exit 1
             fi
           fi
-      - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          generate_release_notes: true
-          files: |
-            release-artifacts/release.tgz
-            release-artifacts/release-manifest.json
-            release-artifacts/postman-repo-sync-*-linux-x64
-            release-artifacts/postman-repo-sync-*-linux-x64.sha256
+          echo "published=true" >> "$GITHUB_OUTPUT"
+      - name: Verify npm registry identity
+        if: steps.npm-publish.outputs.published == 'true'
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
+          VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
+          SRI=$(node -e "const fs=require('fs'),crypto=require('crypto');console.log('sha512-'+crypto.createHash('sha512').update(fs.readFileSync('release-artifacts/release.tgz')).digest('base64'))")
+          npm view "$PKG@$VERSION" dist.integrity >/tmp/integrity
+          test "$(tr -d '[:space:]' </tmp/integrity)" = "$SRI" || {
+            echo '::error::Published npm integrity differs from staged tarball'
+            exit 1
+          }
+      - name: Report npm publish skipped
+        if: steps.npm-publish.outputs.published != 'true'
+        run: |
+          PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
+          VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
+          MESSAGE="npm publish for $PKG@$VERSION did not complete (missing/invalid NPM_TOKEN or registry error); GitHub Release remains authoritative; recover via backfill-npm.yml once publish access exists"
+          echo "::warning::$MESSAGE"
+          echo "::warning::$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
 
   advance-major-alias:
     needs: [classify, publish]

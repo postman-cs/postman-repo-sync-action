@@ -291,7 +291,7 @@ describe('release artifact contract', () => {
       publishJob.indexOf('node "$VERIFIER" release-artifacts')
     );
     expect(publishJob.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
-      publishJob.indexOf('Publish npm package or verify registry identity')
+      publishJob.indexOf('Publish GitHub release assets')
     );
 
     // In-process entrypoint (same module CI extracts); avoids double node spawn under host load.

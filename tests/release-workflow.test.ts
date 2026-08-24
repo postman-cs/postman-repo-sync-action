@@ -140,7 +140,7 @@ describe('release workflow publishing contract', () => {
     expect(seaDocs).toContain('shasum -a 256 -c');
   });
 
-  it('verifies the full artifact/SRI contract before any GitHub mutation and publishes exact assets', () => {
+  it('verifies local artifacts before the authoritative GitHub Release and soft-fails only npm publication', () => {
     const publish = job('publish');
     expect(publish).not.toContain("node --input-type=module - <<'NODE'");
     expect(publish).not.toContain("<<'NODE'");
@@ -156,10 +156,10 @@ describe('release workflow publishing contract', () => {
       publish.indexOf('node "$VERIFIER" release-artifacts')
     );
     expect(publish.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
-      publish.indexOf('Publish npm package or verify registry identity')
+      publish.indexOf('Publish GitHub release assets')
     );
     expect(publish.indexOf('Verify staged release artifacts')).toBeLessThan(
-      publish.indexOf('Publish npm package or verify registry identity')
+      publish.indexOf('Publish GitHub release assets')
     );
     expect(publish).not.toContain('actions/checkout');
     expect(publish).not.toContain('npm ci');
@@ -172,9 +172,17 @@ describe('release workflow publishing contract', () => {
     expect(publish).toContain('Published npm integrity differs from staged tarball');
     expect(publish).toContain('npm (error|ERR!) code E404');
     expect(publish).toContain('npm view failed with a non-E404 error; refusing to publish or mutate GitHub');
-    expect(publish.indexOf('npm publish ./release-artifacts/release.tgz --provenance --access public')).toBeLessThan(
-      publish.indexOf('softprops/action-gh-release')
+    expect(publish.indexOf('softprops/action-gh-release')).toBeLessThan(
+      publish.indexOf('id: npm-publish')
     );
+    expect(publish).toContain('published: ${{ steps.npm-publish.outputs.published }}');
+    expect(publish).toContain('continue-on-error: true');
+    expect(publish).toContain('if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i');
+    expect(publish).toContain("if: steps.npm-publish.outputs.published == 'true'");
+    expect(publish).toContain("if: steps.npm-publish.outputs.published != 'true'");
+    expect(publish).toContain('Report npm publish skipped');
+    expect(publish.indexOf('id: npm-publish')).toBeLessThan(publish.indexOf('Verify npm registry identity'));
+    expect(publish.indexOf('Verify npm registry identity')).toBeLessThan(publish.indexOf('Report npm publish skipped'));
     expect(publish).toContain('release-artifacts/release.tgz');
     expect(publish).toContain('release-artifacts/release-manifest.json');
     expect(publish).toContain('release-artifacts/postman-repo-sync-*-linux-x64');
