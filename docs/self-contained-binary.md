@@ -138,6 +138,24 @@ export POSTMAN_ACCESS_TOKEN="<minted-token>"
   --result-json postman-repo-sync-result.json
 ```
 
+To create a complete customer environment only when it is absent, pass one shell-quoted repo-sync definition:
+
+```bash
+DURABLE_ENVIRONMENTS_JSON='[{"slug":"dev","values":[{"key":"baseUrl","value":"https://dev.example.com"},{"key":"variable1","value":"value1"},{"key":"jwtToken","value":"","type":"secret"}]}]'
+
+./postman-repo-sync \
+  --project-name core-payments \
+  --workspace-id ws-123 \
+  --durable-environments-json "$DURABLE_ENVIRONMENTS_JSON" \
+  --durable-environment-operation apply \
+  --durable-environment-policy create-only \
+  --durable-project-key core-payments \
+  --durable-state-ref develop \
+  --repo-write-mode commit-and-push
+```
+
+This input is not a secret transport: `type: secret` values must be empty. Inject the actual JWT into the later collection run from the CI secret provider. The schema is `{slug, values}` only; raw Postman export IDs, names, paths, and metadata are rejected. Durable apply requires `commit-and-push`; `commit-only` is valid for legacy generation but is rejected for durable state because it is not authoritative for a fresh runner.
+
 - `--repo-write-mode` controls git side effects: `none` (write files in the workspace only), `commit-only` (commit, no push), `commit-and-push` (commit and push to the checked-out ref — needs push credentials on that ref). Commit modes require `git` on the agent (the binary bundles Node, not git).
 - `--result-json <path>` writes the machine-readable result (default `postman-repo-sync-result.json`); `--dotenv-path <path>` emits shell-sourceable variables.
 - Reuse existing assets by passing `--workspace-id`, the `--*-collection-id` flags, `--mock-url`, and `--monitor-id` so reruns refresh in place instead of creating new ones.

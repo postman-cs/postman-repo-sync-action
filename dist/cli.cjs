@@ -1379,14 +1379,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path8 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path9 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path8 && path8[0] !== "/") {
-          path8 = `/${path8}`;
+        if (path9 && path9[0] !== "/") {
+          path9 = `/${path9}`;
         }
-        return new URL(`${origin}${path8}`);
+        return new URL(`${origin}${path9}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -2257,9 +2257,9 @@ var require_diagnostics = __commonJS({
         "undici:client:sendHeaders",
         (evt) => {
           const {
-            request: { method, path: path8, origin }
+            request: { method, path: path9, origin }
           } = evt;
-          debugLog("sending request to %s %s%s", method, origin, path8);
+          debugLog("sending request to %s %s%s", method, origin, path9);
         }
       );
     }
@@ -2277,14 +2277,14 @@ var require_diagnostics = __commonJS({
         "undici:request:headers",
         (evt) => {
           const {
-            request: { method, path: path8, origin },
+            request: { method, path: path9, origin },
             response: { statusCode }
           } = evt;
           debugLog(
             "received response to %s %s%s - HTTP %d",
             method,
             origin,
-            path8,
+            path9,
             statusCode
           );
         }
@@ -2293,23 +2293,23 @@ var require_diagnostics = __commonJS({
         "undici:request:trailers",
         (evt) => {
           const {
-            request: { method, path: path8, origin }
+            request: { method, path: path9, origin }
           } = evt;
-          debugLog("trailers received from %s %s%s", method, origin, path8);
+          debugLog("trailers received from %s %s%s", method, origin, path9);
         }
       );
       diagnosticsChannel.subscribe(
         "undici:request:error",
         (evt) => {
           const {
-            request: { method, path: path8, origin },
+            request: { method, path: path9, origin },
             error
           } = evt;
           debugLog(
             "request to %s %s%s errored - %s",
             method,
             origin,
-            path8,
+            path9,
             error.message
           );
         }
@@ -2464,7 +2464,7 @@ var require_request = __commonJS({
     };
     var Request2 = class {
       constructor(origin, {
-        path: path8,
+        path: path9,
         method,
         body,
         headers,
@@ -2481,11 +2481,11 @@ var require_request = __commonJS({
         maxRedirections,
         typeOfService
       }, handler) {
-        if (typeof path8 !== "string") {
+        if (typeof path9 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path8[0] !== "/" && !(path8.startsWith("http://") || path8.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path9[0] !== "/" && !(path9.startsWith("http://") || path9.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path8)) {
+        } else if (invalidPathRegex.test(path9)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -2560,7 +2560,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? serializePathWithQuery(path8, query) : path8;
+        this.path = query ? serializePathWithQuery(path9, query) : path9;
         this.origin = origin;
         this.protocol = getProtocolFromUrlString(origin);
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" || method === "QUERY" : idempotent;
@@ -7646,7 +7646,7 @@ var require_client_h1 = __commonJS({
       }
     }
     function writeH1(client, request) {
-      const { method, path: path8, host, upgrade, blocking, reset } = request;
+      const { method, path: path9, host, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -7722,7 +7722,7 @@ var require_client_h1 = __commonJS({
         socket[kBlocking] = true;
       }
       setTypeOfService(socket, request);
-      let header = `${method} ${path8} HTTP/1.1\r
+      let header = `${method} ${path9} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -8803,7 +8803,7 @@ var require_client_h2 = __commonJS({
       const headersTimeout = request.headersTimeout ?? client[kHeadersTimeout];
       const bodyTimeout = request.bodyTimeout ?? client[kBodyTimeout];
       const session = client[kHTTP2Session];
-      const { method, path: path8, host, upgrade, expectContinue, signal, protocol, headers: reqHeaders } = request;
+      const { method, path: path9, host, upgrade, expectContinue, signal, protocol, headers: reqHeaders } = request;
       if (upgrade != null && upgrade !== "websocket") {
         util.errorRequest(client, request, new InvalidArgumentError(`Custom upgrade "${upgrade}" not supported over HTTP/2`));
         return false;
@@ -8866,7 +8866,7 @@ var require_client_h2 = __commonJS({
           }
           headers[HTTP2_HEADER_METHOD] = "CONNECT";
           headers[HTTP2_HEADER_PROTOCOL] = "websocket";
-          headers[HTTP2_HEADER_PATH] = path8;
+          headers[HTTP2_HEADER_PATH] = path9;
           if (protocol === "ws:" || protocol === "wss:") {
             headers[HTTP2_HEADER_SCHEME] = protocol === "ws:" ? "http" : "https";
           } else {
@@ -8888,7 +8888,7 @@ var require_client_h2 = __commonJS({
         setupUpgradeStream(stream, state);
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path8;
+      headers[HTTP2_HEADER_PATH] = path9;
       headers[HTTP2_HEADER_SCHEME] = protocol === "http:" ? "http" : "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       let body = state.body;
@@ -11558,10 +11558,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path8 = "/",
+          path: path9 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path8;
+        opts.path = origin + path9;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL(origin);
           headers.host = host;
@@ -13826,20 +13826,20 @@ var require_mock_utils = __commonJS({
       }
       return normalizedQp;
     }
-    function safeUrl(path8) {
-      if (typeof path8 !== "string") {
-        return path8;
+    function safeUrl(path9) {
+      if (typeof path9 !== "string") {
+        return path9;
       }
-      const pathSegments = path8.split("?", 3);
+      const pathSegments = path9.split("?", 3);
       if (pathSegments.length !== 2) {
-        return path8;
+        return path9;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path8, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path8);
+    function matchKey(mockDispatch2, { path: path9, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path9);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -13866,8 +13866,8 @@ var require_mock_utils = __commonJS({
       const basePath = key.query ? serializePathWithQuery(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
       const resolvedPathWithoutTrailingSlash = removeTrailingSlash(resolvedPath);
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path8, ignoreTrailingSlash }) => {
-        return ignoreTrailingSlash ? matchValue(removeTrailingSlash(safeUrl(path8)), resolvedPathWithoutTrailingSlash) : matchValue(safeUrl(path8), resolvedPath);
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path9, ignoreTrailingSlash }) => {
+        return ignoreTrailingSlash ? matchValue(removeTrailingSlash(safeUrl(path9)), resolvedPathWithoutTrailingSlash) : matchValue(safeUrl(path9), resolvedPath);
       });
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
@@ -13906,22 +13906,22 @@ var require_mock_utils = __commonJS({
         mockDispatches.splice(index, 1);
       }
     }
-    function removeTrailingSlash(path8) {
-      if (typeof path8 !== "string") {
-        return path8;
+    function removeTrailingSlash(path9) {
+      if (typeof path9 !== "string") {
+        return path9;
       }
-      while (path8.endsWith("/")) {
-        path8 = path8.slice(0, -1);
+      while (path9.endsWith("/")) {
+        path9 = path9.slice(0, -1);
       }
-      if (path8.length === 0) {
-        path8 = "/";
+      if (path9.length === 0) {
+        path9 = "/";
       }
-      return path8;
+      return path9;
     }
     function buildKey(opts) {
-      const { path: path8, method, body, headers, query } = opts;
+      const { path: path9, method, body, headers, query } = opts;
       return {
-        path: path8,
+        path: path9,
         method,
         body,
         headers,
@@ -14792,10 +14792,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path8, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path9, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path8,
+            Path: path9,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -14877,9 +14877,9 @@ var require_mock_agent = __commonJS({
         const acceptNonStandardSearchParameters = this[kMockAgentAcceptsNonStandardSearchParameters];
         const dispatchOpts = { ...opts };
         if (acceptNonStandardSearchParameters && dispatchOpts.path) {
-          const [path8, searchParams] = dispatchOpts.path.split("?");
+          const [path9, searchParams] = dispatchOpts.path.split("?");
           const normalizedSearchParams = normalizeSearchParams(searchParams, acceptNonStandardSearchParameters);
-          dispatchOpts.path = `${path8}?${normalizedSearchParams}`;
+          dispatchOpts.path = `${path9}?${normalizedSearchParams}`;
         }
         return this[kAgent].dispatch(dispatchOpts, handler);
       }
@@ -15295,12 +15295,12 @@ var require_snapshot_recorder = __commonJS({
        * @return {Promise<void>} - Resolves when snapshots are loaded
        */
       async loadSnapshots(filePath) {
-        const path8 = filePath || this.#snapshotPath;
-        if (!path8) {
+        const path9 = filePath || this.#snapshotPath;
+        if (!path9) {
           throw new InvalidArgumentError("Snapshot path is required");
         }
         try {
-          const data = await readFile(resolve3(path8), "utf8");
+          const data = await readFile(resolve3(path9), "utf8");
           const parsed = JSON.parse(data);
           if (Array.isArray(parsed)) {
             this.#snapshots.clear();
@@ -15314,7 +15314,7 @@ var require_snapshot_recorder = __commonJS({
           if (error.code === "ENOENT") {
             this.#snapshots.clear();
           } else {
-            throw new UndiciError(`Failed to load snapshots from ${path8}`, { cause: error });
+            throw new UndiciError(`Failed to load snapshots from ${path9}`, { cause: error });
           }
         }
       }
@@ -15325,11 +15325,11 @@ var require_snapshot_recorder = __commonJS({
        * @returns {Promise<void>} - Resolves when snapshots are saved
        */
       async saveSnapshots(filePath) {
-        const path8 = filePath || this.#snapshotPath;
-        if (!path8) {
+        const path9 = filePath || this.#snapshotPath;
+        if (!path9) {
           throw new InvalidArgumentError("Snapshot path is required");
         }
-        const resolvedPath = resolve3(path8);
+        const resolvedPath = resolve3(path9);
         await mkdir4(dirname4(resolvedPath), { recursive: true });
         const data = Array.from(this.#snapshots.entries()).map(([hash, snapshot]) => ({
           hash,
@@ -15966,15 +15966,15 @@ var require_redirect_handler = __commonJS({
           return;
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path8 = search ? `${pathname}${search}` : pathname;
-        const redirectUrlString = `${origin}${path8}`;
+        const path9 = search ? `${pathname}${search}` : pathname;
+        const redirectUrlString = `${origin}${path9}`;
         for (const historyUrl of this.history) {
           if (historyUrl.toString() === redirectUrlString) {
             throw new InvalidArgumentError(`Redirect loop detected. Cannot redirect to ${origin}. This typically happens when using a Client or Pool with cross-origin redirects. Use an Agent for cross-origin redirects.`);
           }
         }
         this.opts.headers = cleanRequestHeaders(this.opts.headers, removeContentHeaders, this.opts.origin !== origin, this.stripHeadersOnRedirect, this.stripHeadersOnCrossOriginRedirect);
-        this.opts.path = path8;
+        this.opts.path = path9;
         this.opts.origin = origin;
         this.opts.query = null;
       }
@@ -17802,10 +17802,10 @@ var require_cache_handler = __commonJS({
       }
       return locationUrl.pathname + locationUrl.search;
     }
-    function deleteCachedUri(store, cacheKey, path8) {
+    function deleteCachedUri(store, cacheKey, path9) {
       deleteCachedValue(store, {
         ...cacheKey,
-        path: path8
+        path: path9
       });
       for (let i = 0; i < util.safeHTTPMethods.length; i++) {
         const method = util.safeHTTPMethods[i];
@@ -17813,7 +17813,7 @@ var require_cache_handler = __commonJS({
           deleteCachedValue(store, {
             ...cacheKey,
             method,
-            path: path8
+            path: path9
           });
         }
       }
@@ -17824,9 +17824,9 @@ var require_cache_handler = __commonJS({
       }
       const values = Array.isArray(headerValue) ? headerValue : [headerValue];
       for (let i = 0; i < values.length; i++) {
-        const path8 = getSameOriginPath(cacheKey, values[i]);
-        if (path8 !== void 0) {
-          deleteCachedUri(store, cacheKey, path8);
+        const path9 = getSameOriginPath(cacheKey, values[i]);
+        if (path9 !== void 0) {
+          deleteCachedUri(store, cacheKey, path9);
         }
       }
     }
@@ -22823,13 +22823,13 @@ var require_fetch = __commonJS({
       function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        const path8 = url.pathname + url.search;
+        const path9 = url.pathname + url.search;
         const hasTrailingQuestionMark = url.search.length === 0 && url.href[url.href.length - url.hash.length - 1] === "?";
         return dispatchWithProtocolPreference(body);
         function dispatchWithProtocolPreference(body2, allowH2) {
           return new Promise((resolve3, reject) => agent.dispatch(
             {
-              path: hasTrailingQuestionMark ? `${path8}?` : path8,
+              path: hasTrailingQuestionMark ? `${path9}?` : path9,
               origin: url.origin,
               method: request.method,
               body: agent.isMockActive ? request.body && (request.body.source || request.body.stream) : body2,
@@ -23741,9 +23741,9 @@ var require_util4 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path8) {
-      for (let i = 0; i < path8.length; ++i) {
-        const code = path8.charCodeAt(i);
+    function validateCookiePath(path9) {
+      for (let i = 0; i < path9.length; ++i) {
+        const code = path9.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code > 126 || // exclude non-ascii and DEL
         code === 59) {
@@ -27115,11 +27115,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path8 = opts.path;
+          let path9 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path8 = `/${path8}`;
+            path9 = `/${path9}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path8);
+          url = new URL(util.parseOrigin(url).origin + path9);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -34997,10 +34997,10 @@ var require_util7 = __commonJS({
     function cloneDef(schema) {
       return mergeDefs(schema._zod.def);
     }
-    function getElementAtPath(obj, path8) {
-      if (!path8)
+    function getElementAtPath(obj, path9) {
+      if (!path9)
         return obj;
-      return path8.reduce((acc, key) => acc?.[key], obj);
+      return path9.reduce((acc, key) => acc?.[key], obj);
     }
     function promiseAllObject(promisesObj) {
       const keys = Object.keys(promisesObj);
@@ -35410,11 +35410,11 @@ var require_util7 = __commonJS({
       }
       return false;
     }
-    function prefixIssues(path8, issues) {
+    function prefixIssues(path9, issues) {
       return issues.map((iss) => {
         var _a;
         (_a = iss).path ?? (_a.path = []);
-        iss.path.unshift(path8);
+        iss.path.unshift(path9);
         return iss;
       });
     }
@@ -35603,16 +35603,16 @@ var require_errors2 = __commonJS({
     }
     function formatError2(error, mapper = (issue2) => issue2.message) {
       const fieldErrors = { _errors: [] };
-      const processError = (error2, path8 = []) => {
+      const processError = (error2, path9 = []) => {
         for (const issue2 of error2.issues) {
           if (issue2.code === "invalid_union" && issue2.errors.length) {
-            issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+            issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
           } else if (issue2.code === "invalid_key") {
-            processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+            processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
           } else if (issue2.code === "invalid_element") {
-            processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+            processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
           } else {
-            const fullpath = [...path8, ...issue2.path];
+            const fullpath = [...path9, ...issue2.path];
             if (fullpath.length === 0) {
               fieldErrors._errors.push(mapper(issue2));
             } else {
@@ -35639,17 +35639,17 @@ var require_errors2 = __commonJS({
     }
     function treeifyError(error, mapper = (issue2) => issue2.message) {
       const result = { errors: [] };
-      const processError = (error2, path8 = []) => {
+      const processError = (error2, path9 = []) => {
         var _a, _b;
         for (const issue2 of error2.issues) {
           if (issue2.code === "invalid_union" && issue2.errors.length) {
-            issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+            issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
           } else if (issue2.code === "invalid_key") {
-            processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+            processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
           } else if (issue2.code === "invalid_element") {
-            processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+            processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
           } else {
-            const fullpath = [...path8, ...issue2.path];
+            const fullpath = [...path9, ...issue2.path];
             if (fullpath.length === 0) {
               result.errors.push(mapper(issue2));
               continue;
@@ -35681,8 +35681,8 @@ var require_errors2 = __commonJS({
     }
     function toDotPath(_path) {
       const segs = [];
-      const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-      for (const seg of path8) {
+      const path9 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+      for (const seg of path9) {
         if (typeof seg === "number")
           segs.push(`[${seg}]`);
         else if (typeof seg === "symbol")
@@ -62833,11 +62833,11 @@ var require_lodash = __commonJS({
             return isFunction(object[key]);
           });
         }
-        function baseGet(object, path8) {
-          path8 = castPath(path8, object);
-          var index = 0, length = path8.length;
+        function baseGet(object, path9) {
+          path9 = castPath(path9, object);
+          var index = 0, length = path9.length;
           while (object != null && index < length) {
-            object = object[toKey(path8[index++])];
+            object = object[toKey(path9[index++])];
           }
           return index && index == length ? object : undefined2;
         }
@@ -62901,10 +62901,10 @@ var require_lodash = __commonJS({
           });
           return accumulator;
         }
-        function baseInvoke(object, path8, args) {
-          path8 = castPath(path8, object);
-          object = parent(object, path8);
-          var func = object == null ? object : object[toKey(last(path8))];
+        function baseInvoke(object, path9, args) {
+          path9 = castPath(path9, object);
+          object = parent(object, path9);
+          var func = object == null ? object : object[toKey(last(path9))];
           return func == null ? undefined2 : apply(func, object, args);
         }
         function baseIsArguments(value) {
@@ -63060,13 +63060,13 @@ var require_lodash = __commonJS({
             return object === source || baseIsMatch(object, source, matchData);
           };
         }
-        function baseMatchesProperty(path8, srcValue) {
-          if (isKey(path8) && isStrictComparable(srcValue)) {
-            return matchesStrictComparable(toKey(path8), srcValue);
+        function baseMatchesProperty(path9, srcValue) {
+          if (isKey(path9) && isStrictComparable(srcValue)) {
+            return matchesStrictComparable(toKey(path9), srcValue);
           }
           return function(object) {
-            var objValue = get(object, path8);
-            return objValue === undefined2 && objValue === srcValue ? hasIn(object, path8) : baseIsEqual(srcValue, objValue, COMPARE_PARTIAL_FLAG | COMPARE_UNORDERED_FLAG);
+            var objValue = get(object, path9);
+            return objValue === undefined2 && objValue === srcValue ? hasIn(object, path9) : baseIsEqual(srcValue, objValue, COMPARE_PARTIAL_FLAG | COMPARE_UNORDERED_FLAG);
           };
         }
         function baseMerge(object, source, srcIndex, customizer, stack) {
@@ -63163,23 +63163,23 @@ var require_lodash = __commonJS({
           });
         }
         function basePick(object, paths) {
-          return basePickBy(object, paths, function(value, path8) {
-            return hasIn(object, path8);
+          return basePickBy(object, paths, function(value, path9) {
+            return hasIn(object, path9);
           });
         }
         function basePickBy(object, paths, predicate) {
           var index = -1, length = paths.length, result2 = {};
           while (++index < length) {
-            var path8 = paths[index], value = baseGet(object, path8);
-            if (predicate(value, path8)) {
-              baseSet(result2, castPath(path8, object), value);
+            var path9 = paths[index], value = baseGet(object, path9);
+            if (predicate(value, path9)) {
+              baseSet(result2, castPath(path9, object), value);
             }
           }
           return result2;
         }
-        function basePropertyDeep(path8) {
+        function basePropertyDeep(path9) {
           return function(object) {
-            return baseGet(object, path8);
+            return baseGet(object, path9);
           };
         }
         function basePullAll(array, values2, iteratee2, comparator) {
@@ -63253,14 +63253,14 @@ var require_lodash = __commonJS({
           var array = values(collection);
           return shuffleSelf(array, baseClamp(n, 0, array.length));
         }
-        function baseSet(object, path8, value, customizer) {
+        function baseSet(object, path9, value, customizer) {
           if (!isObject(object)) {
             return object;
           }
-          path8 = castPath(path8, object);
-          var index = -1, length = path8.length, lastIndex = length - 1, nested = object;
+          path9 = castPath(path9, object);
+          var index = -1, length = path9.length, lastIndex = length - 1, nested = object;
           while (nested != null && ++index < length) {
-            var key = toKey(path8[index]), newValue = value;
+            var key = toKey(path9[index]), newValue = value;
             if (key === "__proto__" || key === "constructor" || key === "prototype") {
               return object;
             }
@@ -63268,7 +63268,7 @@ var require_lodash = __commonJS({
               var objValue = nested[key];
               newValue = customizer ? customizer(objValue, key, nested) : undefined2;
               if (newValue === undefined2) {
-                newValue = isObject(objValue) ? objValue : isIndex(path8[index + 1]) ? [] : {};
+                newValue = isObject(objValue) ? objValue : isIndex(path9[index + 1]) ? [] : {};
               }
             }
             assignValue(nested, key, newValue);
@@ -63434,14 +63434,14 @@ var require_lodash = __commonJS({
             }
           return result2;
         }
-        function baseUnset(object, path8) {
-          path8 = castPath(path8, object);
-          var index = -1, length = path8.length;
+        function baseUnset(object, path9) {
+          path9 = castPath(path9, object);
+          var index = -1, length = path9.length;
           if (!length) {
             return true;
           }
           while (++index < length) {
-            var key = toKey(path8[index]);
+            var key = toKey(path9[index]);
             if (key === "__proto__" && !hasOwnProperty.call(object, "__proto__")) {
               return false;
             }
@@ -63449,11 +63449,11 @@ var require_lodash = __commonJS({
               return false;
             }
           }
-          var obj = parent(object, path8);
-          return obj == null || delete obj[toKey(last(path8))];
+          var obj = parent(object, path9);
+          return obj == null || delete obj[toKey(last(path9))];
         }
-        function baseUpdate(object, path8, updater, customizer) {
-          return baseSet(object, path8, updater(baseGet(object, path8)), customizer);
+        function baseUpdate(object, path9, updater, customizer) {
+          return baseSet(object, path9, updater(baseGet(object, path9)), customizer);
         }
         function baseWhile(array, predicate, isDrop, fromRight) {
           var length = array.length, index = fromRight ? length : -1;
@@ -64336,11 +64336,11 @@ var require_lodash = __commonJS({
           var match = source.match(reWrapDetails);
           return match ? match[1].split(reSplitDetails) : [];
         }
-        function hasPath(object, path8, hasFunc) {
-          path8 = castPath(path8, object);
-          var index = -1, length = path8.length, result2 = false;
+        function hasPath(object, path9, hasFunc) {
+          path9 = castPath(path9, object);
+          var index = -1, length = path9.length, result2 = false;
           while (++index < length) {
-            var key = toKey(path8[index]);
+            var key = toKey(path9[index]);
             if (!(result2 = object != null && hasFunc(object, key))) {
               break;
             }
@@ -64542,8 +64542,8 @@ var require_lodash = __commonJS({
             return apply(func, this, otherArgs);
           };
         }
-        function parent(object, path8) {
-          return path8.length < 2 ? object : baseGet(object, baseSlice(path8, 0, -1));
+        function parent(object, path9) {
+          return path9.length < 2 ? object : baseGet(object, baseSlice(path9, 0, -1));
         }
         function reorder(array, indexes) {
           var arrLength = array.length, length = nativeMin(indexes.length, arrLength), oldArray = copyArray(array);
@@ -65178,10 +65178,10 @@ var require_lodash = __commonJS({
           }
           return isString(collection) ? fromIndex <= length && collection.indexOf(value, fromIndex) > -1 : !!length && baseIndexOf(collection, value, fromIndex) > -1;
         }
-        var invokeMap = baseRest(function(collection, path8, args) {
-          var index = -1, isFunc = typeof path8 == "function", result2 = isArrayLike(collection) ? Array2(collection.length) : [];
+        var invokeMap = baseRest(function(collection, path9, args) {
+          var index = -1, isFunc = typeof path9 == "function", result2 = isArrayLike(collection) ? Array2(collection.length) : [];
           baseEach(collection, function(value) {
-            result2[++index] = isFunc ? apply(path8, value, args) : baseInvoke(value, path8, args);
+            result2[++index] = isFunc ? apply(path9, value, args) : baseInvoke(value, path9, args);
           });
           return result2;
         });
@@ -65833,15 +65833,15 @@ var require_lodash = __commonJS({
         function functionsIn(object) {
           return object == null ? [] : baseFunctions(object, keysIn(object));
         }
-        function get(object, path8, defaultValue) {
-          var result2 = object == null ? undefined2 : baseGet(object, path8);
+        function get(object, path9, defaultValue) {
+          var result2 = object == null ? undefined2 : baseGet(object, path9);
           return result2 === undefined2 ? defaultValue : result2;
         }
-        function has(object, path8) {
-          return object != null && hasPath(object, path8, baseHas);
+        function has(object, path9) {
+          return object != null && hasPath(object, path9, baseHas);
         }
-        function hasIn(object, path8) {
-          return object != null && hasPath(object, path8, baseHasIn);
+        function hasIn(object, path9) {
+          return object != null && hasPath(object, path9, baseHasIn);
         }
         var invert = createInverter(function(result2, value, key) {
           if (value != null && typeof value.toString != "function") {
@@ -65894,10 +65894,10 @@ var require_lodash = __commonJS({
             return result2;
           }
           var isDeep = false;
-          paths = arrayMap(paths, function(path8) {
-            path8 = castPath(path8, object);
-            isDeep || (isDeep = path8.length > 1);
-            return path8;
+          paths = arrayMap(paths, function(path9) {
+            path9 = castPath(path9, object);
+            isDeep || (isDeep = path9.length > 1);
+            return path9;
           });
           copyObject(object, getAllKeysIn(object), result2);
           if (isDeep) {
@@ -65923,19 +65923,19 @@ var require_lodash = __commonJS({
             return [prop];
           });
           predicate = getIteratee(predicate);
-          return basePickBy(object, props, function(value, path8) {
-            return predicate(value, path8[0]);
+          return basePickBy(object, props, function(value, path9) {
+            return predicate(value, path9[0]);
           });
         }
-        function result(object, path8, defaultValue) {
-          path8 = castPath(path8, object);
-          var index = -1, length = path8.length;
+        function result(object, path9, defaultValue) {
+          path9 = castPath(path9, object);
+          var index = -1, length = path9.length;
           if (!length) {
             length = 1;
             object = undefined2;
           }
           while (++index < length) {
-            var value = object == null ? undefined2 : object[toKey(path8[index])];
+            var value = object == null ? undefined2 : object[toKey(path9[index])];
             if (value === undefined2) {
               index = length;
               value = defaultValue;
@@ -65944,12 +65944,12 @@ var require_lodash = __commonJS({
           }
           return object;
         }
-        function set(object, path8, value) {
-          return object == null ? object : baseSet(object, path8, value);
+        function set(object, path9, value) {
+          return object == null ? object : baseSet(object, path9, value);
         }
-        function setWith(object, path8, value, customizer) {
+        function setWith(object, path9, value, customizer) {
           customizer = typeof customizer == "function" ? customizer : undefined2;
-          return object == null ? object : baseSet(object, path8, value, customizer);
+          return object == null ? object : baseSet(object, path9, value, customizer);
         }
         var toPairs = createToPairs(keys);
         var toPairsIn = createToPairs(keysIn);
@@ -65971,15 +65971,15 @@ var require_lodash = __commonJS({
           });
           return accumulator;
         }
-        function unset(object, path8) {
-          return object == null ? true : baseUnset(object, path8);
+        function unset(object, path9) {
+          return object == null ? true : baseUnset(object, path9);
         }
-        function update(object, path8, updater) {
-          return object == null ? object : baseUpdate(object, path8, castFunction(updater));
+        function update(object, path9, updater) {
+          return object == null ? object : baseUpdate(object, path9, castFunction(updater));
         }
-        function updateWith(object, path8, updater, customizer) {
+        function updateWith(object, path9, updater, customizer) {
           customizer = typeof customizer == "function" ? customizer : undefined2;
-          return object == null ? object : baseUpdate(object, path8, castFunction(updater), customizer);
+          return object == null ? object : baseUpdate(object, path9, castFunction(updater), customizer);
         }
         function values(object) {
           return object == null ? [] : baseValues(object, keys(object));
@@ -66365,17 +66365,17 @@ var require_lodash = __commonJS({
         function matches(source) {
           return baseMatches(baseClone(source, CLONE_DEEP_FLAG));
         }
-        function matchesProperty(path8, srcValue) {
-          return baseMatchesProperty(path8, baseClone(srcValue, CLONE_DEEP_FLAG));
+        function matchesProperty(path9, srcValue) {
+          return baseMatchesProperty(path9, baseClone(srcValue, CLONE_DEEP_FLAG));
         }
-        var method = baseRest(function(path8, args) {
+        var method = baseRest(function(path9, args) {
           return function(object) {
-            return baseInvoke(object, path8, args);
+            return baseInvoke(object, path9, args);
           };
         });
         var methodOf = baseRest(function(object, args) {
-          return function(path8) {
-            return baseInvoke(object, path8, args);
+          return function(path9) {
+            return baseInvoke(object, path9, args);
           };
         });
         function mixin(object, source, options) {
@@ -66422,12 +66422,12 @@ var require_lodash = __commonJS({
         var over = createOver(arrayMap);
         var overEvery = createOver(arrayEvery);
         var overSome = createOver(arraySome);
-        function property(path8) {
-          return isKey(path8) ? baseProperty(toKey(path8)) : basePropertyDeep(path8);
+        function property(path9) {
+          return isKey(path9) ? baseProperty(toKey(path9)) : basePropertyDeep(path9);
         }
         function propertyOf(object) {
-          return function(path8) {
-            return object == null ? undefined2 : baseGet(object, path8);
+          return function(path9) {
+            return object == null ? undefined2 : baseGet(object, path9);
           };
         }
         var range = createRange();
@@ -66880,12 +66880,12 @@ var require_lodash = __commonJS({
         LazyWrapper.prototype.findLast = function(predicate) {
           return this.reverse().find(predicate);
         };
-        LazyWrapper.prototype.invokeMap = baseRest(function(path8, args) {
-          if (typeof path8 == "function") {
+        LazyWrapper.prototype.invokeMap = baseRest(function(path9, args) {
+          if (typeof path9 == "function") {
             return new LazyWrapper(this);
           }
           return this.map(function(value) {
-            return baseInvoke(value, path8, args);
+            return baseInvoke(value, path9, args);
           });
         });
         LazyWrapper.prototype.reject = function(predicate) {
@@ -73169,7 +73169,7 @@ var require_url2 = __commonJS({
          */
         update(url) {
           !url && (url = E);
-          var parsedUrl = _.isString(url) ? Url.parse(url) : url, auth = parsedUrl.auth, protocol = parsedUrl.protocol, port = parsedUrl.port, path8 = parsedUrl.path, hash = parsedUrl.hash, host = parsedUrl.host, query = parsedUrl.query, variable = parsedUrl.variable;
+          var parsedUrl = _.isString(url) ? Url.parse(url) : url, auth = parsedUrl.auth, protocol = parsedUrl.protocol, port = parsedUrl.port, path9 = parsedUrl.path, hash = parsedUrl.hash, host = parsedUrl.host, query = parsedUrl.query, variable = parsedUrl.variable;
           if (query) {
             if (_.isString(query)) {
               query = QueryParam.parse(query);
@@ -73189,9 +73189,9 @@ var require_url2 = __commonJS({
               return v;
             });
           }
-          if (_.isString(path8)) {
-            path8 && (path8 = path8.replace(regexes.trimPath, MATCH_1));
-            path8 = path8 ? path8 === PATH_SEPARATOR ? [E] : path8.split(PATH_SEPARATOR) : void 0;
+          if (_.isString(path9)) {
+            path9 && (path9 = path9.replace(regexes.trimPath, MATCH_1));
+            path9 = path9 ? path9 === PATH_SEPARATOR ? [E] : path9.split(PATH_SEPARATOR) : void 0;
           }
           _.isString(host) && (host = host.split(regexes.splitDomain));
           _.assign(
@@ -73213,7 +73213,7 @@ var require_url2 = __commonJS({
               /**
                * @type {Array<String>}
                */
-              path: path8,
+              path: path9,
               /**
                * @type {String}
                */
@@ -73355,11 +73355,11 @@ var require_url2 = __commonJS({
          * @example /something/postman?hi=notbye
          */
         getPathWithQuery() {
-          var path8 = this.getPath(), queryString = this.getQueryString();
+          var path9 = this.getPath(), queryString = this.getQueryString();
           if (queryString) {
-            path8 += QUERY_SEPARATOR + queryString;
+            path9 += QUERY_SEPARATOR + queryString;
           }
-          return path8;
+          return path9;
         },
         /**
          * Returns the host part of the URL
@@ -73399,9 +73399,9 @@ var require_url2 = __commonJS({
          * @note not discontinue yet because it's used in Twitter APIs public collections
          */
         getOAuth1BaseUrl() {
-          var protocol = this.protocol || PROTOCOL_HTTP, port = this.port ? this.port.toString() : void 0, host = (port === HTTP_PORT || port === HTTPS_PORT || port === void 0) && this.host.join(DOMAIN_SEPARATOR) || this.host.join(DOMAIN_SEPARATOR) + PORT_SEPARATOR + port, path8 = this.getPath();
+          var protocol = this.protocol || PROTOCOL_HTTP, port = this.port ? this.port.toString() : void 0, host = (port === HTTP_PORT || port === HTTPS_PORT || port === void 0) && this.host.join(DOMAIN_SEPARATOR) || this.host.join(DOMAIN_SEPARATOR) + PORT_SEPARATOR + port, path9 = this.getPath();
           protocol = _.endsWith(protocol, PROTOCOL_SEPARATOR) ? protocol : protocol + PROTOCOL_SEPARATOR;
-          return protocol.toLowerCase() + host.toLowerCase() + path8;
+          return protocol.toLowerCase() + host.toLowerCase() + path9;
         }
       }
     );
@@ -73656,9 +73656,9 @@ var require_url_match_pattern = __commonJS({
          * @param {String=} path The path to be checked if the pattern allows.
          * @returns {Boolean=}
          */
-        testPath(path8) {
+        testPath(path9) {
           var matchRegexObject = this._matchPatternObject;
-          return !_.isEmpty(path8.match(matchRegexObject.path));
+          return !_.isEmpty(path9.match(matchRegexObject.path));
         },
         /**
           * Tests the url string with the match pattern provided.
@@ -76101,7 +76101,7 @@ var require_parse5 = __commonJS({
           };
         })();
       }
-      function fail(msg) {
+      function fail2(msg) {
         var column = position - linestart;
         if (!msg) {
           if (position < length) {
@@ -76227,7 +76227,7 @@ var require_parse5 = __commonJS({
           }
         }
         if (multi) {
-          fail("Unclosed multiline comment");
+          fail2("Unclosed multiline comment");
         }
       }
       function parseKeyword(keyword) {
@@ -76236,7 +76236,7 @@ var require_parse5 = __commonJS({
         for (var i = 1; i < len; i++) {
           if (position >= length || keyword[i] != input[position]) {
             position = _pos - 1;
-            fail();
+            fail2();
           }
           position++;
         }
@@ -76253,7 +76253,7 @@ var require_parse5 = __commonJS({
           if (chr === "}" && item1 === void 0) {
             if (!json5 && is_non_empty) {
               position--;
-              fail("Trailing comma in object");
+              fail2("Trailing comma in object");
             }
             return result;
           } else if (chr === ":" && item1 !== void 0) {
@@ -76261,15 +76261,15 @@ var require_parse5 = __commonJS({
             stack.push(item1);
             var item2 = parseGeneric();
             stack.pop();
-            if (item2 === void 0) fail("No value found for key " + item1);
+            if (item2 === void 0) fail2("No value found for key " + item1);
             if (typeof item1 !== "string") {
               if (!json5 || typeof item1 !== "number") {
-                fail("Wrong key type: " + item1);
+                fail2("Wrong key type: " + item1);
               }
             }
             if ((item1 in empty_object || empty_object[item1] != null) && options.reserved_keys !== "replace") {
               if (options.reserved_keys === "throw") {
-                fail("Reserved key: " + item1);
+                fail2("Reserved key: " + item1);
               } else {
               }
             } else {
@@ -76295,14 +76295,14 @@ var require_parse5 = __commonJS({
             } else if (chr === "}") {
               return result;
             } else {
-              fail();
+              fail2();
             }
           } else {
             position--;
-            fail();
+            fail2();
           }
         }
-        fail();
+        fail2();
       }
       function parseArray() {
         var result = [];
@@ -76328,17 +76328,17 @@ var require_parse5 = __commonJS({
           }
           if (chr === ",") {
             if (item === void 0) {
-              fail("Elisions are not supported");
+              fail2("Elisions are not supported");
             }
           } else if (chr === "]") {
             if (!json5 && item === void 0 && result.length) {
               position--;
-              fail("Trailing comma in array");
+              fail2("Trailing comma in array");
             }
             return result;
           } else {
             position--;
-            fail();
+            fail2();
           }
         }
       }
@@ -76354,10 +76354,10 @@ var require_parse5 = __commonJS({
           }
           if (Number.isNaN(result)) {
             position--;
-            fail('Bad numeric literal - "' + input.substr(start, position - start + 1) + '"');
+            fail2('Bad numeric literal - "' + input.substr(start, position - start + 1) + '"');
           } else if (!json5 && !str.match(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?(e[+-]?[0-9]+)?$/i)) {
             position--;
-            fail('Non-json numeric literal - "' + input.substr(start, position - start + 1) + '"');
+            fail2('Non-json numeric literal - "' + input.substr(start, position - start + 1) + '"');
           } else {
             return result;
           }
@@ -76428,7 +76428,7 @@ var require_parse5 = __commonJS({
             }
           }
         }
-        fail();
+        fail2();
       }
       function parseString(endChar) {
         var result = "";
@@ -76437,7 +76437,7 @@ var require_parse5 = __commonJS({
           if (chr === endChar) {
             return result;
           } else if (chr === "\\") {
-            if (position >= length) fail();
+            if (position >= length) fail2();
             chr = input[position++];
             if (unescapeMap[chr] && (json5 || chr != "v" && chr != "'")) {
               result += unescapeMap[chr];
@@ -76446,8 +76446,8 @@ var require_parse5 = __commonJS({
             } else if (chr === "u" || chr === "x" && json5) {
               var off = chr === "u" ? 4 : 2;
               for (var i = 0; i < off; i++) {
-                if (position >= length) fail();
-                if (!isHexDigit(input[position])) fail("Bad escape sequence");
+                if (position >= length) fail2();
+                if (!isHexDigit(input[position])) fail2("Bad escape sequence");
                 position++;
               }
               result += String.fromCharCode(parseInt(input.substr(position - off, off), 16));
@@ -76465,19 +76465,19 @@ var require_parse5 = __commonJS({
               result += chr;
             } else {
               position--;
-              fail();
+              fail2();
             }
           } else if (isLineTerminator(chr)) {
-            fail();
+            fail2();
           } else {
             if (!json5 && chr.charCodeAt(0) < 32) {
               position--;
-              fail("Unexpected control character");
+              fail2("Unexpected control character");
             }
             result += chr;
           }
         }
-        fail();
+        fail2();
       }
       skipWhiteSpace();
       var return_value = parseGeneric();
@@ -76489,13 +76489,13 @@ var require_parse5 = __commonJS({
           }
           return return_value;
         } else {
-          fail();
+          fail2();
         }
       } else {
         if (position) {
-          fail("No data, only a whitespace");
+          fail2("No data, only a whitespace");
         } else {
-          fail("No data, empty input");
+          fail2("No data, empty input");
         }
       }
     }
@@ -77432,11 +77432,11 @@ var require_Mime = __commonJS({
         }
       }
     };
-    Mime.prototype.getType = function(path8) {
-      path8 = String(path8);
-      let last = path8.replace(/^.*[/\\]/, "").toLowerCase();
+    Mime.prototype.getType = function(path9) {
+      path9 = String(path9);
+      let last = path9.replace(/^.*[/\\]/, "").toLowerCase();
       let ext = last.replace(/^.*\./, "").toLowerCase();
-      let hasPath = last.length < path8.length;
+      let hasPath = last.length < path9.length;
       let hasDot = ext.length < last.length - 1;
       return (hasDot || !hasPath) && this._types[ext] || null;
     };
@@ -80343,12 +80343,12 @@ var require_item = __commonJS({
          * @returns {Array<string>}
          */
         getPath: function() {
-          const path8 = [], pushItem = (item) => {
-            path8.push(item.name);
+          const path9 = [], pushItem = (item) => {
+            path9.push(item.name);
           };
           pushItem(this);
           this.forEachParent({ withRoot: true }, pushItem);
-          return path8.reverse();
+          return path9.reverse();
         }
       }
     );
@@ -86068,8 +86068,8 @@ var require_Trie = __commonJS({
           throw new Error("Trie.insert: key cannot be null or undefined");
         }
         let node = this.root;
-        const path8 = this.getPath(key);
-        for (const segment of path8) {
+        const path9 = this.getPath(key);
+        for (const segment of path9) {
           if (!node.children.has(segment)) {
             node.children.set(segment, new TrieNode());
           }
@@ -86086,8 +86086,8 @@ var require_Trie = __commonJS({
           return [];
         }
         let node = this.root;
-        const path8 = this.getPath(prefix);
-        for (const segment of path8) {
+        const path9 = this.getPath(prefix);
+        for (const segment of path9) {
           const child = node.children.get(segment);
           if (!child) {
             return [];
@@ -86103,8 +86103,8 @@ var require_Trie = __commonJS({
           return [];
         }
         let node = this.root;
-        const path8 = this.getPath(prefix);
-        for (const segment of path8) {
+        const path9 = this.getPath(prefix);
+        for (const segment of path9) {
           const child = node.children.get(segment);
           if (!child) {
             return [];
@@ -86112,7 +86112,7 @@ var require_Trie = __commonJS({
           node = child;
         }
         const results = [];
-        this._collectEntries(node, path8, results);
+        this._collectEntries(node, path9, results);
         return results;
       }
       get(key) {
@@ -86120,8 +86120,8 @@ var require_Trie = __commonJS({
           return void 0;
         }
         let node = this.root;
-        const path8 = this.getPath(key);
-        for (const segment of path8) {
+        const path9 = this.getPath(key);
+        for (const segment of path9) {
           const child = node.children.get(segment);
           if (!child) {
             return void 0;
@@ -86135,8 +86135,8 @@ var require_Trie = __commonJS({
           return false;
         }
         let node = this.root;
-        const path8 = this.getPath(key);
-        for (const segment of path8) {
+        const path9 = this.getPath(key);
+        for (const segment of path9) {
           const child = node.children.get(segment);
           if (!child) {
             return false;
@@ -89445,17 +89445,17 @@ var require_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    function visit_(key, node, visitor, path8) {
-      const ctrl = callVisitor(key, node, visitor, path8);
+    function visit_(key, node, visitor, path9) {
+      const ctrl = callVisitor(key, node, visitor, path9);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path8, ctrl);
-        return visit_(key, ctrl, visitor, path8);
+        replaceNode(key, path9, ctrl);
+        return visit_(key, ctrl, visitor, path9);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node)) {
-          path8 = Object.freeze(path8.concat(node));
+          path9 = Object.freeze(path9.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
-            const ci = visit_(i, node.items[i], visitor, path8);
+            const ci = visit_(i, node.items[i], visitor, path9);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -89466,13 +89466,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node)) {
-          path8 = Object.freeze(path8.concat(node));
-          const ck = visit_("key", node.key, visitor, path8);
+          path9 = Object.freeze(path9.concat(node));
+          const ck = visit_("key", node.key, visitor, path9);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node.key = null;
-          const cv = visit_("value", node.value, visitor, path8);
+          const cv = visit_("value", node.value, visitor, path9);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -89493,17 +89493,17 @@ var require_visit = __commonJS({
     visitAsync.BREAK = BREAK;
     visitAsync.SKIP = SKIP;
     visitAsync.REMOVE = REMOVE;
-    async function visitAsync_(key, node, visitor, path8) {
-      const ctrl = await callVisitor(key, node, visitor, path8);
+    async function visitAsync_(key, node, visitor, path9) {
+      const ctrl = await callVisitor(key, node, visitor, path9);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path8, ctrl);
-        return visitAsync_(key, ctrl, visitor, path8);
+        replaceNode(key, path9, ctrl);
+        return visitAsync_(key, ctrl, visitor, path9);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node)) {
-          path8 = Object.freeze(path8.concat(node));
+          path9 = Object.freeze(path9.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
-            const ci = await visitAsync_(i, node.items[i], visitor, path8);
+            const ci = await visitAsync_(i, node.items[i], visitor, path9);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -89514,13 +89514,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node)) {
-          path8 = Object.freeze(path8.concat(node));
-          const ck = await visitAsync_("key", node.key, visitor, path8);
+          path9 = Object.freeze(path9.concat(node));
+          const ck = await visitAsync_("key", node.key, visitor, path9);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node.key = null;
-          const cv = await visitAsync_("value", node.value, visitor, path8);
+          const cv = await visitAsync_("value", node.value, visitor, path9);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -89547,23 +89547,23 @@ var require_visit = __commonJS({
       }
       return visitor;
     }
-    function callVisitor(key, node, visitor, path8) {
+    function callVisitor(key, node, visitor, path9) {
       if (typeof visitor === "function")
-        return visitor(key, node, path8);
+        return visitor(key, node, path9);
       if (identity.isMap(node))
-        return visitor.Map?.(key, node, path8);
+        return visitor.Map?.(key, node, path9);
       if (identity.isSeq(node))
-        return visitor.Seq?.(key, node, path8);
+        return visitor.Seq?.(key, node, path9);
       if (identity.isPair(node))
-        return visitor.Pair?.(key, node, path8);
+        return visitor.Pair?.(key, node, path9);
       if (identity.isScalar(node))
-        return visitor.Scalar?.(key, node, path8);
+        return visitor.Scalar?.(key, node, path9);
       if (identity.isAlias(node))
-        return visitor.Alias?.(key, node, path8);
+        return visitor.Alias?.(key, node, path9);
       return void 0;
     }
-    function replaceNode(key, path8, node) {
-      const parent = path8[path8.length - 1];
+    function replaceNode(key, path9, node) {
+      const parent = path9[path9.length - 1];
       if (identity.isCollection(parent)) {
         parent.items[key] = node;
       } else if (identity.isPair(parent)) {
@@ -90173,10 +90173,10 @@ var require_Collection = __commonJS({
     var createNode = require_createNode();
     var identity = require_identity();
     var Node = require_Node();
-    function collectionFromPath(schema, path8, value) {
+    function collectionFromPath(schema, path9, value) {
       let v = value;
-      for (let i = path8.length - 1; i >= 0; --i) {
-        const k = path8[i];
+      for (let i = path9.length - 1; i >= 0; --i) {
+        const k = path9[i];
         if (typeof k === "number" && Number.isInteger(k) && k >= 0) {
           const a = [];
           a[k] = v;
@@ -90195,7 +90195,7 @@ var require_Collection = __commonJS({
         sourceObjects: /* @__PURE__ */ new Map()
       });
     }
-    var isEmptyPath = (path8) => path8 == null || typeof path8 === "object" && !!path8[Symbol.iterator]().next().done;
+    var isEmptyPath = (path9) => path9 == null || typeof path9 === "object" && !!path9[Symbol.iterator]().next().done;
     var Collection2 = class extends Node.NodeBase {
       constructor(type, schema) {
         super(type);
@@ -90225,11 +90225,11 @@ var require_Collection = __commonJS({
        * be a Pair instance or a `{ key, value }` object, which may not have a key
        * that already exists in the map.
        */
-      addIn(path8, value) {
-        if (isEmptyPath(path8))
+      addIn(path9, value) {
+        if (isEmptyPath(path9))
           this.add(value);
         else {
-          const [key, ...rest] = path8;
+          const [key, ...rest] = path9;
           const node = this.get(key, true);
           if (identity.isCollection(node))
             node.addIn(rest, value);
@@ -90243,8 +90243,8 @@ var require_Collection = __commonJS({
        * Removes a value from the collection.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path8) {
-        const [key, ...rest] = path8;
+      deleteIn(path9) {
+        const [key, ...rest] = path9;
         if (rest.length === 0)
           return this.delete(key);
         const node = this.get(key, true);
@@ -90258,8 +90258,8 @@ var require_Collection = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path8, keepScalar) {
-        const [key, ...rest] = path8;
+      getIn(path9, keepScalar) {
+        const [key, ...rest] = path9;
         const node = this.get(key, true);
         if (rest.length === 0)
           return !keepScalar && identity.isScalar(node) ? node.value : node;
@@ -90277,8 +90277,8 @@ var require_Collection = __commonJS({
       /**
        * Checks if the collection includes a value with the key `key`.
        */
-      hasIn(path8) {
-        const [key, ...rest] = path8;
+      hasIn(path9) {
+        const [key, ...rest] = path9;
         if (rest.length === 0)
           return this.has(key);
         const node = this.get(key, true);
@@ -90288,8 +90288,8 @@ var require_Collection = __commonJS({
        * Sets a value in this collection. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path8, value) {
-        const [key, ...rest] = path8;
+      setIn(path9, value) {
+        const [key, ...rest] = path9;
         if (rest.length === 0) {
           this.set(key, value);
         } else {
@@ -92804,9 +92804,9 @@ var require_Document = __commonJS({
           this.contents.add(value);
       }
       /** Adds a value to the document. */
-      addIn(path8, value) {
+      addIn(path9, value) {
         if (assertCollection(this.contents))
-          this.contents.addIn(path8, value);
+          this.contents.addIn(path9, value);
       }
       /**
        * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
@@ -92881,14 +92881,14 @@ var require_Document = __commonJS({
        * Removes a value from the document.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path8) {
-        if (Collection2.isEmptyPath(path8)) {
+      deleteIn(path9) {
+        if (Collection2.isEmptyPath(path9)) {
           if (this.contents == null)
             return false;
           this.contents = null;
           return true;
         }
-        return assertCollection(this.contents) ? this.contents.deleteIn(path8) : false;
+        return assertCollection(this.contents) ? this.contents.deleteIn(path9) : false;
       }
       /**
        * Returns item at `key`, or `undefined` if not found. By default unwraps
@@ -92903,10 +92903,10 @@ var require_Document = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path8, keepScalar) {
-        if (Collection2.isEmptyPath(path8))
+      getIn(path9, keepScalar) {
+        if (Collection2.isEmptyPath(path9))
           return !keepScalar && identity.isScalar(this.contents) ? this.contents.value : this.contents;
-        return identity.isCollection(this.contents) ? this.contents.getIn(path8, keepScalar) : void 0;
+        return identity.isCollection(this.contents) ? this.contents.getIn(path9, keepScalar) : void 0;
       }
       /**
        * Checks if the document includes a value with the key `key`.
@@ -92917,10 +92917,10 @@ var require_Document = __commonJS({
       /**
        * Checks if the document includes a value at `path`.
        */
-      hasIn(path8) {
-        if (Collection2.isEmptyPath(path8))
+      hasIn(path9) {
+        if (Collection2.isEmptyPath(path9))
           return this.contents !== void 0;
-        return identity.isCollection(this.contents) ? this.contents.hasIn(path8) : false;
+        return identity.isCollection(this.contents) ? this.contents.hasIn(path9) : false;
       }
       /**
        * Sets a value in this document. For `!!set`, `value` needs to be a
@@ -92937,13 +92937,13 @@ var require_Document = __commonJS({
        * Sets a value in this document. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path8, value) {
-        if (Collection2.isEmptyPath(path8)) {
+      setIn(path9, value) {
+        if (Collection2.isEmptyPath(path9)) {
           this.contents = value;
         } else if (this.contents == null) {
-          this.contents = Collection2.collectionFromPath(this.schema, Array.from(path8), value);
+          this.contents = Collection2.collectionFromPath(this.schema, Array.from(path9), value);
         } else if (assertCollection(this.contents)) {
-          this.contents.setIn(path8, value);
+          this.contents.setIn(path9, value);
         }
       }
       /**
@@ -94903,9 +94903,9 @@ var require_cst_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    visit2.itemAtPath = (cst, path8) => {
+    visit2.itemAtPath = (cst, path9) => {
       let item = cst;
-      for (const [field, index] of path8) {
+      for (const [field, index] of path9) {
         const tok = item?.[field];
         if (tok && "items" in tok) {
           item = tok.items[index];
@@ -94914,23 +94914,23 @@ var require_cst_visit = __commonJS({
       }
       return item;
     };
-    visit2.parentCollection = (cst, path8) => {
-      const parent = visit2.itemAtPath(cst, path8.slice(0, -1));
-      const field = path8[path8.length - 1][0];
+    visit2.parentCollection = (cst, path9) => {
+      const parent = visit2.itemAtPath(cst, path9.slice(0, -1));
+      const field = path9[path9.length - 1][0];
       const coll = parent?.[field];
       if (coll && "items" in coll)
         return coll;
       throw new Error("Parent collection not found");
     };
-    function _visit(path8, item, visitor) {
-      let ctrl = visitor(item, path8);
+    function _visit(path9, item, visitor) {
+      let ctrl = visitor(item, path9);
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
         const token = item[field];
         if (token && "items" in token) {
           for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path8.concat([[field, i]])), token.items[i], visitor);
+            const ci = _visit(Object.freeze(path9.concat([[field, i]])), token.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -94941,10 +94941,10 @@ var require_cst_visit = __commonJS({
             }
           }
           if (typeof ctrl === "function" && field === "key")
-            ctrl = ctrl(item, path8);
+            ctrl = ctrl(item, path9);
         }
       }
-      return typeof ctrl === "function" ? ctrl(item, path8) : ctrl;
+      return typeof ctrl === "function" ? ctrl(item, path9) : ctrl;
     }
     exports2.visit = visit2;
   }
@@ -99275,7 +99275,7 @@ var require_split_collection = __commonJS({
       if (items && items.length > 0) {
         processItems(trie, rootPath, rootResourcesPath, items, serializeOpts, idMap, collection.id);
       }
-      const files = trie.entries().map(([path8, content]) => ({ path: path8, content }));
+      const files = trie.entries().map(([path9, content]) => ({ path: path9, content }));
       return idMap ? { files, rootPath, idMap } : { files, rootPath };
     }
   }
@@ -102149,8 +102149,8 @@ var require_utils5 = __commonJS({
       var result = transform2[inputType][outputType](input);
       return result;
     };
-    exports2.resolve = function(path8) {
-      var parts = path8.split("/");
+    exports2.resolve = function(path9) {
+      var parts = path9.split("/");
       var result = [];
       for (var index = 0; index < parts.length; index++) {
         var part = parts[index];
@@ -108003,18 +108003,18 @@ var require_object = __commonJS({
       var object = new ZipObject(name, zipObjectContent, o);
       this.files[name] = object;
     };
-    var parentFolder = function(path8) {
-      if (path8.slice(-1) === "/") {
-        path8 = path8.substring(0, path8.length - 1);
+    var parentFolder = function(path9) {
+      if (path9.slice(-1) === "/") {
+        path9 = path9.substring(0, path9.length - 1);
       }
-      var lastSlash = path8.lastIndexOf("/");
-      return lastSlash > 0 ? path8.substring(0, lastSlash) : "";
+      var lastSlash = path9.lastIndexOf("/");
+      return lastSlash > 0 ? path9.substring(0, lastSlash) : "";
     };
-    var forceTrailingSlash = function(path8) {
-      if (path8.slice(-1) !== "/") {
-        path8 += "/";
+    var forceTrailingSlash = function(path9) {
+      if (path9.slice(-1) !== "/") {
+        path9 += "/";
       }
-      return path8;
+      return path9;
     };
     var folderAdd = function(name, createFolders) {
       createFolders = typeof createFolders !== "undefined" ? createFolders : defaults.createFolders;
@@ -109449,9 +109449,9 @@ var ExitCode;
 })(ExitCode || (ExitCode = {}));
 
 // src/index.ts
-var import_node_crypto3 = require("node:crypto");
+var import_node_crypto5 = require("node:crypto");
 var import_node_fs8 = require("node:fs");
-var path6 = __toESM(require("node:path"), 1);
+var path7 = __toESM(require("node:path"), 1);
 
 // node_modules/js-yaml/dist/js-yaml.mjs
 var NOT_RESOLVED = /* @__PURE__ */ Symbol("NOT_RESOLVED");
@@ -112721,6 +112721,439 @@ function assertEnvironmentYamlRoundTrip(candidate, expected) {
   }
 }
 
+// src/lib/postman/environment-definitions.ts
+var import_node_crypto = require("node:crypto");
+var MAX_INPUT_BYTES = 1024 * 1024;
+var MAX_ENVIRONMENTS = 100;
+var MAX_VALUES_PER_ENVIRONMENT = 500;
+var MAX_SLUG_LENGTH = 256;
+var MAX_KEY_LENGTH = 256;
+var MAX_VALUE_LENGTH = 256 * 1024;
+var RESERVED_VARIABLE_KEYS = /* @__PURE__ */ new Set(["x-pm-onboarding"]);
+var BIDI_FORMATTING_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+var DURABLE_DEFINITION_SCHEMA = "env-definition-v1";
+function createResolvedInputBudget() {
+  let bytes = 0;
+  return (value) => {
+    bytes += Buffer.byteLength(value, "utf8");
+    if (bytes > MAX_INPUT_BYTES) {
+      throw new Error(
+        `Resolved environment definitions must not exceed ${MAX_INPUT_BYTES} bytes`
+      );
+    }
+  };
+}
+function isPlainRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function assertExactFields(value, allowed, label) {
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw new Error(`${label} contains ${unknown.length} unsupported field(s)`);
+  }
+}
+function assertNonEmptyBoundedString(value, label, maxLength) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  if (value.length > maxLength) {
+    throw new Error(`${label} must not exceed ${maxLength} characters`);
+  }
+}
+function assertEnvironmentSlug(slug, label, requireCanonicalWhitespace) {
+  assertNonEmptyBoundedString(slug, `${label}.slug`, MAX_SLUG_LENGTH);
+  if (requireCanonicalWhitespace && slug !== slug.trim()) {
+    throw new Error(`${label}.slug must not have leading or trailing whitespace`);
+  }
+  if (BIDI_FORMATTING_CONTROLS.test(slug)) {
+    throw new Error(`${label}.slug must not contain bidirectional formatting controls`);
+  }
+  environmentFileName("environment-input", slug);
+}
+function assertVariableKey(key, label) {
+  assertNonEmptyBoundedString(key, `${label}.key`, MAX_KEY_LENGTH);
+  if (!key.isWellFormed()) {
+    throw new Error(`${label}.key must contain well-formed Unicode`);
+  }
+  if (key !== key.trim()) {
+    throw new Error(`${label}.key must not have leading or trailing whitespace`);
+  }
+  if (BIDI_FORMATTING_CONTROLS.test(key)) {
+    throw new Error(`${label}.key must not contain bidirectional formatting controls`);
+  }
+  if (Array.from(key).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
+  })) {
+    throw new Error(`${label}.key must not contain control characters`);
+  }
+  if (RESERVED_VARIABLE_KEYS.has(key)) {
+    throw new Error(`${label}.key "${key}" is reserved for action-owned metadata`);
+  }
+}
+function parseVariable(value, label, accountString) {
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  assertExactFields(value, /* @__PURE__ */ new Set(["key", "value", "type", "enabled"]), label);
+  assertVariableKey(value.key, label);
+  const type = value.type === void 0 ? "default" : value.type;
+  if (type !== "default" && type !== "secret") {
+    throw new Error(`${label}.type must be "default" or "secret"`);
+  }
+  if (value.enabled !== void 0 && typeof value.enabled !== "boolean") {
+    throw new Error(`${label}.enabled must be a boolean`);
+  }
+  if (value.value !== void 0 && typeof value.value !== "string") {
+    throw new Error(`${label}.value must be a string when provided`);
+  }
+  const normalizedValue = value.value ?? "";
+  if (!normalizedValue.isWellFormed()) {
+    throw new Error(`${label}.value must contain well-formed Unicode`);
+  }
+  if (normalizedValue.length > MAX_VALUE_LENGTH) {
+    throw new Error(`${label}.value must not exceed ${MAX_VALUE_LENGTH} characters`);
+  }
+  if (type === "secret" && normalizedValue.length > 0) {
+    throw new Error(`${label} declares a secret variable with a non-empty value`);
+  }
+  accountString?.(value.key);
+  accountString?.(normalizedValue);
+  return {
+    key: value.key,
+    value: normalizedValue,
+    type,
+    enabled: value.enabled ?? true
+  };
+}
+function parseDefinition(value, index, accountString) {
+  const label = `environments-json[${index}]`;
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be a string slug or environment definition object`);
+  }
+  assertExactFields(value, /* @__PURE__ */ new Set(["slug", "values"]), label);
+  assertEnvironmentSlug(value.slug, label, true);
+  accountString?.(value.slug);
+  if (!Array.isArray(value.values)) {
+    throw new Error(`${label}.values must be an array`);
+  }
+  if (value.values.length > MAX_VALUES_PER_ENVIRONMENT) {
+    throw new Error(
+      `${label}.values must not contain more than ${MAX_VALUES_PER_ENVIRONMENT} entries`
+    );
+  }
+  const seenKeys = /* @__PURE__ */ new Set();
+  const values = value.values.map((entry, valueIndex) => {
+    const parsed = parseVariable(entry, `${label}.values[${valueIndex}]`, accountString);
+    if (seenKeys.has(parsed.key)) {
+      throw new Error(`${label}.values contains duplicate key "${parsed.key}"`);
+    }
+    seenKeys.add(parsed.key);
+    return parsed;
+  });
+  return { slug: value.slug, values };
+}
+function parseEnvironmentDefinitionsJson(raw) {
+  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) {
+    throw new Error(`environments-json must not exceed ${MAX_INPUT_BYTES} bytes`);
+  }
+  if (!raw.trim()) {
+    return { environments: [], definitions: /* @__PURE__ */ Object.create(null) };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("environments-json must contain valid JSON");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("environments-json must contain a JSON array");
+  }
+  if (parsed.length > MAX_ENVIRONMENTS) {
+    throw new Error(`environments-json must not contain more than ${MAX_ENVIRONMENTS} entries`);
+  }
+  const environments = [];
+  const definitions = /* @__PURE__ */ Object.create(null);
+  const seenSlugs = /* @__PURE__ */ new Set();
+  parsed.forEach((entry, index) => {
+    if (typeof entry !== "string") {
+      throw new Error(`environments-json[${index}] must be a string slug`);
+    }
+    assertEnvironmentSlug(entry, `environments-json[${index}]`, false);
+    const slug = entry;
+    if (seenSlugs.has(slug)) {
+      throw new Error(`environments-json contains duplicate slug "${slug}"`);
+    }
+    seenSlugs.add(slug);
+    environments.push(slug);
+  });
+  return { environments, definitions };
+}
+function validateResolvedEnvironmentDefinitions(environments, definitions) {
+  if (!Array.isArray(environments)) {
+    throw new Error("Resolved environments must be an array");
+  }
+  if (environments.length > MAX_ENVIRONMENTS) {
+    throw new Error(`Resolved environments must not contain more than ${MAX_ENVIRONMENTS} entries`);
+  }
+  if (!isPlainRecord(definitions)) {
+    throw new Error("Resolved environment definitions must be an object");
+  }
+  const normalizedEnvironments = [];
+  const normalizedDefinitions = /* @__PURE__ */ Object.create(null);
+  const seenSlugs = /* @__PURE__ */ new Set();
+  const accountString = createResolvedInputBudget();
+  environments.forEach((slug, index) => {
+    assertEnvironmentSlug(slug, `environments[${index}]`, false);
+    accountString(slug);
+    if (seenSlugs.has(slug)) {
+      throw new Error(`Resolved environments contain duplicate slug "${slug}"`);
+    }
+    seenSlugs.add(slug);
+    normalizedEnvironments.push(slug);
+  });
+  for (const [mapSlug, rawDefinition] of Object.entries(definitions)) {
+    assertEnvironmentSlug(mapSlug, "Resolved environment definition key", true);
+    accountString(mapSlug);
+    const definition = parseDefinition(
+      rawDefinition,
+      normalizedEnvironments.indexOf(mapSlug),
+      accountString
+    );
+    if (definition.slug !== mapSlug) {
+      throw new Error(
+        `Resolved environment definition key "${mapSlug}" does not match slug "${definition.slug}"`
+      );
+    }
+    if (!seenSlugs.has(mapSlug)) {
+      throw new Error(
+        `Resolved environment definition "${mapSlug}" has no matching environments entry`
+      );
+    }
+    normalizedDefinitions[mapSlug] = definition;
+  }
+  return {
+    environments: normalizedEnvironments,
+    definitions: normalizedDefinitions
+  };
+}
+function assertDurableBoundedString(value, label, maxScalars) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  if (!value.isWellFormed()) {
+    throw new Error(`${label} must contain well-formed Unicode`);
+  }
+  if (Array.from(value).length > maxScalars) {
+    throw new Error(`${label} must not exceed ${maxScalars} Unicode scalar values`);
+  }
+}
+function assertDurableIdentifier(value, label) {
+  if (value !== value.trim()) {
+    throw new Error(`${label} must not have leading or trailing whitespace`);
+  }
+  if (Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
+  })) {
+    throw new Error(`${label} must not contain C0 or C1 control code points`);
+  }
+  if (BIDI_FORMATTING_CONTROLS.test(value)) {
+    throw new Error(`${label} must not contain bidirectional formatting code points`);
+  }
+}
+function assertDurableExactFields(value, allowed, label) {
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error(`${label} contains an unsupported field`);
+  }
+}
+function assertDurableSlug(slug, label) {
+  assertDurableBoundedString(slug, `${label}.slug`, MAX_SLUG_LENGTH);
+  assertDurableIdentifier(slug, `${label}.slug`);
+  if (slug === "." || slug === ".." || /[\\/]/u.test(slug) || /^[A-Za-z]:/u.test(slug)) {
+    throw new Error(`${label}.slug must not be a path or contain path separators`);
+  }
+  environmentFileName("durable-environment-input", slug);
+}
+function assertDurableVariableKey(key, label) {
+  assertDurableBoundedString(key, `${label}.key`, MAX_KEY_LENGTH);
+  assertDurableIdentifier(key, `${label}.key`);
+  if (RESERVED_VARIABLE_KEYS.has(key)) {
+    throw new Error(`${label}.key is reserved for action-owned metadata`);
+  }
+}
+function parseDurableVariable(value, label) {
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  assertDurableExactFields(value, /* @__PURE__ */ new Set(["key", "value", "type", "enabled"]), label);
+  assertDurableVariableKey(value.key, label);
+  const type = value.type === void 0 ? "default" : value.type;
+  if (type !== "default" && type !== "secret") {
+    throw new Error(`${label}.type must be "default" or "secret"`);
+  }
+  if (value.enabled !== void 0 && typeof value.enabled !== "boolean") {
+    throw new Error(`${label}.enabled must be a boolean`);
+  }
+  if (value.value !== void 0 && typeof value.value !== "string") {
+    throw new Error(`${label}.value must be a string when provided`);
+  }
+  const normalizedValue = value.value ?? "";
+  if (!normalizedValue.isWellFormed()) {
+    throw new Error(`${label}.value must contain well-formed Unicode`);
+  }
+  if (Buffer.byteLength(normalizedValue, "utf8") > MAX_VALUE_LENGTH) {
+    throw new Error(`${label}.value must not exceed ${MAX_VALUE_LENGTH} UTF-8 bytes`);
+  }
+  if (type === "secret" && normalizedValue.length > 0) {
+    throw new Error(`${label} declares a secret variable with a non-empty value`);
+  }
+  return {
+    key: value.key,
+    value: normalizedValue,
+    type,
+    enabled: value.enabled ?? true
+  };
+}
+function parseDurableDefinition(value, index) {
+  const label = `durable-environments-json[${index}]`;
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be an environment definition object`);
+  }
+  assertDurableExactFields(value, /* @__PURE__ */ new Set(["slug", "values"]), label);
+  assertDurableSlug(value.slug, label);
+  if (!Array.isArray(value.values)) {
+    throw new Error(`${label}.values must be an array`);
+  }
+  if (value.values.length > MAX_VALUES_PER_ENVIRONMENT) {
+    throw new Error(
+      `${label}.values must not contain more than ${MAX_VALUES_PER_ENVIRONMENT} entries`
+    );
+  }
+  const seenKeys = /* @__PURE__ */ Object.create(null);
+  const values = value.values.map((entry, valueIndex) => {
+    const parsed = parseDurableVariable(entry, `${label}.values[${valueIndex}]`);
+    if (Object.prototype.hasOwnProperty.call(seenKeys, parsed.key)) {
+      throw new Error(`${label}.values contains a duplicate variable key`);
+    }
+    seenKeys[parsed.key] = true;
+    return parsed;
+  });
+  return { slug: value.slug, values };
+}
+function portableIdentifierCollisionKey(value) {
+  return value.normalize("NFD").toUpperCase().toLowerCase().normalize("NFD");
+}
+function parseDurableEnvironmentDefinitionsJson(raw) {
+  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) {
+    throw new Error(`durable-environments-json must not exceed ${MAX_INPUT_BYTES} UTF-8 bytes`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("durable-environments-json must contain valid JSON");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("durable-environments-json must contain a JSON array");
+  }
+  if (parsed.length > MAX_ENVIRONMENTS) {
+    throw new Error(
+      `durable-environments-json must not contain more than ${MAX_ENVIRONMENTS} entries`
+    );
+  }
+  const environments = [];
+  const definitions = /* @__PURE__ */ Object.create(null);
+  const collisionOwners = /* @__PURE__ */ Object.create(null);
+  parsed.forEach((entry, index) => {
+    const definition = parseDurableDefinition(entry, index);
+    const collisionKey = portableIdentifierCollisionKey(definition.slug);
+    if (Object.prototype.hasOwnProperty.call(collisionOwners, collisionKey)) {
+      throw new Error("durable-environments-json contains colliding environment slugs");
+    }
+    collisionOwners[collisionKey] = true;
+    environments.push(definition.slug);
+    definitions[definition.slug] = definition;
+  });
+  return { environments, definitions };
+}
+function validateResolvedDurableEnvironmentDefinitions(environments, definitions) {
+  if (!Array.isArray(environments)) {
+    throw new Error("Resolved durable environments must be an array");
+  }
+  if (environments.length > MAX_ENVIRONMENTS) {
+    throw new Error(
+      `Resolved durable environments must not contain more than ${MAX_ENVIRONMENTS} entries`
+    );
+  }
+  if (!isPlainRecord(definitions)) {
+    throw new Error("Resolved durable environment definitions must be an object");
+  }
+  const normalizedEnvironments = [];
+  const normalizedDefinitions = /* @__PURE__ */ Object.create(null);
+  const collisionOwners = /* @__PURE__ */ Object.create(null);
+  const accountString = createResolvedInputBudget();
+  environments.forEach((rawSlug, index) => {
+    assertDurableSlug(rawSlug, `durableEnvironments[${index}]`);
+    const collisionKey = portableIdentifierCollisionKey(rawSlug);
+    if (Object.prototype.hasOwnProperty.call(collisionOwners, collisionKey)) {
+      throw new Error("Resolved durable environments contain colliding slugs");
+    }
+    collisionOwners[collisionKey] = true;
+    normalizedEnvironments.push(rawSlug);
+  });
+  for (const [mapSlug, rawDefinition] of Object.entries(definitions)) {
+    assertDurableSlug(mapSlug, "Resolved durable environment definition key");
+    const definition = parseDurableDefinition(
+      rawDefinition,
+      normalizedEnvironments.indexOf(mapSlug)
+    );
+    if (definition.slug !== mapSlug) {
+      throw new Error("Resolved durable environment definition key does not match its slug");
+    }
+    if (!normalizedEnvironments.includes(mapSlug)) {
+      throw new Error("Resolved durable environment definition has no matching environments entry");
+    }
+    accountString(definition.slug);
+    for (const value of definition.values) {
+      accountString(value.key);
+      accountString(value.value);
+    }
+    normalizedDefinitions[mapSlug] = definition;
+  }
+  for (const slug of normalizedEnvironments) {
+    if (!Object.prototype.hasOwnProperty.call(normalizedDefinitions, slug)) {
+      throw new Error("Resolved durable environment is missing its rich definition");
+    }
+  }
+  return {
+    environments: normalizedEnvironments,
+    definitions: normalizedDefinitions
+  };
+}
+function computeDurableEnvironmentDefinitionDigest(input) {
+  const envelope = {
+    schema: DURABLE_DEFINITION_SCHEMA,
+    workspaceId: input.workspaceId,
+    projectKey: input.projectKey,
+    projectName: input.projectName,
+    policy: input.policy,
+    environments: input.environments.map((definition) => ({
+      slug: definition.slug,
+      values: definition.values.map((value) => ({
+        key: value.key,
+        value: value.value,
+        type: value.type,
+        enabled: value.enabled
+      }))
+    }))
+  };
+  const digest = (0, import_node_crypto.createHash)("sha256").update(JSON.stringify(envelope), "utf8").digest("hex");
+  return `${DURABLE_DEFINITION_SCHEMA}:sha256:${digest}`;
+}
+
 // src/lib/postman/environment-reconciliation.ts
 var import_node_fs3 = require("node:fs");
 var path3 = __toESM(require("node:path"), 1);
@@ -112936,6 +113369,712 @@ function assertEnvironmentArtifactOwnership(resourcesState, artifactDir, project
       );
     }
   }
+}
+
+// src/lib/postman/durable-environment-state.ts
+var path4 = __toESM(require("node:path"), 1);
+var DURABLE_ENVIRONMENT_RESOURCES_STATE_VERSION = 3;
+var DEFINITION_DIGEST_PATTERN = /^env-definition-v1:sha256:[0-9a-f]{64}$/u;
+var DUPLICATE_UID_FIELDS = /* @__PURE__ */ new Set([
+  "uid",
+  "environmentUid",
+  "environmentUID",
+  "postmanUid",
+  "postmanUID"
+]);
+function isPlainRecord2(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function fail(message) {
+  throw new StateUnreadableError(message);
+}
+function requirePlainRecord(value, label) {
+  if (!isPlainRecord2(value)) {
+    fail(`${label} must be a mapping`);
+  }
+  return value;
+}
+function requireStateKey(value, label) {
+  if (!value || value !== value.trim()) {
+    fail(`${label} must be a non-empty string without surrounding whitespace`);
+  }
+  if ([...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
+  })) {
+    fail(`${label} must not contain control characters`);
+  }
+  return value;
+}
+function hasOwn(record, key) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+function copyToNullPrototype(record) {
+  return Object.assign(/* @__PURE__ */ Object.create(null), record);
+}
+function ownValue(record, key) {
+  return hasOwn(record, key) ? record[key] : void 0;
+}
+function requireString(value, label) {
+  if (typeof value !== "string" || !value || value !== value.trim()) {
+    fail(`${label} must be a non-empty string without surrounding whitespace`);
+  }
+  return value;
+}
+function requireCanonicalManifestRef(value, label) {
+  const artifact = requireString(value, label);
+  const canonical = canonicalizeManifestRef(artifact);
+  if (artifact !== canonical) {
+    fail(`${label} must be a canonical repository-relative manifest reference`);
+  }
+  const repoPath = path4.posix.normalize(path4.posix.join(".postman", artifact));
+  if (path4.posix.isAbsolute(repoPath) || repoPath === ".." || repoPath.startsWith("../")) {
+    fail(`${label} resolves outside the repository`);
+  }
+  return artifact;
+}
+function requireArtifactRef(value, label) {
+  const artifact = requireCanonicalManifestRef(value, label);
+  if (!artifact.includes("/environments/") || !artifact.endsWith(".environment.yaml")) {
+    fail(`${label} must reference a canonical environment YAML artifact`);
+  }
+  return artifact;
+}
+function requirePolicy(value, label) {
+  if (value !== "create-only" && value !== "refresh") {
+    fail(`${label} must be "create-only" or "refresh"`);
+  }
+  return value;
+}
+function requireDefinitionDigest(value, label) {
+  if (typeof value !== "string" || !DEFINITION_DIGEST_PATTERN.test(value)) {
+    fail(`${label} must use env-definition-v1:sha256:<lowercase hex>`);
+  }
+  return value;
+}
+function assertNoDuplicateUidField(entry, label) {
+  const duplicate = Object.keys(entry).find((key) => DUPLICATE_UID_FIELDS.has(key));
+  if (duplicate) {
+    fail(`${label}.${duplicate} duplicates canonical.environments UID authority`);
+  }
+}
+function canonicalEnvironmentEntries(state) {
+  if (state.canonical === void 0) return [];
+  const canonical = requirePlainRecord(state.canonical, "canonical");
+  if (canonical.environments === void 0) return [];
+  const environments = requirePlainRecord(
+    canonical.environments,
+    "canonical.environments"
+  );
+  return Object.entries(environments).map(([rawArtifact, rawUid]) => {
+    const entryLabel = `canonical.environments[${JSON.stringify(rawArtifact)}]`;
+    const uid = requireString(rawUid, entryLabel);
+    return {
+      artifact: requireCanonicalManifestRef(rawArtifact, entryLabel),
+      uid
+    };
+  });
+}
+function assertCanonicalEnvironmentReferences(state) {
+  if (state) canonicalEnvironmentEntries(state);
+}
+function resolveCanonicalUid(entries, artifact, label) {
+  const matches = entries.filter((entry) => entry.artifact === artifact);
+  if (matches.length === 0) {
+    fail(`${label}.artifact does not resolve through canonical.environments`);
+  }
+  if (matches.length > 1) {
+    fail(`${label}.artifact resolves through multiple canonical.environments entries`);
+  }
+  return matches[0].uid;
+}
+function parseEntry(rawEntry, projectKey, slug, canonicalEntries) {
+  const label = `environmentProvisioning.projects[${JSON.stringify(projectKey)}].environments[${JSON.stringify(slug)}]`;
+  const entry = requirePlainRecord(rawEntry, label);
+  assertNoDuplicateUidField(entry, label);
+  const artifact = requireArtifactRef(entry.artifact, `${label}.artifact`);
+  return {
+    projectKey,
+    slug,
+    uid: resolveCanonicalUid(canonicalEntries, artifact, label),
+    artifact,
+    displayName: requireString(entry.displayName, `${label}.displayName`),
+    policy: requirePolicy(entry.policy, `${label}.policy`),
+    definitionDigest: requireDefinitionDigest(
+      entry.definitionDigest,
+      `${label}.definitionDigest`
+    )
+  };
+}
+function parseDurableEnvironmentProvisioningState(state) {
+  if (!state || state.environmentProvisioning === void 0) return [];
+  if (state.version !== DURABLE_ENVIRONMENT_RESOURCES_STATE_VERSION) {
+    fail(
+      `environmentProvisioning metadata requires resources state version ${DURABLE_ENVIRONMENT_RESOURCES_STATE_VERSION}`
+    );
+  }
+  const provisioning = requirePlainRecord(
+    state.environmentProvisioning,
+    "environmentProvisioning"
+  );
+  if (provisioning.projects === void 0) return [];
+  const projects = requirePlainRecord(
+    provisioning.projects,
+    "environmentProvisioning.projects"
+  );
+  const canonicalEntries = canonicalEnvironmentEntries(state);
+  const resolved = [];
+  const artifactClaims = /* @__PURE__ */ new Map();
+  const uidClaims = /* @__PURE__ */ new Map();
+  for (const [rawProjectKey, rawProject] of Object.entries(projects)) {
+    const projectKey = requireStateKey(
+      rawProjectKey,
+      "environmentProvisioning project key"
+    );
+    const project = requirePlainRecord(
+      rawProject,
+      `environmentProvisioning.projects[${JSON.stringify(projectKey)}]`
+    );
+    if (project.environments === void 0) continue;
+    const environments = requirePlainRecord(
+      project.environments,
+      `environmentProvisioning.projects[${JSON.stringify(projectKey)}].environments`
+    );
+    for (const [rawSlug, rawEntry] of Object.entries(environments)) {
+      const slug = requireStateKey(rawSlug, `durable environment slug for ${projectKey}`);
+      const entry = parseEntry(rawEntry, projectKey, slug, canonicalEntries);
+      const identity = `${projectKey}/${slug}`;
+      const priorArtifactClaim = artifactClaims.get(entry.artifact);
+      if (priorArtifactClaim && priorArtifactClaim !== identity) {
+        fail(
+          `durable environments ${priorArtifactClaim} and ${identity} claim artifact ${entry.artifact}`
+        );
+      }
+      const priorUidClaim = uidClaims.get(entry.uid);
+      if (priorUidClaim && priorUidClaim !== identity) {
+        fail(
+          `durable environments ${priorUidClaim} and ${identity} claim UID ${entry.uid}`
+        );
+      }
+      artifactClaims.set(entry.artifact, identity);
+      uidClaims.set(entry.uid, identity);
+      resolved.push(entry);
+    }
+  }
+  if (resolved.length > 0) {
+    const workspace = requirePlainRecord(state.workspace, "workspace");
+    requireString(workspace.id, "workspace.id");
+  }
+  return resolved;
+}
+function assertUpsertInput(input) {
+  requireStateKey(input.projectKey, "durable project key");
+  requireStateKey(input.slug, "durable environment slug");
+  requireString(input.uid, "durable environment UID");
+  requireArtifactRef(input.artifact, "durable environment artifact");
+  requireString(input.displayName, "durable environment display name");
+  requirePolicy(input.policy, "durable environment policy");
+  requireDefinitionDigest(input.definitionDigest, "durable environment definition digest");
+}
+function upsertDurableEnvironmentProvisioningState(state, input) {
+  assertUpsertInput(input);
+  if (state.version !== 2 && state.version !== DURABLE_ENVIRONMENT_RESOURCES_STATE_VERSION) {
+    fail("durable environment state upsert requires resources state version 2 or 3");
+  }
+  if (state.environmentProvisioning !== void 0) {
+    parseDurableEnvironmentProvisioningState(state);
+  }
+  const canonicalEntries = canonicalEnvironmentEntries(state);
+  const canonicalUid = resolveCanonicalUid(
+    canonicalEntries,
+    input.artifact,
+    `durable environment ${input.projectKey}/${input.slug}`
+  );
+  if (canonicalUid !== input.uid) {
+    fail(
+      `durable environment ${input.projectKey}/${input.slug} expected UID ${input.uid}, but canonical.environments resolves ${canonicalUid}`
+    );
+  }
+  const priorProvisioning = state.environmentProvisioning ?? {};
+  const priorProjects = copyToNullPrototype(priorProvisioning.projects ?? {});
+  const priorProject = ownValue(priorProjects, input.projectKey) ?? {};
+  const priorEnvironments = copyToNullPrototype(priorProject.environments ?? {});
+  const priorEntry = ownValue(priorEnvironments, input.slug) ?? {};
+  const nextEnvironments = copyToNullPrototype(priorEnvironments);
+  nextEnvironments[input.slug] = {
+    ...priorEntry,
+    artifact: input.artifact,
+    displayName: input.displayName,
+    policy: input.policy,
+    definitionDigest: input.definitionDigest
+  };
+  const nextProjects = copyToNullPrototype(priorProjects);
+  nextProjects[input.projectKey] = {
+    ...priorProject,
+    environments: nextEnvironments
+  };
+  const nextState = {
+    ...state,
+    version: DURABLE_ENVIRONMENT_RESOURCES_STATE_VERSION,
+    environmentProvisioning: {
+      ...priorProvisioning,
+      projects: nextProjects
+    }
+  };
+  parseDurableEnvironmentProvisioningState(nextState);
+  return nextState;
+}
+
+// src/lib/postman/durable-environment-provisioning.ts
+var import_node_crypto2 = require("node:crypto");
+var DurableEnvironmentPartialApplyError = class extends Error {
+  code = "DURABLE_ENVIRONMENT_PARTIAL_APPLY_FAILED";
+  completedEntries;
+  failedSlug;
+  constructor(failedSlug, completedEntries, cause) {
+    super(
+      `Durable environment apply failed for "${failedSlug}" after ${completedEntries.length} completed entr${completedEntries.length === 1 ? "y" : "ies"}`,
+      { cause }
+    );
+    this.name = "DurableEnvironmentPartialApplyError";
+    this.failedSlug = failedSlug;
+    this.completedEntries = completedEntries.map((entry) => ({
+      ...entry,
+      runtimeSlotKeys: [...entry.runtimeSlotKeys]
+    }));
+  }
+};
+function hasOwn2(record, key) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+function definitionFor(definitions, slug) {
+  if (!hasOwn2(definitions, slug)) {
+    throw new Error(`Durable environment "${slug}" is missing its rich definition`);
+  }
+  return definitions[slug];
+}
+function runtimeSlots(definition) {
+  return definition.values.filter((value) => value.type === "secret").map((value) => value.key);
+}
+function publicEntry(entry) {
+  return {
+    slug: entry.slug,
+    displayName: entry.displayName,
+    action: entry.action,
+    ...entry.uid ? { uid: entry.uid } : {},
+    runtimeSlotKeys: [...entry.runtimeSlotKeys]
+  };
+}
+function projectDurableEnvironmentPlan(entries) {
+  return entries.map(publicEntry);
+}
+function projectDurableEnvironmentOfflinePlan(entries) {
+  return entries.map((entry) => ({
+    slug: entry.slug,
+    displayName: entry.displayName,
+    action: entry.action,
+    runtimeSlotKeys: [...entry.runtimeSlotKeys]
+  }));
+}
+function projectDurableEnvironmentOrphans(input) {
+  const requested = new Set(input.environments);
+  return Object.entries(input.trackedBindings).filter(([slug]) => !requested.has(slug)).map(([slug, binding]) => ({
+    slug,
+    displayName: binding.displayName,
+    uid: binding.uid,
+    action: "retained"
+  })).sort((left, right) => left.slug.localeCompare(right.slug));
+}
+function planDurableEnvironmentsOffline(input) {
+  const undeclaredExplicitSlug = Object.keys(input.explicitUids).find(
+    (slug) => !input.environments.includes(slug)
+  );
+  if (undeclaredExplicitSlug) {
+    throw new Error(
+      "durable-environment-uids-json contains a slug not declared by durable-environments-json"
+    );
+  }
+  return input.environments.map((slug) => {
+    const definition = definitionFor(input.definitions, slug);
+    const persisted = hasOwn2(input.trackedBindings, slug) ? input.trackedBindings[slug] : void 0;
+    const explicitUid = hasOwn2(input.explicitUids, slug) ? String(input.explicitUids[slug] ?? "").trim() : "";
+    if (explicitUid && persisted?.uid && explicitUid !== persisted.uid) {
+      throw new Error(
+        `Durable environment "${slug}" has conflicting explicit and tracked UIDs`
+      );
+    }
+    const derivedDisplayName = `${input.projectName} - ${slug}`;
+    if (persisted && persisted.displayName !== derivedDisplayName) {
+      throw new Error(
+        `Durable environment "${slug}" would rename "${persisted.displayName}" to "${derivedDisplayName}"; rename is not supported`
+      );
+    }
+    return {
+      slug,
+      displayName: persisted?.displayName ?? derivedDisplayName,
+      action: "unresolved",
+      ...explicitUid || persisted?.uid ? { uid: explicitUid || persisted?.uid } : {},
+      runtimeSlotKeys: runtimeSlots(definition),
+      definition
+    };
+  });
+}
+function indexLiveEnvironments(entries) {
+  const byName = /* @__PURE__ */ new Map();
+  const byUid = /* @__PURE__ */ new Map();
+  for (const raw of entries) {
+    if (typeof raw.name !== "string" || !raw.name.trim()) {
+      throw new Error("Postman environment list contains an entry without a valid name");
+    }
+    const name = raw.name;
+    const uid = String(raw.uid ?? "").trim();
+    if (!uid) {
+      throw new Error("Postman environment list contains an entry without a UID");
+    }
+    const entry = { name, uid };
+    const named = byName.get(name) ?? [];
+    named.push(entry);
+    byName.set(name, named);
+    const prior = byUid.get(uid);
+    if (prior && prior.name !== name) {
+      throw new Error(`Postman environment UID ${uid} appears under multiple names`);
+    }
+    byUid.set(uid, entry);
+  }
+  return { byName, byUid };
+}
+function resolveReviewedUid(input, slug) {
+  const explicit = hasOwn2(input.explicitUids, slug) ? String(input.explicitUids[slug] ?? "").trim() : "";
+  const tracked = hasOwn2(input.trackedBindings, slug) ? input.trackedBindings[slug] : void 0;
+  if (explicit && tracked?.uid && explicit !== tracked.uid) {
+    throw new Error(
+      `Durable environment "${slug}" has conflicting explicit and tracked UIDs`
+    );
+  }
+  return {
+    ...explicit || tracked?.uid ? { uid: explicit || tracked?.uid } : {},
+    ...tracked?.displayName ? { displayName: tracked.displayName } : {}
+  };
+}
+function planDurableEnvironmentsLive(input, liveEntries, options = {}) {
+  const live = indexLiveEnvironments(liveEntries);
+  const claimedUids = /* @__PURE__ */ new Map();
+  return input.environments.map((slug) => {
+    const definition = definitionFor(input.definitions, slug);
+    const reviewed = resolveReviewedUid(input, slug);
+    const derivedDisplayName = `${input.projectName} - ${slug}`;
+    if (reviewed.displayName && reviewed.displayName !== derivedDisplayName) {
+      throw new Error(
+        `Durable environment "${slug}" would rename "${reviewed.displayName}" to "${derivedDisplayName}"; rename is not supported`
+      );
+    }
+    const displayName = reviewed.displayName ?? derivedDisplayName;
+    const exactMatches = live.byName.get(displayName) ?? [];
+    if (exactMatches.length > 1) {
+      throw new Error(
+        `Durable environment "${slug}" has multiple exact-name candidates in workspace ${input.workspaceId}`
+      );
+    }
+    if (reviewed.uid) {
+      const priorSlug = claimedUids.get(reviewed.uid);
+      if (priorSlug && priorSlug !== slug) {
+        throw new Error(
+          `Postman environment UID ${reviewed.uid} is claimed by durable slugs "${priorSlug}" and "${slug}"`
+        );
+      }
+      claimedUids.set(reviewed.uid, slug);
+      const liveByUid = live.byUid.get(reviewed.uid);
+      if (!liveByUid || liveByUid.name !== displayName || exactMatches[0]?.uid !== reviewed.uid) {
+        throw new Error(
+          `Durable environment "${slug}" UID ${reviewed.uid} does not match workspace exact name "${displayName}"`
+        );
+      }
+      return {
+        slug,
+        displayName,
+        action: input.policy === "create-only" ? "reuse" : "replace",
+        uid: reviewed.uid,
+        runtimeSlotKeys: runtimeSlots(definition),
+        definition
+      };
+    }
+    if (exactMatches[0]) {
+      if (options.reportUntrackedCandidates) {
+        return {
+          slug,
+          displayName,
+          action: "review-required",
+          uid: exactMatches[0].uid,
+          runtimeSlotKeys: runtimeSlots(definition),
+          definition
+        };
+      }
+      throw new Error(
+        `Durable environment "${slug}" found untracked exact-name candidate ${exactMatches[0].uid}; review it and supply durable-environment-uids-json before apply`
+      );
+    }
+    return {
+      slug,
+      displayName,
+      action: "create",
+      runtimeSlotKeys: runtimeSlots(definition),
+      definition
+    };
+  });
+}
+function observationFingerprint(plan, liveEntries) {
+  const relevantNames = new Set(plan.map((entry) => entry.displayName));
+  const relevantUids = new Set(plan.flatMap((entry) => entry.uid ? [entry.uid] : []));
+  return JSON.stringify(
+    liveEntries.filter((entry) => relevantNames.has(entry.name) || relevantUids.has(entry.uid)).map((entry) => ({ name: entry.name, uid: entry.uid })).sort(
+      (left, right) => left.name.localeCompare(right.name) || left.uid.localeCompare(right.uid)
+    )
+  );
+}
+function parseDurableEnvironmentValues(value) {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const nested = record.data && typeof record.data === "object" && !Array.isArray(record.data) ? record.data : record;
+  if (!Array.isArray(nested.values)) {
+    throw new Error("Postman environment response values must be an array");
+  }
+  return nested.values.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Postman environment response values[${index}] must be an object`);
+    }
+    const entry = raw;
+    if (typeof entry.key !== "string") {
+      throw new Error(`Postman environment response values[${index}].key must be a string`);
+    }
+    if (entry.type !== void 0 && entry.type !== "default" && entry.type !== "secret") {
+      throw new Error(`Postman environment response values[${index}].type is invalid`);
+    }
+    if (entry.secret !== void 0 && typeof entry.secret !== "boolean") {
+      throw new Error(`Postman environment response values[${index}].secret must be a boolean`);
+    }
+    if (entry.enabled !== void 0 && typeof entry.enabled !== "boolean") {
+      throw new Error(`Postman environment response values[${index}].enabled must be a boolean`);
+    }
+    if (entry.disabled !== void 0 && typeof entry.disabled !== "boolean") {
+      throw new Error(`Postman environment response values[${index}].disabled must be a boolean`);
+    }
+    const isSecret = entry.type === "secret" || entry.secret === true;
+    if (entry.value !== void 0 && typeof entry.value !== "string") {
+      throw new Error(`Postman environment response values[${index}].value must be a string`);
+    }
+    if (entry.value === void 0 && !isSecret) {
+      throw new Error(`Postman environment response values[${index}].value must be a string`);
+    }
+    return {
+      key: String(entry.key),
+      value: isSecret ? "" : entry.value,
+      type: isSecret ? "secret" : "default",
+      enabled: entry.enabled !== false && entry.disabled !== true
+    };
+  });
+}
+function hasActionOwnershipMarker(value, slug) {
+  return normalizedObservedValues(value, slug).some((entry) => entry.key === "x-pm-onboarding");
+}
+function expectedValues(definition) {
+  return definition.values.map((entry) => ({
+    key: entry.key,
+    value: entry.type === "secret" ? "" : entry.value,
+    type: entry.type,
+    enabled: entry.enabled
+  }));
+}
+function normalizedObservedValues(live, slug) {
+  if (!live || typeof live !== "object" || Array.isArray(live)) {
+    throw new Error(`Durable environment "${slug}" could not be read after reconciliation`);
+  }
+  return parseDurableEnvironmentValues(live).map((entry) => ({
+    ...entry,
+    value: entry.type === "secret" ? "" : entry.value
+  }));
+}
+function durableEnvironmentObservedDigest(live, slug) {
+  const digest = (0, import_node_crypto2.createHash)("sha256").update(
+    JSON.stringify({
+      schema: "env-observed-v1",
+      values: normalizedObservedValues(live, slug)
+    }),
+    "utf8"
+  ).digest("hex");
+  return `env-observed-v1:sha256:${digest}`;
+}
+function verifyAppliedValues(definition, live, slug) {
+  if (JSON.stringify(normalizedObservedValues(live, slug)) !== JSON.stringify(expectedValues(definition))) {
+    throw new Error(`Durable environment "${slug}" did not converge to the requested value metadata`);
+  }
+}
+function assertLiveBinding(entry, liveEntries, expected, phase) {
+  const live = indexLiveEnvironments(liveEntries);
+  const exactMatches = live.byName.get(entry.displayName) ?? [];
+  if (exactMatches.length > 1) {
+    throw new Error(
+      `Durable environment "${entry.slug}" has multiple exact-name candidates during ${phase}`
+    );
+  }
+  if (expected === "absent") {
+    if (exactMatches.length > 0) {
+      throw new Error(
+        `Durable environment "${entry.slug}" appeared before create during ${phase}; rerun plan`
+      );
+    }
+    return;
+  }
+  if (!entry.uid) {
+    throw new Error(`Durable environment "${entry.slug}" has no validated UID`);
+  }
+  const byUid = live.byUid.get(entry.uid);
+  if (exactMatches.length !== 1 || exactMatches[0]?.uid !== entry.uid || byUid?.name !== entry.displayName) {
+    throw new Error(
+      `Durable environment "${entry.slug}" UID/name binding changed during ${phase}`
+    );
+  }
+}
+async function applyDurableEnvironmentPlan(input, client, initialLiveEntries, plan) {
+  const preWriteLive = await client.listEnvironments(input.workspaceId);
+  if (observationFingerprint(plan, initialLiveEntries) !== observationFingerprint(plan, preWriteLive)) {
+    throw new Error("Durable environment workspace observations changed before mutation; rerun plan");
+  }
+  planDurableEnvironmentsLive(input, preWriteLive);
+  const results = [];
+  for (const entry of plan) {
+    let cloudAppliedEntry;
+    try {
+      assertLiveBinding(
+        entry,
+        await client.listEnvironments(input.workspaceId),
+        entry.action === "create" ? "absent" : "present",
+        "pre-operation"
+      );
+      if (entry.action === "create") {
+        const uid = await client.createEnvironment(
+          input.workspaceId,
+          entry.displayName,
+          entry.definition.values,
+          { onExisting: "error" }
+        );
+        cloudAppliedEntry = {
+          slug: entry.slug,
+          displayName: entry.displayName,
+          action: "create",
+          uid,
+          runtimeSlotKeys: entry.runtimeSlotKeys
+        };
+        assertLiveBinding(
+          { ...entry, uid },
+          await client.listEnvironments(input.workspaceId),
+          "present",
+          "post-operation"
+        );
+        const live = await client.getEnvironment(uid);
+        verifyAppliedValues(entry.definition, live, entry.slug);
+        cloudAppliedEntry.observedDigest = durableEnvironmentObservedDigest(live, entry.slug);
+        results.push(cloudAppliedEntry);
+        continue;
+      }
+      if (!entry.uid) {
+        throw new Error(`Durable environment "${entry.slug}" has no validated UID`);
+      }
+      const preOperationPayload = await client.getEnvironment(entry.uid);
+      if (hasActionOwnershipMarker(preOperationPayload, entry.slug)) {
+        throw new Error(
+          `Durable environment "${entry.slug}" is owned by the branch asset lifecycle and cannot be adopted`
+        );
+      }
+      if (entry.action === "replace") {
+        await client.updateEnvironment(entry.uid, entry.displayName, entry.definition.values);
+        cloudAppliedEntry = {
+          slug: entry.slug,
+          displayName: entry.displayName,
+          action: "replace",
+          uid: entry.uid,
+          runtimeSlotKeys: entry.runtimeSlotKeys
+        };
+        assertLiveBinding(
+          entry,
+          await client.listEnvironments(input.workspaceId),
+          "present",
+          "post-operation"
+        );
+        const live = await client.getEnvironment(entry.uid);
+        verifyAppliedValues(entry.definition, live, entry.slug);
+        cloudAppliedEntry.observedDigest = durableEnvironmentObservedDigest(live, entry.slug);
+        results.push(cloudAppliedEntry);
+        continue;
+      }
+      assertLiveBinding(
+        entry,
+        await client.listEnvironments(input.workspaceId),
+        "present",
+        "post-operation"
+      );
+      results.push({
+        slug: entry.slug,
+        displayName: entry.displayName,
+        action: "reused-preserved",
+        uid: entry.uid,
+        runtimeSlotKeys: entry.runtimeSlotKeys,
+        observedDigest: durableEnvironmentObservedDigest(preOperationPayload, entry.slug)
+      });
+    } catch (error) {
+      throw new DurableEnvironmentPartialApplyError(
+        entry.slug,
+        cloudAppliedEntry ? [...results, cloudAppliedEntry] : results,
+        error
+      );
+    }
+  }
+  return results;
+}
+
+// src/lib/postman/durable-environment-diagnostics.ts
+var MAX_DIAGNOSTIC_LENGTH = 320;
+var DurableEnvironmentBoundaryError = class extends Error {
+  code = "DURABLE_ENVIRONMENT_OPERATION_FAILED";
+  constructor(category) {
+    const withoutControls = Array.from(category, (character) => {
+      const point = character.codePointAt(0) ?? 0;
+      return point <= 31 || point >= 127 && point <= 159 ? " " : character;
+    }).join("");
+    const normalizedCategory = withoutControls.replace(/[\u2028\u2029]+/gu, " ").replace(/\s+/gu, " ").trim().slice(0, MAX_DIAGNOSTIC_LENGTH);
+    super(
+      `DURABLE_ENVIRONMENT_OPERATION_FAILED: ${normalizedCategory || "durable environment processing failed"}. Review the value-free result and preceding sanitized phase logs.`
+    );
+    this.name = "DurableEnvironmentBoundaryError";
+  }
+};
+function diagnosticCategory(error) {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code ?? "") : "";
+  if (code === "DURABLE_ENVIRONMENT_PARTIAL_APPLY_FAILED") {
+    return "cloud apply was only partially completed";
+  }
+  if (code === "CONTRACT_STATE_UNREADABLE") {
+    return "repository state or resource ownership validation failed";
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/authoriz|pull-request|state-ref|publish|push|credential|token|provider/iu.test(message)) {
+    return "authorization or repository publication preflight failed";
+  }
+  if (/converge|binding|workspace observations|exact-name|multiple/iu.test(message)) {
+    return "environment identity or convergence validation failed";
+  }
+  return "durable environment input or lifecycle validation failed";
+}
+function isDurableEnvironmentFailure(error) {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code ?? "") : "";
+  if (code.startsWith("DURABLE_ENVIRONMENT_")) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /durable[- ]environments?|durable-project-key|durable-state-ref/iu.test(message);
+}
+function toDurableEnvironmentBoundaryError(error) {
+  return error instanceof DurableEnvironmentBoundaryError ? error : new DurableEnvironmentBoundaryError(diagnosticCategory(error));
 }
 
 // src/lib/fs/atomic-file.ts
@@ -113687,6 +114826,15 @@ function createMutableSecretMasker(initialSecretValues = [], replacement = REDAC
 }
 
 // src/lib/github/repo-mutation.ts
+var RepoMutationPreCommitError = class extends Error {
+  constructor(message, indexRestored = true) {
+    super(message);
+    this.indexRestored = indexRestored;
+    this.name = "RepoMutationPreCommitError";
+  }
+  indexRestored;
+  code = "REPO_MUTATION_PRE_COMMIT_FAILED";
+};
 function normalizeBranchRef(value) {
   const trimmed = String(value || "").trim();
   if (!trimmed) {
@@ -113883,38 +115031,226 @@ var RepoMutationService = class {
     this.repoUrl = options.repoUrl;
     this.secretMasker = options.secretMasker ?? createSecretMasker([]);
   }
+  async restoreOriginOrThrow(originalRemote, secretMasker) {
+    let restoreFailure = "";
+    try {
+      const restored = await this.execute("git", [
+        "remote",
+        "set-url",
+        "origin",
+        originalRemote
+      ]);
+      if (restored.exitCode !== 0) {
+        restoreFailure = restored.stderr || restored.stdout || "git remote set-url failed";
+      }
+    } catch (error) {
+      restoreFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (restoreFailure) {
+      throw new Error(secretMasker(
+        `REPO_PUSH_ORIGIN_RESTORE_FAILED: Could not restore origin remote: ${restoreFailure}`
+      ));
+    }
+  }
+  /** Authenticate, read the state ref, and prove a dry-run push before cloud mutation. */
+  async preflightPush(options) {
+    const resolvedCurrentRef = resolveCurrentRef(options);
+    const authorityPaths = normalizeStagePaths(options.authorityPaths ?? []);
+    assertMutationPathsAreContained(this.cwd, authorityPaths);
+    const tokens = this.provider === "azure-devops" ? buildPushTokenOrder({ adoToken: options.adoToken }) : buildPushTokenOrder({
+      fallbackToken: options.fallbackToken,
+      githubToken: options.githubToken
+    });
+    const usePersistedCredentials = tokens.length === 0 && this.provider === "azure-devops";
+    if (!supportsTokenRemote(this.provider)) {
+      throw new Error(
+        `repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`
+      );
+    }
+    if (!resolvedCurrentRef) {
+      throw new Error("No current ref could be resolved for repo-write-mode=commit-and-push");
+    }
+    if (tokens.length === 0 && !usePersistedCredentials) {
+      throw new Error("No push token configured for repo-write-mode=commit-and-push");
+    }
+    const secretMasker = createSecretMasker(tokens);
+    const preexistingStaged = await this.execute("git", ["diff", "--cached", "--quiet"]);
+    if (preexistingStaged.exitCode === 1) {
+      throw new Error(
+        "Pre-existing staged changes are present; refusing repository publication"
+      );
+    }
+    if (preexistingStaged.exitCode !== 0) {
+      const cause = preexistingStaged.stderr || preexistingStaged.stdout || "git diff failed";
+      throw new Error(secretMasker(`Failed to inspect pre-existing staged changes: ${cause}`));
+    }
+    const preexistingUnstaged = await this.execute("git", ["diff", "--quiet"]);
+    if (preexistingUnstaged.exitCode === 1) {
+      throw new Error(
+        "Pre-existing unstaged tracked changes are present; refusing repository publication"
+      );
+    }
+    if (preexistingUnstaged.exitCode !== 0) {
+      const cause = preexistingUnstaged.stderr || preexistingUnstaged.stdout || "git diff failed";
+      throw new Error(secretMasker(`Failed to inspect pre-existing unstaged changes: ${cause}`));
+    }
+    if (authorityPaths.length > 0) {
+      for (const ignored of [false, true]) {
+        const authorityStatus = await this.execute("git", [
+          "ls-files",
+          "--others",
+          ...ignored ? ["--ignored"] : [],
+          "--exclude-standard",
+          "--",
+          ...authorityPaths
+        ]);
+        if (authorityStatus.exitCode !== 0) {
+          throw new Error(this.secretMasker(
+            authorityStatus.stderr || authorityStatus.stdout || "Failed to inspect durable authority paths"
+          ));
+        }
+        if (authorityStatus.stdout.trim()) {
+          throw new Error(
+            "DURABLE_STATE_DIRTY: Durable authority paths must match the checked-out commit before cloud mutation"
+          );
+        }
+      }
+    }
+    const remote = await this.execute("git", ["remote", "get-url", "origin"]);
+    if (remote.exitCode !== 0 || !remote.stdout.trim()) {
+      throw new Error(secretMasker(
+        remote.stderr || remote.stdout || "REPO_PUSH_PREFLIGHT_FAILED: origin remote is unavailable"
+      ));
+    }
+    const originalRemote = remote.stdout.trim();
+    let remoteChanged = false;
+    let lastError = "";
+    let preflightSucceeded = false;
+    let preflightFailed = false;
+    let preflightError;
+    try {
+      const candidates = usePersistedCredentials ? [null] : tokens;
+      for (const token of candidates) {
+        const resetConfigArgs = token === null ? [] : buildScopedExtraHeaderResetConfigs(
+          this.provider,
+          originalRemote || this.repoUrl || ""
+        ).flatMap((config) => ["-c", config]);
+        if (token !== null) {
+          const setRemote = await this.execute("git", [
+            "remote",
+            "set-url",
+            "origin",
+            buildAuthenticatedRemoteUrl(
+              this.provider,
+              this.repository,
+              token,
+              this.repoUrl || originalRemote
+            )
+          ]);
+          if (setRemote.exitCode !== 0) {
+            lastError = setRemote.stderr || setRemote.stdout || "could not configure authenticated origin";
+            continue;
+          }
+          remoteChanged = true;
+        }
+        const fetch2 = await this.execute("git", [
+          ...resetConfigArgs,
+          "fetch",
+          "--no-tags",
+          "origin",
+          `refs/heads/${resolvedCurrentRef}`
+        ]);
+        const fetchError = fetch2.stderr || fetch2.stdout || "";
+        const targetBranchDoesNotExist = /couldn't find remote ref|remote ref .* not found/iu.test(
+          fetchError
+        );
+        if (fetch2.exitCode !== 0 && !targetBranchDoesNotExist) {
+          lastError = fetchError;
+          continue;
+        }
+        const dryRun = await this.execute("git", [
+          ...resetConfigArgs,
+          "push",
+          "--dry-run",
+          "origin",
+          `HEAD:refs/heads/${resolvedCurrentRef}`
+        ]);
+        if (dryRun.exitCode === 0) {
+          preflightSucceeded = true;
+          break;
+        }
+        lastError = dryRun.stderr || dryRun.stdout || "";
+      }
+    } catch (error) {
+      preflightFailed = true;
+      preflightError = error;
+    }
+    if (remoteChanged) {
+      await this.restoreOriginOrThrow(originalRemote, secretMasker);
+    }
+    if (preflightFailed) throw preflightError;
+    if (preflightSucceeded) return { resolvedCurrentRef };
+    throw new Error(secretMasker(
+      `REPO_PUSH_PREFLIGHT_FAILED: Could not read and dry-run publish ${resolvedCurrentRef}: ${lastError || "repository publication access was denied"}`
+    ));
+  }
   async commitAndPush(options) {
     const resolvedCurrentRef = resolveCurrentRef(options);
     const removePaths = normalizeStagePaths(options.removePaths ?? []);
-    const stagePaths = normalizeStagePaths([...options.stagePaths, ...removePaths]);
+    const forceStagePaths = normalizeStagePaths(options.forceStagePaths ?? []);
+    const stagePaths = normalizeStagePaths([
+      ...options.stagePaths,
+      ...forceStagePaths,
+      ...removePaths
+    ]);
     assertMutationPathsAreContained(this.cwd, stagePaths);
+    assertMutationPathsAreContained(this.cwd, forceStagePaths);
     assertMutationPathsAreContained(this.cwd, removePaths);
+    const forceStagePathSet = new Set(forceStagePaths);
+    const regularStagePaths = stagePaths.filter((stagePath) => !forceStagePathSet.has(stagePath));
     const tokens = this.provider === "azure-devops" ? buildPushTokenOrder({ adoToken: options.adoToken }) : buildPushTokenOrder({
       fallbackToken: options.fallbackToken,
       githubToken: options.githubToken
     });
     const secretMasker = createSecretMasker(tokens);
+    let stagingStarted = false;
+    const failBeforeCommit = async (message, resetOwnedIndexPaths = false) => {
+      let detail = secretMasker(message);
+      let indexRestored = true;
+      if (resetOwnedIndexPaths) {
+        try {
+          const reset = await this.execute("git", [
+            "reset",
+            "--quiet",
+            "HEAD",
+            "--",
+            ...stagePaths
+          ]);
+          if (reset.exitCode !== 0) {
+            indexRestored = false;
+            const cause = reset.stderr || reset.stdout || "git reset failed";
+            detail += secretMasker(`; failed to restore the generated-path index: ${cause}`);
+          }
+        } catch (error) {
+          indexRestored = false;
+          const cause = error instanceof Error ? error.message : String(error);
+          detail += secretMasker(`; failed to restore the generated-path index: ${cause}`);
+        }
+      }
+      throw new RepoMutationPreCommitError(detail, indexRestored);
+    };
+    const executeBeforeCommit = async (command, args) => {
+      try {
+        return await this.execute(command, args);
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        return await failBeforeCommit(
+          `Repository publication command failed before commit: ${cause}`,
+          stagingStarted
+        );
+      }
+    };
     if (stagePaths.length === 0) {
-      return {
-        commitSha: "",
-        pushed: false,
-        resolvedCurrentRef
-      };
-    }
-    const changed = await this.execute("git", [
-      "status",
-      "--porcelain=v1",
-      "--untracked-files=all",
-      "--",
-      ...stagePaths
-    ]);
-    if (changed.exitCode !== 0) {
-      throw new Error(this.secretMasker(changed.stderr || changed.stdout || "Failed to inspect generated changes"));
-    }
-    const hasPlannedRemoval = removePaths.some(
-      (removePath) => (0, import_node_fs5.existsSync)(import_node_path2.default.resolve(this.cwd, removePath))
-    );
-    if (!changed.stdout.trim() && !hasPlannedRemoval) {
       return {
         commitSha: "",
         pushed: false,
@@ -113924,35 +115260,165 @@ var RepoMutationService = class {
     const usePersistedCredentials = tokens.length === 0 && this.provider === "azure-devops";
     if (options.repoWriteMode === "commit-and-push") {
       if (!supportsTokenRemote(this.provider)) {
-        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+        await failBeforeCommit(
+          `repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`
+        );
       }
       if (!resolvedCurrentRef) {
-        throw new Error("No current ref could be resolved for repo-write-mode=commit-and-push");
+        await failBeforeCommit(
+          "No current ref could be resolved for repo-write-mode=commit-and-push"
+        );
       }
       if (tokens.length === 0 && !usePersistedCredentials) {
-        throw new Error("No push token configured for repo-write-mode=commit-and-push");
+        await failBeforeCommit("No push token configured for repo-write-mode=commit-and-push");
       }
     }
-    await this.execute("git", ["config", "user.name", options.committerName]);
-    await this.execute("git", ["config", "user.email", options.committerEmail]);
-    for (const removePath of removePaths) {
-      (0, import_node_fs5.rmSync)(import_node_path2.default.resolve(this.cwd, removePath), { force: true });
+    for (const forceStagePath of forceStagePaths) {
+      const absoluteForceStagePath = import_node_path2.default.resolve(this.cwd, forceStagePath);
+      let isFile = false;
+      try {
+        isFile = (0, import_node_fs5.existsSync)(absoluteForceStagePath) && (0, import_node_fs5.lstatSync)(absoluteForceStagePath).isFile();
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        await failBeforeCommit(`Failed to inspect force-stage path ${forceStagePath}: ${cause}`);
+      }
+      if (!isFile) {
+        await failBeforeCommit(
+          `Force-stage path must identify an exact generated file: ${forceStagePath}`
+        );
+      }
     }
-    await this.execute("git", ["add", "-A", "--", ...stagePaths]);
-    const staged = await this.execute("git", ["diff", "--cached", "--quiet"]);
-    if (staged.exitCode === 0) {
-      return {
-        commitSha: "",
-        pushed: false,
-        resolvedCurrentRef
-      };
-    }
-    await this.execute("git", [
-      "commit",
-      "-m",
-      "chore: sync Postman artifacts and metadata"
+    const changed = await executeBeforeCommit("git", [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--",
+      ...stagePaths
     ]);
-    let commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
+    if (changed.exitCode !== 0) {
+      await failBeforeCommit(
+        this.secretMasker(changed.stderr || changed.stdout || "Failed to inspect generated changes")
+      );
+    }
+    const hasPlannedRemoval = removePaths.some(
+      (removePath) => (0, import_node_fs5.existsSync)(import_node_path2.default.resolve(this.cwd, removePath))
+    );
+    const preexistingStaged = await executeBeforeCommit("git", ["diff", "--cached", "--quiet"]);
+    if (preexistingStaged.exitCode === 1) {
+      await failBeforeCommit(
+        "Pre-existing staged changes are present; refusing repository publication"
+      );
+    }
+    if (preexistingStaged.exitCode !== 0) {
+      const cause = preexistingStaged.stderr || preexistingStaged.stdout || "git diff failed";
+      await failBeforeCommit(`Failed to inspect pre-existing staged changes: ${cause}`);
+    }
+    let hasForcedChanges = false;
+    if (forceStagePaths.length > 0) {
+      const forcedChanged = await executeBeforeCommit("git", [
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--",
+        ...forceStagePaths
+      ]);
+      if (forcedChanged.exitCode !== 0) {
+        await failBeforeCommit(
+          forcedChanged.stderr || forcedChanged.stdout || "Failed to inspect force-staged changes"
+        );
+      }
+      hasForcedChanges = Boolean(forcedChanged.stdout.trim());
+    }
+    const hasGeneratedChanges = Boolean(changed.stdout.trim()) || hasForcedChanges || hasPlannedRemoval;
+    if (!hasGeneratedChanges) {
+      if (options.repoWriteMode !== "commit-and-push") {
+        return {
+          commitSha: "",
+          pushed: false,
+          resolvedCurrentRef
+        };
+      }
+    }
+    let commitSha = "";
+    if (hasGeneratedChanges || options.repoWriteMode === "commit-and-push") {
+      await executeBeforeCommit("git", ["config", "user.name", options.committerName]);
+      await executeBeforeCommit("git", ["config", "user.email", options.committerEmail]);
+      for (const removePath of removePaths) {
+        try {
+          (0, import_node_fs5.rmSync)(import_node_path2.default.resolve(this.cwd, removePath), { force: true });
+        } catch (error) {
+          const cause = error instanceof Error ? error.message : String(error);
+          await failBeforeCommit(`Failed to remove generated path: ${cause}`);
+        }
+      }
+      if (regularStagePaths.length > 0) {
+        stagingStarted = true;
+        const added = await executeBeforeCommit("git", ["add", "-A", "--", ...regularStagePaths]);
+        if (added.exitCode !== 0) {
+          const cause = added.stderr || added.stdout || "git add failed";
+          await failBeforeCommit(`Failed to stage generated changes: ${cause}`, true);
+        }
+      }
+      if (forceStagePaths.length > 0) {
+        stagingStarted = true;
+        const forceAdded = await executeBeforeCommit("git", [
+          "add",
+          "-f",
+          "-A",
+          "--",
+          ...forceStagePaths
+        ]);
+        if (forceAdded.exitCode !== 0) {
+          const cause = forceAdded.stderr || forceAdded.stdout || "git add failed";
+          await failBeforeCommit(`Failed to force-stage generated files: ${cause}`, true);
+        }
+      }
+      const staged = await executeBeforeCommit("git", [
+        "diff",
+        "--cached",
+        "--quiet",
+        "--",
+        ...stagePaths
+      ]);
+      if (staged.exitCode === 0) {
+        if (options.repoWriteMode !== "commit-and-push") {
+          return {
+            commitSha: "",
+            pushed: false,
+            resolvedCurrentRef
+          };
+        }
+      } else if (staged.exitCode !== 1) {
+        const cause = staged.stderr || staged.stdout || "git diff failed";
+        await failBeforeCommit(`Failed to inspect staged generated changes: ${cause}`, true);
+      } else {
+        const committed = await executeBeforeCommit("git", [
+          "commit",
+          "--only",
+          "-m",
+          "chore: sync Postman artifacts and metadata",
+          "--",
+          ...stagePaths
+        ]);
+        if (committed.exitCode !== 0) {
+          const cause = committed.stderr || committed.stdout || "git commit failed";
+          await failBeforeCommit(`Failed to commit generated changes: ${cause}`, true);
+        }
+        const resolvedCommit = await this.execute("git", ["rev-parse", "HEAD"]);
+        if (resolvedCommit.exitCode !== 0 || !resolvedCommit.stdout.trim()) {
+          const cause = resolvedCommit.stderr || resolvedCommit.stdout || "git rev-parse failed";
+          throw new Error(secretMasker(`Failed to resolve generated commit: ${cause}`));
+        }
+        commitSha = resolvedCommit.stdout.trim();
+      }
+    }
+    const currentHead = commitSha ? { exitCode: 0, stdout: commitSha, stderr: "" } : await this.execute("git", ["rev-parse", "HEAD"]);
+    if (currentHead.exitCode !== 0 || !currentHead.stdout.trim()) {
+      const cause = currentHead.stderr || currentHead.stdout || "git rev-parse failed";
+      throw new Error(secretMasker(`Failed to resolve publication commit: ${cause}`));
+    }
+    const desiredHead = currentHead.stdout.trim();
     if (options.repoWriteMode !== "commit-and-push") {
       return {
         commitSha,
@@ -114009,8 +115475,6 @@ var RepoMutationService = class {
           if (fetch2.exitCode === 0) {
             const rebase = await this.execute("git", [
               "rebase",
-              "-X",
-              "theirs",
               "FETCH_HEAD"
             ]);
             if (rebase.exitCode !== 0) {
@@ -114023,6 +115487,19 @@ var RepoMutationService = class {
               );
             }
             commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
+            const generatedPathDrift = await this.execute("git", [
+              "diff",
+              "--quiet",
+              desiredHead,
+              "HEAD",
+              "--",
+              ...stagePaths
+            ]);
+            if (generatedPathDrift.exitCode !== 0) {
+              throw new Error(
+                "REPO_PUSH_STATE_DRIFT: Generated state paths changed while reconciling the remote ref; refusing to claim publication"
+              );
+            }
           }
           const push = await this.execute("git", [
             ...resetConfigArgs,
@@ -114047,7 +115524,7 @@ var RepoMutationService = class {
       }
     } finally {
       if (remoteChanged) {
-        await this.execute("git", ["remote", "set-url", "origin", originalRemote]);
+        await this.restoreOriginOrThrow(originalRemote, secretMasker);
       }
     }
     if (!pushed) {
@@ -114074,11 +115551,11 @@ function normalizeRepoUrl(url) {
   const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
   if (sshMatch) {
     const host = sshMatch[1];
-    const path8 = sshMatch[2];
+    const path9 = sshMatch[2];
     if (host === "ssh.dev.azure.com") {
-      return normalizeAzureReposSshPath2(path8);
+      return normalizeAzureReposSshPath2(path9);
     }
-    return `https://${host}/${path8}`;
+    return `https://${host}/${path9}`;
   }
   try {
     const parsed = new URL(raw);
@@ -114313,8 +115790,8 @@ function normalizeRepoUrl2(url) {
   const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
   if (sshMatch) {
     const host = sshMatch[1];
-    const path8 = sshMatch[2];
-    return `https://${host}/${path8}`;
+    const path9 = sshMatch[2];
+    return `https://${host}/${path9}`;
   }
   return raw.replace(/\.git$/, "");
 }
@@ -114390,7 +115867,7 @@ function detectRepoContext2(input, env = process.env) {
 }
 
 // node_modules/@postman-cse/automation-core/dist/telemetry.js
-var import_node_crypto = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 var import_undici2 = __toESM(require_undici(), 1);
 var SCHEMA_VERSION = 3;
 var DEFAULT_TIMEOUT_MS = 1500;
@@ -114421,7 +115898,7 @@ function telemetryDisabled(env) {
   return false;
 }
 function sha256(value) {
-  return (0, import_node_crypto.createHash)("sha256").update(value).digest("hex");
+  return (0, import_node_crypto3.createHash)("sha256").update(value).digest("hex");
 }
 function accountTypeFromConsumer(consumerType) {
   const t = (consumerType ?? "").trim().toLowerCase();
@@ -116062,8 +117539,8 @@ var BifrostInternalIntegrationAdapter = class {
    *   - 403 + error.meta.workspaceId -> linked-invisible
    *   - 200 + error.meta.workspaceId -> linked-invisible (proxy envelope)
    */
-  async findWorkspaceForRepo(repoUrl, path8 = "/") {
-    const fsPath = path8 && path8.trim() ? path8.trim() : "/";
+  async findWorkspaceForRepo(repoUrl, path9 = "/") {
+    const fsPath = path9 && path9.trim() ? path9.trim() : "/";
     const url = `${this.bifrostBaseUrl}/ws/proxy`;
     const payload = {
       service: "workspaces",
@@ -116394,9 +117871,41 @@ var postmanRepoSyncActionContract = {
       default: ""
     },
     "environments-json": {
-      description: "JSON array of environment slugs to create or update.",
+      description: "JSON array of legacy branch-owned environment slug strings to create or update.",
       required: false,
       default: '["prod"]'
+    },
+    "durable-environments-json": {
+      description: "Opt-in JSON array of complete durable environment definition objects. String entries are not accepted, and supplying definitions alone does not authorize mutation.",
+      required: false,
+      default: "[]"
+    },
+    "durable-environment-policy": {
+      description: "Durable environment lifecycle policy. Create-only preserves existing values; refresh replaces the complete values array after identity validation.",
+      required: false,
+      default: "create-only",
+      allowedValues: ["create-only", "refresh"]
+    },
+    "durable-environment-operation": {
+      description: "Durable provisioning operation. Off preserves legacy behavior, plan is read-only, and apply requires explicit trusted mutation authorization.",
+      required: false,
+      default: "off",
+      allowedValues: ["off", "plan", "apply"]
+    },
+    "durable-environment-uids-json": {
+      description: "Optional JSON map of durable environment slug to explicitly reviewed Postman environment UID.",
+      required: false,
+      default: "{}"
+    },
+    "durable-project-key": {
+      description: "Stable logical project key required for durable plan or apply operations.",
+      required: false,
+      default: ""
+    },
+    "durable-state-ref": {
+      description: "Trusted persistent Git ref that owns durable state. An empty value defaults at runtime to the resolved canonical-branch value.",
+      required: false,
+      default: ""
     },
     "git-provider": {
       description: "Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected when omitted.",
@@ -116584,6 +118093,15 @@ var postmanRepoSyncActionContract = {
     "environment-uids-json": {
       description: "JSON map of environment slug to Postman environment uid."
     },
+    "durable-environment-result-json": {
+      description: "Value-free durable environment plan or apply result JSON."
+    },
+    "durable-environment-definition-digest": {
+      description: "Versioned SHA-256 digest of the normalized durable definition envelope."
+    },
+    "durable-environment-uids-json": {
+      description: "JSON map of durable environment slug to validated Postman environment uid."
+    },
     "mock-url": {
       description: "Created or reused mock server URL."
     },
@@ -116652,8 +118170,8 @@ var PostmanAssetsClient = class {
     this.fetchImpl = options.fetchImpl ?? fetch;
     void (options.secretMasker ?? createSecretMasker([this.apiKey]));
   }
-  async request(path8, init = {}) {
-    const url = path8.startsWith("http") ? path8 : `${this.baseUrl}${path8}`;
+  async request(path9, init = {}) {
+    const url = path9.startsWith("http") ? path9 : `${this.baseUrl}${path9}`;
     const response = await this.fetchImpl(url, {
       ...init,
       headers: {
@@ -117198,9 +118716,9 @@ var PostmanGatewayAssetsClient = class {
         const row = this.asRecord(value);
         if (!row || row.type === "FOLDER") continue;
         if (row.type !== "FILE" || typeof row.id !== "string" || !row.id.trim() || typeof row.path !== "string" || !row.path.trim() || typeof row.content !== "string" || typeof row.fileType !== "string" || !row.fileType.trim()) return void 0;
-        const path8 = row.path.replace(/\\/g, "/").normalize("NFC");
-        if (path8.startsWith("/") || path8.split("/").some((part) => part === ".." || !part)) throw new Error("CONTRACT_DEFINITION_PATH_INVALID");
-        rows.push({ ...row, path: path8 });
+        const path9 = row.path.replace(/\\/g, "/").normalize("NFC");
+        if (path9.startsWith("/") || path9.split("/").some((part) => part === ".." || !part)) throw new Error("CONTRACT_DEFINITION_PATH_INVALID");
+        rows.push({ ...row, path: path9 });
       }
       const meta = this.asRecord(response?.meta);
       const cursorValue = this.asRecord(meta?.cursor)?.next;
@@ -117213,9 +118731,9 @@ var PostmanGatewayAssetsClient = class {
     }
     const paths = /* @__PURE__ */ new Set();
     for (const row of rows) {
-      const path8 = String(row.path).toLocaleLowerCase();
-      if (paths.has(path8)) throw new Error("CONTRACT_DEFINITION_DUPLICATE_PATH");
-      paths.add(path8);
+      const path9 = String(row.path).toLocaleLowerCase();
+      if (paths.has(path9)) throw new Error("CONTRACT_DEFINITION_DUPLICATE_PATH");
+      paths.add(path9);
     }
     const roots = rows.filter((row) => row.fileType === "ROOT");
     if (roots.length !== 1) throw new Error("CONTRACT_DEFINITION_INVENTORY_INVALID");
@@ -117424,7 +118942,10 @@ var PostmanGatewayAssetsClient = class {
   // Verified live (scripts/live-gateway-probe.ts, 2026-06-30): the env service
   // proxied through this bifrost is `sync`, NOT `environment` (which answered
   // invalidServiceError). Import needs a client-generated id; list is POST (not
-  // GET); get-one is the sync subpath.
+  // GET); get-one is the sync subpath. The public Postman API also documents
+  // POST /environments?workspace=, but that route authenticates with a PMAK.
+  // Repo-sync deliberately keeps asset operations on the short-lived access
+  // token gateway, so PMAK remains only at the token-mint boundary.
   /**
    * Create/upsert an environment through the sync service.
    * POST /environment/import?workspace=:ws { id:<uuid>, name, values } ->
@@ -117438,10 +118959,18 @@ var PostmanGatewayAssetsClient = class {
    * uid (live-verified 2026-06-30 — the bare id 403s mock / 400s monitor
    * "environment is not a valid ID"), matching what `/list/environment` returns.
    * The sync read/update routes re-derive the bare id via `toModelId`.
+   * `onExisting: reuse` makes both initial discovery and ambiguous-create
+   * adoption return the live UID without a PUT, preserving customer values.
    */
-  async createEnvironment(workspaceId, name, values) {
+  async createEnvironment(workspaceId, name, values, options = {}) {
     const ws = workspaceId || this.workspaceId;
     const envName = String(name ?? "").trim();
+    const onExisting = options.onExisting ?? "refresh";
+    if (onExisting !== "refresh" && onExisting !== "reuse" && onExisting !== "error") {
+      throw new Error(
+        `Unsupported createEnvironment onExisting mode "${String(onExisting)}". Allowed values: refresh, reuse, error`
+      );
+    }
     const flightKey = `environment:${ws}:${envName}`;
     const normalizedValues = values.map((v) => ({
       key: v.key,
@@ -117449,10 +118978,18 @@ var PostmanGatewayAssetsClient = class {
       type: v.type ?? "default",
       enabled: v.enabled ?? true
     }));
-    return this.singleFlight(flightKey, JSON.stringify(normalizedValues), "environment", async () => {
+    const fingerprint = JSON.stringify({ onExisting, values: normalizedValues });
+    return this.singleFlight(flightKey, fingerprint, "environment", async () => {
       const existing = await this.findEnvironmentByName(ws, envName);
       if (existing?.uid) {
-        await this.updateEnvironment(existing.uid, envName, values);
+        if (onExisting === "error") {
+          throw new Error(
+            `Environment "${envName}" already exists in workspace ${ws}; explicit durable adoption is required`
+          );
+        }
+        if (onExisting === "refresh") {
+          await this.updateEnvironment(existing.uid, envName, values);
+        }
         return existing.uid;
       }
       const id = crypto.randomUUID();
@@ -117484,7 +119021,15 @@ var PostmanGatewayAssetsClient = class {
           return match?.uid ?? null;
         }, error);
         if (adopted) {
-          await this.updateEnvironment(adopted, envName, values);
+          if (onExisting === "error" && this.toModelId(adopted) !== id) {
+            throw new Error(
+              `Environment "${envName}" appeared during create reconciliation with unreviewed UID ${adopted}; explicit durable adoption is required`,
+              { cause: error }
+            );
+          }
+          if (onExisting === "refresh") {
+            await this.updateEnvironment(adopted, envName, values);
+          }
           return adopted;
         }
         if (adopted === void 0) {
@@ -118308,7 +119853,7 @@ async function mintAccessTokenIfNeeded(inputs, log, setSecret2, fetchImpl = fetc
 
 // src/lib/repo/branch-decision.ts
 var import_node_fs7 = require("node:fs");
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto4 = require("node:crypto");
 var ContractError = class extends Error {
   code;
   constructor(code, message) {
@@ -118345,10 +119890,10 @@ function detectProvider(env) {
   return "unknown";
 }
 function readGithubEvent(env) {
-  const path8 = clean(env.GITHUB_EVENT_PATH);
-  if (!path8) return void 0;
+  const path9 = clean(env.GITHUB_EVENT_PATH);
+  if (!path9) return void 0;
   try {
-    return JSON.parse((0, import_node_fs7.readFileSync)(path8, "utf8"));
+    return JSON.parse((0, import_node_fs7.readFileSync)(path9, "utf8"));
   } catch {
     return void 0;
   }
@@ -118632,7 +120177,7 @@ function buildBranchSlug(rawBranch) {
   if (!lossy) {
     return { suffix: truncated, slug: truncated, lossy };
   }
-  const hash = (0, import_node_crypto2.createHash)("sha256").update(rawBranch).digest("hex").slice(0, 6);
+  const hash = (0, import_node_crypto4.createHash)("sha256").update(rawBranch).digest("hex").slice(0, 6);
   return { suffix: `${truncated}-${hash}`, slug: truncated, lossy };
 }
 function previewAssetName(baseName, rawBranch) {
@@ -118780,7 +120325,7 @@ function getInput(name, env = process.env) {
   if (hasNormalized && hasRunner) {
     if (normalizedValue && runnerValue && normalizedValue !== runnerValue) {
       throw new Error(
-        `Conflicting values for ${name}: ${normalizedName}=${JSON.stringify(normalizedValue)} vs ${runnerName}=${JSON.stringify(runnerValue)}`
+        `Conflicting values for ${name}: both ${normalizedName} and ${runnerName} are set with different values`
       );
     }
   }
@@ -118797,20 +120342,34 @@ function parseJsonMap(raw) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Expected JSON object");
   }
-  return Object.fromEntries(
-    Object.entries(parsed).map(([key, value]) => [
-      String(key),
-      String(value ?? "")
-    ])
-  );
-}
-function parseJsonArray(raw) {
-  if (!raw.trim()) return [];
-  const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Expected JSON array");
+  const result = /* @__PURE__ */ Object.create(null);
+  for (const [key, value] of Object.entries(parsed)) {
+    result[String(key)] = String(value ?? "");
   }
-  return parsed.map((entry) => String(entry));
+  return result;
+}
+function parseDurableEnvironmentUidMap(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    throw new Error("durable-environment-uids-json must contain valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("durable-environment-uids-json must contain a JSON object");
+  }
+  const result = /* @__PURE__ */ Object.create(null);
+  for (const [slug, uid] of Object.entries(parsed)) {
+    if (typeof uid !== "string") {
+      throw new Error("durable-environment-uids-json values must be Postman UID strings");
+    }
+    assertDurableStateIdentifier(uid, "durable environment UID", 1024);
+    result[slug] = uid;
+  }
+  return result;
+}
+function hasOwn3(record, key) {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }
 function normalizeRepoWriteMode(value) {
   if (value === "none" || value === "commit-only" || value === "commit-and-push") {
@@ -118825,6 +120384,22 @@ function normalizeCollectionSyncMode(value) {
     return value;
   }
   return "refresh";
+}
+function normalizeDurableEnvironmentPolicy(value) {
+  if (value === "refresh" || value === "create-only") {
+    return value;
+  }
+  throw new Error(
+    `Unsupported durable-environment-policy "${value}". Allowed values: create-only, refresh`
+  );
+}
+function normalizeDurableEnvironmentOperation(value) {
+  if (value === "off" || value === "plan" || value === "apply") {
+    return value;
+  }
+  throw new Error(
+    `Unsupported durable-environment-operation "${value}". Allowed values: off, plan, apply`
+  );
 }
 function normalizeSpecSyncMode(value) {
   if (value === "update" || value === "version") {
@@ -118904,7 +120479,18 @@ function resolveInputs(env = process.env) {
     },
     env
   );
-  const environments = parseJsonArray(getInput("environments-json", env) || '["prod"]');
+  const parsedEnvironments = parseEnvironmentDefinitionsJson(
+    getInput("environments-json", env) || '["prod"]'
+  );
+  const durableEnvironmentOperation = normalizeDurableEnvironmentOperation(
+    getInput("durable-environment-operation", env) || "off"
+  );
+  const parsedDurableEnvironments = durableEnvironmentOperation === "off" ? {
+    environments: [],
+    definitions: /* @__PURE__ */ Object.create(null)
+  } : parseDurableEnvironmentDefinitionsJson(
+    getInput("durable-environments-json", env) || "[]"
+  );
   const secretsResolverProvider = parseSecretsResolverProvider(getInput("secrets-resolver", env));
   const systemEnvMap = parseJsonMap(getInput("system-env-map-json", env) || "{}");
   const environmentUids = parseJsonMap(getInput("environment-uids-json", env) || "{}");
@@ -118927,7 +120513,18 @@ function resolveInputs(env = process.env) {
     secretsResolverProvider,
     specSyncMode: normalizeSpecSyncMode(getInput("spec-sync-mode", env) || "update"),
     releaseLabel: normalizeReleaseLabel(getInput("release-label", env)) || void 0,
-    environments: environments.length > 0 ? environments : ["prod"],
+    environments: parsedEnvironments.environments.length > 0 ? parsedEnvironments.environments : ["prod"],
+    durableEnvironments: parsedDurableEnvironments.environments,
+    durableEnvironmentDefinitions: parsedDurableEnvironments.definitions,
+    durableEnvironmentPolicy: durableEnvironmentOperation === "off" ? "create-only" : normalizeDurableEnvironmentPolicy(
+      getInput("durable-environment-policy", env) || "create-only"
+    ),
+    durableEnvironmentOperation,
+    durableEnvironmentUids: durableEnvironmentOperation === "off" ? /* @__PURE__ */ Object.create(null) : parseDurableEnvironmentUidMap(
+      getInput("durable-environment-uids-json", env) || "{}"
+    ),
+    durableProjectKey: durableEnvironmentOperation === "off" ? "" : getInput("durable-project-key", env),
+    durableStateRef: durableEnvironmentOperation === "off" ? "" : getInput("durable-state-ref", env) || getInput("canonical-branch", env),
     repoUrl: repoContext.repoUrl || "",
     integrationBackend: getInput("integration-backend", env) || "bifrost",
     workspaceLinkEnabled: parseBooleanInput(getInput("workspace-link-enabled", env), true),
@@ -119045,8 +120642,9 @@ function buildEnvironmentValues(envName, baseUrl, options = {}) {
   ];
 }
 var LEGACY_BASELINE_COLLECTION_PREFIX = "[Baseline]";
-var RESOURCES_STATE_VERSION = 2;
-var SUPPORTED_STATE_VERSIONS = /* @__PURE__ */ new Set([1, RESOURCES_STATE_VERSION]);
+var LEGACY_RESOURCES_STATE_VERSION = 2;
+var RESOURCES_STATE_VERSION = 3;
+var SUPPORTED_STATE_VERSIONS = /* @__PURE__ */ new Set([1, 2, RESOURCES_STATE_VERSION]);
 function readResourcesState() {
   let raw;
   try {
@@ -119073,7 +120671,7 @@ function readResourcesState() {
   const state = parsed;
   if (state.version !== void 0 && !SUPPORTED_STATE_VERSIONS.has(Number(state.version))) {
     throw new StateUnreadableError(
-      `.postman/resources.yaml declares unsupported state version ${String(state.version)} (supported: 1, ${RESOURCES_STATE_VERSION}). Upgrade the action or fix the file.`
+      `.postman/resources.yaml declares unsupported state version ${String(state.version)} (supported: 1, ${LEGACY_RESOURCES_STATE_VERSION}, ${RESOURCES_STATE_VERSION}). Upgrade the action or fix the file.`
     );
   }
   if (state.canonical && !state.cloudResources) {
@@ -119095,7 +120693,7 @@ function matchesBaselineCollectionResource(filePath, assetProjectName) {
   return matchesCollectionDirectory(filePath, assetProjectName) || matchesCollectionDirectory(filePath, `${LEGACY_BASELINE_COLLECTION_PREFIX} ${assetProjectName}`);
 }
 function normalizeToPosix2(filePath) {
-  return filePath.split(path6.sep).join("/").replace(/\\/g, "/");
+  return filePath.split(path7.sep).join("/").replace(/\\/g, "/");
 }
 function canonicalizeRelativePath(value) {
   return normalizeToPosix2(String(value ?? "").trim()).replace(/^\.\/+/, "").replace(/\/{2,}/g, "/").replace(/\/+$/g, "");
@@ -119164,7 +120762,7 @@ function shouldIgnoreSpecDiscoveryEntry(entryName, currentDir, baseDir, ignoredP
   if (LOCAL_SPEC_DISCOVERY_IGNORED_DIRS.has(entryName)) {
     return true;
   }
-  const relative4 = normalizeToPosix2(path6.relative(baseDir, path6.join(currentDir, entryName)));
+  const relative4 = normalizeToPosix2(path7.relative(baseDir, path7.join(currentDir, entryName)));
   return ignoredPrefixes.some(
     (prefix) => relative4 === prefix || relative4.startsWith(`${prefix}/`)
   );
@@ -119196,7 +120794,7 @@ function scanLocalSpecReferences(baseDir = ".", options = {}) {
       if (shouldIgnoreSpecDiscoveryEntry(entry.name, currentDir, baseDir, ignoredPrefixes)) {
         continue;
       }
-      const fullPath = path6.join(currentDir, entry.name);
+      const fullPath = path7.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         const nextDepth = currentDepth + 1;
         if (nextDepth > LOCAL_SPEC_DISCOVERY_MAX_DEPTH) {
@@ -119223,7 +120821,7 @@ function scanLocalSpecReferences(baseDir = ".", options = {}) {
         continue;
       }
       if (sizeBytes > LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES) {
-        const repoRelativePath2 = normalizeToPosix2(path6.relative(baseDir, fullPath));
+        const repoRelativePath2 = normalizeToPosix2(path7.relative(baseDir, fullPath));
         failLocalSpecDiscoveryLimit(
           `local spec discovery candidate ${repoRelativePath2} exceeds ${LOCAL_SPEC_DISCOVERY_MAX_CANDIDATE_FILE_BYTES} bytes.`
         );
@@ -119231,14 +120829,14 @@ function scanLocalSpecReferences(baseDir = ".", options = {}) {
       if (!readOpenApiSpecFile(fullPath)) {
         continue;
       }
-      const repoRelativePath = normalizeToPosix2(path6.relative(baseDir, fullPath));
+      const repoRelativePath = normalizeToPosix2(path7.relative(baseDir, fullPath));
       if (found.has(repoRelativePath)) {
         continue;
       }
       found.add(repoRelativePath);
       refs.push({
         repoRelativePath,
-        configRelativePath: normalizeToPosix2(path6.join("..", repoRelativePath))
+        configRelativePath: normalizeToPosix2(path7.join("..", repoRelativePath))
       });
     }
   }
@@ -119249,11 +120847,11 @@ function tryResolveExplicitSpecReference(explicitSpecPath) {
   if (!normalizedExplicitPath) {
     return void 0;
   }
-  const explicitFullPath = path6.resolve(normalizedExplicitPath);
+  const explicitFullPath = path7.resolve(normalizedExplicitPath);
   if ((0, import_node_fs8.existsSync)(explicitFullPath) && (0, import_node_fs8.statSync)(explicitFullPath).isFile()) {
     return {
       repoRelativePath: normalizedExplicitPath,
-      configRelativePath: normalizeToPosix2(path6.join("..", normalizedExplicitPath))
+      configRelativePath: normalizeToPosix2(path7.join("..", normalizedExplicitPath))
     };
   }
   return void 0;
@@ -119289,6 +120887,9 @@ function createOutputs(inputs) {
     "workspace-link-status": "skipped",
     "environment-sync-status": "skipped",
     "environment-uids-json": JSON.stringify(inputs.environmentUids),
+    "durable-environment-result-json": "[]",
+    "durable-environment-definition-digest": "",
+    "durable-environment-uids-json": "{}",
     "mock-url": "",
     "mock-visibility": "",
     "mock-auth-required": "false",
@@ -119506,8 +121107,8 @@ async function upsertMockEnvironment(inputs, dependencies, assetProjectName, moc
     return "";
   }
 }
-function ensureDir(path8) {
-  (0, import_node_fs8.mkdirSync)(path8, { recursive: true });
+function ensureDir(path9) {
+  (0, import_node_fs8.mkdirSync)(path9, { recursive: true });
 }
 function getCollectionDirectoryName(kind, projectName) {
   if (kind === "Baseline") {
@@ -119571,7 +121172,7 @@ function buildResourcesManifest(workspaceId, collectionMap, envMap, projectName,
   delete manifest.localResources;
   delete manifest.cloudResources;
   delete manifest.canonical;
-  manifest.version = RESOURCES_STATE_VERSION;
+  manifest.version = priorState?.version === RESOURCES_STATE_VERSION ? RESOURCES_STATE_VERSION : LEGACY_RESOURCES_STATE_VERSION;
   if (workspaceId) {
     manifest.workspace = { id: workspaceId };
   }
@@ -119780,17 +121381,17 @@ function assertPathWithinArtifactRoot(targetPath, artifactDir, fieldName) {
   assertPathWithinCwd(targetPath, fieldName);
   assertPathWithinCwd(artifactDir, "artifact-dir");
   const cwd = (0, import_node_fs8.realpathSync)(process.cwd());
-  const artifactRoot = path6.resolve(cwd, artifactDir.trim());
-  const resolved = path6.resolve(cwd, targetPath.trim());
-  const relativeToArtifact = path6.relative(artifactRoot, resolved);
-  if (!relativeToArtifact || relativeToArtifact.startsWith("..") || path6.isAbsolute(relativeToArtifact)) {
+  const artifactRoot = path7.resolve(cwd, artifactDir.trim());
+  const resolved = path7.resolve(cwd, targetPath.trim());
+  const relativeToArtifact = path7.relative(artifactRoot, resolved);
+  if (!relativeToArtifact || relativeToArtifact.startsWith("..") || path7.isAbsolute(relativeToArtifact)) {
     failPrebuiltCollections(
       `${fieldName} must stay under artifact-dir (${artifactDir}); received ${targetPath}`
     );
   }
   let existingPath = resolved;
   while (!(0, import_node_fs8.existsSync)(existingPath)) {
-    const parent = path6.dirname(existingPath);
+    const parent = path7.dirname(existingPath);
     if (parent === existingPath) {
       break;
     }
@@ -119798,13 +121399,13 @@ function assertPathWithinArtifactRoot(targetPath, artifactDir, fieldName) {
   }
   const realExisting = (0, import_node_fs8.realpathSync)(existingPath);
   const realArtifactRoot = (0, import_node_fs8.existsSync)(artifactRoot) ? (0, import_node_fs8.realpathSync)(artifactRoot) : void 0;
-  const realRelative = realArtifactRoot ? path6.relative(realArtifactRoot, realExisting) : "";
-  if (realArtifactRoot && (realRelative.startsWith("..") || path6.isAbsolute(realRelative))) {
+  const realRelative = realArtifactRoot ? path7.relative(realArtifactRoot, realExisting) : "";
+  if (realArtifactRoot && (realRelative.startsWith("..") || path7.isAbsolute(realRelative))) {
     failPrebuiltCollections(
       `${fieldName} resolves outside artifact-dir via symlink; received ${targetPath}`
     );
   }
-  return normalizeToPosix2(path6.relative(cwd, resolved));
+  return normalizeToPosix2(path7.relative(cwd, resolved));
 }
 function prebuiltDirectoryTraversalIdentity(absolutePath, stats, options = {}) {
   const platform2 = options.platform ?? process.platform;
@@ -119822,7 +121423,7 @@ function listPrebuiltCollectionTreeFiles(collectionPath, artifactDir) {
     artifactDir,
     "prebuilt collection path"
   );
-  const absRoot = path6.resolve(process.cwd(), confined);
+  const absRoot = path7.resolve(process.cwd(), confined);
   if (!(0, import_node_fs8.existsSync)(absRoot)) {
     return [];
   }
@@ -119854,13 +121455,13 @@ function listPrebuiltCollectionTreeFiles(collectionPath, artifactDir) {
     const currentStat = (0, import_node_fs8.lstatSync)(currentAbsolute);
     if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
       failPrebuiltCollections(
-        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix2(path6.relative(absRoot, currentAbsolute)) || "."}`
+        `prebuilt collection tree directory changed or became unsupported at ${normalizeToPosix2(path7.relative(absRoot, currentAbsolute)) || "."}`
       );
     }
     const currentKey = prebuiltDirectoryTraversalIdentity(currentAbsolute, currentStat);
     if (seenDirectories.has(currentKey)) {
       failPrebuiltCollections(
-        `prebuilt collection tree directory cycle detected at ${normalizeToPosix2(path6.relative(absRoot, currentAbsolute)) || "."}`
+        `prebuilt collection tree directory cycle detected at ${normalizeToPosix2(path7.relative(absRoot, currentAbsolute)) || "."}`
       );
     }
     seenDirectories.add(currentKey);
@@ -119874,10 +121475,10 @@ function listPrebuiltCollectionTreeFiles(collectionPath, artifactDir) {
           `prebuilt collection tree exceeded the ${PREBUILT_COLLECTION_MAX_TRAVERSAL_ENTRIES} traversal-entry budget`
         );
       }
-      const abs = path6.join(currentAbsolute, entry.name);
+      const abs = path7.join(currentAbsolute, entry.name);
       if (entry.isSymbolicLink()) {
         failPrebuiltCollections(
-          `prebuilt collection tree must not contain symlinks; received ${normalizeToPosix2(path6.relative(absRoot, abs))}`
+          `prebuilt collection tree must not contain symlinks; received ${normalizeToPosix2(path7.relative(absRoot, abs))}`
         );
       }
       if (entry.isDirectory()) {
@@ -119892,18 +121493,18 @@ function listPrebuiltCollectionTreeFiles(collectionPath, artifactDir) {
       }
       if (!entry.isFile()) {
         failPrebuiltCollections(
-          `prebuilt collection tree contains unsupported entry type at ${normalizeToPosix2(path6.relative(absRoot, abs))}`
+          `prebuilt collection tree contains unsupported entry type at ${normalizeToPosix2(path7.relative(absRoot, abs))}`
         );
       }
       const fileLstat = (0, import_node_fs8.lstatSync)(abs);
       if (fileLstat.isSymbolicLink() || !fileLstat.isFile()) {
         failPrebuiltCollections(
-          `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix2(path6.relative(absRoot, abs))}`
+          `prebuilt collection tree file changed or became unsupported at ${normalizeToPosix2(path7.relative(absRoot, abs))}`
         );
       }
       if (fileLstat.size > PREBUILT_COLLECTION_MAX_FILE_BYTES) {
         failPrebuiltCollections(
-          `prebuilt collection tree file ${normalizeToPosix2(path6.relative(absRoot, abs))} exceeds the ${PREBUILT_COLLECTION_MAX_FILE_BYTES / (1024 * 1024)} MiB individual-file budget`
+          `prebuilt collection tree file ${normalizeToPosix2(path7.relative(absRoot, abs))} exceeds the ${PREBUILT_COLLECTION_MAX_FILE_BYTES / (1024 * 1024)} MiB individual-file budget`
         );
       }
       totalBytes += fileLstat.size;
@@ -119914,7 +121515,7 @@ function listPrebuiltCollectionTreeFiles(collectionPath, artifactDir) {
       }
       files.push({
         absolute: abs,
-        relative: normalizeToPosix2(path6.relative(absRoot, abs)),
+        relative: normalizeToPosix2(path7.relative(absRoot, abs)),
         dev: fileLstat.dev,
         ino: fileLstat.ino,
         size: fileLstat.size
@@ -119963,7 +121564,7 @@ async function digestAndValidatePrebuiltCollectionTree(files) {
   if (!files.some((file) => file.relative === ".resources/definition.yaml")) {
     failPrebuiltCollections("prebuilt collection tree is missing .resources/definition.yaml");
   }
-  const hash = (0, import_node_crypto3.createHash)("sha256");
+  const hash = (0, import_node_crypto5.createHash)("sha256");
   for (const file of files) {
     let bytes;
     try {
@@ -119998,7 +121599,7 @@ async function preparePrebuiltCollections(inputs) {
       inputs.artifactDir,
       `prebuilt ${entry.role} collection path`
     );
-    const absolute = path6.resolve(process.cwd(), confinedPath);
+    const absolute = path7.resolve(process.cwd(), confinedPath);
     if (!(0, import_node_fs8.existsSync)(absolute)) {
       prepared.set(entry.role, { entry, confinedPath });
       continue;
@@ -120028,8 +121629,8 @@ function tryReusePrebuiltCollection(options) {
   if (confined !== expectedNormalized) {
     return false;
   }
-  const expectedName = path6.posix.basename(expectedNormalized);
-  if (path6.posix.basename(confined) !== expectedName) {
+  const expectedName = path7.posix.basename(expectedNormalized);
+  if (path7.posix.basename(confined) !== expectedName) {
     return false;
   }
   return prepared.artifactDigest === entry.artifactDigest;
@@ -120510,12 +122111,781 @@ async function runRepoSync(inputs, dependencies, executionContext) {
   } catch (error) {
     telemetry.setAccountType(getMemoizedSessionIdentity()?.consumerType);
     telemetry.emitCompletion("failure");
-    logger.failure("repo sync failed", error);
+    logger.failure(
+      "repo sync failed",
+      inputs.durableEnvironmentOperation && inputs.durableEnvironmentOperation !== "off" ? toDurableEnvironmentBoundaryError(error) : error
+    );
     throw error;
   }
 }
+function normalizeComparableRef(value) {
+  return String(value || "").trim().replace(/^refs\/heads\//u, "").replace(/^origin\//u, "");
+}
+function assertDurableStateIdentifier(value, label, maxScalars) {
+  if (!value || value !== value.trim() || !value.isWellFormed()) {
+    throw new Error(`${label} must be a non-empty, trimmed, well-formed string`);
+  }
+  if (Array.from(value).length > maxScalars) {
+    throw new Error(`${label} exceeds its supported identity length`);
+  }
+  if (Array.from(value).some((character) => {
+    const point = character.codePointAt(0) ?? 0;
+    return point <= 31 || point >= 127 && point <= 159;
+  })) {
+    throw new Error(`${label} must not contain control code points`);
+  }
+}
+function assertDurablePublicationConfiguration(inputs) {
+  if (inputs.repoWriteMode !== "commit-and-push") {
+    throw new Error(
+      "Durable apply requires repo-write-mode=commit-and-push repository state publication"
+    );
+  }
+  if (inputs.provider !== "github" && inputs.provider !== "gitlab" && inputs.provider !== "azure-devops") {
+    throw new Error(
+      `Durable apply cannot publish state with git provider "${inputs.provider}"`
+    );
+  }
+  if (inputs.provider !== "azure-devops" && !inputs.githubToken && !inputs.ghFallbackToken) {
+    throw new Error(
+      `Durable apply requires a push token for git provider "${inputs.provider}"`
+    );
+  }
+}
+function durableBindingsForProject(state, projectKey) {
+  const bindings = /* @__PURE__ */ Object.create(null);
+  for (const entry of parseDurableEnvironmentProvisioningState(state)) {
+    if (entry.projectKey === projectKey) {
+      bindings[entry.slug] = { uid: entry.uid, displayName: entry.displayName };
+    }
+  }
+  return bindings;
+}
+function assertNoLegacyDurableEnvironmentOverlap(state, inputs, environmentNames) {
+  const durableBindings = parseDurableEnvironmentProvisioningState(state);
+  if (durableBindings.length === 0) return;
+  const trackedWorkspaceId = String(state?.workspace?.id ?? "").trim();
+  const requestedWorkspaceId = inputs.workspaceId.trim();
+  if (trackedWorkspaceId && requestedWorkspaceId && trackedWorkspaceId !== requestedWorkspaceId) {
+    throw new StateUnreadableError(
+      "Legacy sync cannot change the workspace owned by durable environment state"
+    );
+  }
+  const requestedArtifacts = new Set(
+    [...environmentNames].map(
+      (environmentName) => currentEnvironmentManifestRef(inputs.artifactDir, inputs.projectName, environmentName)
+    )
+  );
+  const requestedUids = new Set(
+    Object.values(inputs.environmentUids).map((uid) => String(uid ?? "").trim()).filter(Boolean)
+  );
+  const conflict = durableBindings.find(
+    (binding) => requestedArtifacts.has(binding.artifact) || requestedUids.has(binding.uid)
+  );
+  if (conflict) {
+    throw new StateUnreadableError(
+      `Legacy environment sync overlaps durable environment ${conflict.projectKey}/${conflict.slug}; use durable environment inputs for this binding`
+    );
+  }
+}
+function canonicalStateForDurableWrite(state, workspaceId) {
+  if (state?.workspace?.id && state.workspace.id !== workspaceId) {
+    throw new StateUnreadableError(
+      `tracked workspace ${state.workspace.id} does not match durable workspace ${workspaceId}`
+    );
+  }
+  if (state && state.version !== 2 && state.version !== 3) {
+    throw new StateUnreadableError(
+      "durable provisioning requires resources state v2 or v3; run the environment YAML migration first"
+    );
+  }
+  const canonical = state?.canonical ?? state?.cloudResources ?? {};
+  return {
+    ...state ?? {},
+    version: 3,
+    workspace: { ...state?.workspace ?? {}, id: workspaceId },
+    canonical: {
+      ...canonical,
+      environments: { ...canonical.environments ?? {} }
+    }
+  };
+}
+function canonicalOwnershipClaims(state) {
+  const claims = [];
+  const canonical = state.canonical ?? {};
+  for (const [resourceClass, entries] of [
+    ["environment", canonical.environments],
+    ["collection", canonical.collections],
+    ["spec", canonical.specs]
+  ]) {
+    for (const [rawArtifact, rawUid] of Object.entries(entries ?? {})) {
+      if (typeof rawUid !== "string" || !rawUid.trim()) {
+        throw new StateUnreadableError(
+          `canonical.${resourceClass}s must contain non-empty string UID claims`
+        );
+      }
+      const uid = rawUid.trim();
+      claims.push({
+        resourceClass,
+        artifact: canonicalizeManifestRef(rawArtifact),
+        uid
+      });
+    }
+  }
+  return claims;
+}
+function assertDurableOwnershipClaims(state, inputs, projectKey, plan) {
+  const claims = canonicalOwnershipClaims(state);
+  const durableClaims = parseDurableEnvironmentProvisioningState(state);
+  const mockArtifact = currentEnvironmentManifestRef(
+    inputs.artifactDir,
+    inputs.projectName,
+    "Mock"
+  );
+  for (const entry of plan) {
+    const artifact = currentEnvironmentManifestRef(
+      inputs.artifactDir,
+      inputs.projectName,
+      entry.slug
+    );
+    if (artifact.toLocaleLowerCase("en-US") === mockArtifact.toLocaleLowerCase("en-US")) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} collides with the action-owned Mock environment`
+      );
+    }
+    const artifactClaims = claims.filter((claim) => claim.artifact === artifact);
+    if (artifactClaims.length > 1) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is claimed more than once in canonical state`
+      );
+    }
+    const artifactClaim = artifactClaims[0];
+    if (artifactClaim && artifactClaim.resourceClass !== "environment") {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is claimed by canonical ${artifactClaim.resourceClass} state`
+      );
+    }
+    if (artifactClaim && (!entry.uid || artifactClaim.uid !== entry.uid)) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is already claimed by a different canonical environment UID`
+      );
+    }
+    if (entry.uid) {
+      const uidClaims = claims.filter((claim) => claim.uid === entry.uid);
+      if (uidClaims.length > 1 || uidClaims.some(
+        (claim) => claim.resourceClass !== "environment" || claim.artifact !== artifact
+      )) {
+        throw new StateUnreadableError(
+          `durable environment ${projectKey}/${entry.slug} UID is claimed by another canonical resource`
+        );
+      }
+    }
+    const conflictingDurable = durableClaims.find(
+      (claim) => (claim.projectKey !== projectKey || claim.slug !== entry.slug) && (claim.artifact === artifact || entry.uid !== void 0 && claim.uid === entry.uid)
+    );
+    if (conflictingDurable) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} conflicts with tracked durable environment ${conflictingDurable.projectKey}/${conflictingDurable.slug}`
+      );
+    }
+  }
+}
+function assertDirectoryPathAvailable(directoryPath, label) {
+  const cwd = path7.resolve(process.cwd());
+  let candidate = path7.resolve(directoryPath);
+  while (candidate !== cwd) {
+    try {
+      const candidateStat = (0, import_node_fs8.lstatSync)(candidate);
+      if (candidateStat.isSymbolicLink()) {
+        throw new StateUnreadableError(
+          `${label} cannot traverse symbolic link ${path7.relative(cwd, candidate)}`
+        );
+      }
+      if (!candidateStat.isDirectory()) {
+        throw new StateUnreadableError(
+          `${label} cannot be created because ${path7.relative(cwd, candidate)} is not a directory`
+        );
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    candidate = path7.dirname(candidate);
+  }
+}
+function assertDurableArtifactTargets(state, inputs, environmentNames, explicitEnvironmentUids) {
+  const environmentDirectory = `${inputs.artifactDir}/environments`;
+  assertPathWithinCwd(environmentDirectory, "durable environment directory");
+  assertPathWithinCwd(".postman/resources.yaml", "durable resources state");
+  assertDirectoryPathAvailable(environmentDirectory, "durable environment directory");
+  assertDirectoryPathAvailable(".postman", "durable resources directory");
+  for (const environmentName of environmentNames) {
+    assertPathWithinCwd(
+      `${environmentDirectory}/${environmentFileName(inputs.projectName, environmentName)}`,
+      "durable environment artifact"
+    );
+  }
+  assertEnvironmentArtifactOwnership(
+    {
+      ...state,
+      cloudResources: {
+        ...state.cloudResources ?? {},
+        ...state.canonical ?? {}
+      }
+    },
+    inputs.artifactDir,
+    inputs.projectName,
+    environmentNames,
+    explicitEnvironmentUids,
+    false
+  );
+}
+function durableEnvironmentPayload(payload, slug) {
+  const root = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  if (!root) {
+    throw new Error(`Durable environment "${slug}" returned an unreadable payload`);
+  }
+  const nested = root.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : root;
+  if (!Array.isArray(nested.values)) {
+    throw new Error(
+      `Durable environment "${slug}" returned an incomplete payload without values`
+    );
+  }
+  return nested;
+}
+function hasActionOwnershipMarker2(payload, slug) {
+  const environment = durableEnvironmentPayload(payload, slug);
+  return parseDurableEnvironmentValues(environment).some((value) => value.key === "x-pm-onboarding");
+}
+async function assertNoActionOwnedDurableBindings(plan, postman) {
+  for (const entry of plan) {
+    if (!entry.uid) continue;
+    const payload = await postman.getEnvironment(entry.uid);
+    if (hasActionOwnershipMarker2(payload, entry.slug)) {
+      throw new Error(
+        `Durable environment "${entry.slug}" is owned by the branch asset lifecycle and cannot be adopted`
+      );
+    }
+  }
+}
+function assertFinalDurableEnvironmentBinding(entry, liveEntries) {
+  const byName = liveEntries.filter((candidate) => candidate.name === entry.displayName);
+  const byUid = liveEntries.filter((candidate) => candidate.uid === entry.uid);
+  if (byName.length !== 1 || byName[0]?.uid !== entry.uid || byUid.length !== 1 || byUid[0]?.name !== entry.displayName) {
+    throw new Error(
+      `Durable environment "${entry.slug}" UID/name binding changed before state publication`
+    );
+  }
+}
+function assertFinalDurableEnvironmentPayload(entry, payload) {
+  const environment = durableEnvironmentPayload(payload, entry.slug);
+  if (environment.name !== entry.displayName) {
+    throw new Error(
+      `Durable environment "${entry.slug}" payload name changed before state publication`
+    );
+  }
+  const observedDigest = durableEnvironmentObservedDigest(environment, entry.slug);
+  if (!entry.observedDigest || observedDigest !== entry.observedDigest) {
+    throw new Error(
+      `Durable environment "${entry.slug}" value metadata changed before state publication`
+    );
+  }
+  return environment;
+}
+function emitDurableEnvironmentRecoveryOutputs(outputs, dependencies, operation, policy, definitionDigest, entries, orphans, failure) {
+  const recoveryEntries = entries.map((entry) => ({
+    ...entry,
+    cloudApplied: true,
+    statePublished: false
+  }));
+  outputs["durable-environment-result-json"] = JSON.stringify({
+    operation,
+    policy,
+    definitionDigest,
+    status: failure ? "partial-failure" : "cloud-applied/state-not-published",
+    entries: recoveryEntries,
+    orphans,
+    ...failure ? { failure } : {}
+  });
+  outputs["durable-environment-uids-json"] = JSON.stringify(
+    Object.fromEntries(entries.map((entry) => [entry.slug, entry.uid]))
+  );
+  outputs["sync-status"] = failure ? "durable-partial-failure" : "durable-state-not-published";
+  for (const name of [
+    "durable-environment-definition-digest",
+    "durable-environment-result-json",
+    "durable-environment-uids-json",
+    "sync-status"
+  ]) {
+    dependencies.core.setOutput(name, outputs[name]);
+  }
+}
+async function runDurableEnvironmentProvisioning(inputs, dependencies, logger) {
+  const operation = normalizeDurableEnvironmentOperation(
+    String(inputs.durableEnvironmentOperation ?? "off")
+  );
+  const policy = normalizeDurableEnvironmentPolicy(
+    String(inputs.durableEnvironmentPolicy ?? "create-only")
+  );
+  const environments = inputs.durableEnvironments ?? [];
+  const definitions = inputs.durableEnvironmentDefinitions ?? /* @__PURE__ */ Object.create(null);
+  const explicitUids = inputs.durableEnvironmentUids ?? /* @__PURE__ */ Object.create(null);
+  const projectKey = String(inputs.durableProjectKey ?? "");
+  const outputs = createOutputs(inputs);
+  if (operation === "off") {
+    return outputs;
+  }
+  if (!projectKey) {
+    throw new Error("durable-project-key is required for durable plan or apply");
+  }
+  assertDurableStateIdentifier(projectKey, "durable-project-key", 256);
+  for (const uid of Object.values(explicitUids)) {
+    assertDurableStateIdentifier(String(uid ?? ""), "durable environment UID", 1024);
+  }
+  if (Object.keys(explicitUids).some((slug) => !environments.includes(slug))) {
+    throw new Error(
+      "durable-environment-uids-json contains a slug not declared by durable-environments-json"
+    );
+  }
+  const orderedDefinitions = environments.map((slug) => {
+    const definition = definitions[slug];
+    if (!definition) {
+      throw new Error(`Durable environment "${slug}" is missing its rich definition`);
+    }
+    return definition;
+  });
+  const digest = computeDurableEnvironmentDefinitionDigest({
+    workspaceId: inputs.workspaceId,
+    projectKey,
+    projectName: inputs.projectName,
+    policy,
+    environments: orderedDefinitions
+  });
+  outputs["durable-environment-definition-digest"] = digest;
+  let currentRef = "";
+  let durableStateRef = "";
+  if (operation === "apply") {
+    if (!inputs.workspaceId) {
+      throw new Error("workspace-id is required for durable apply");
+    }
+    durableStateRef = normalizeComparableRef(
+      String(inputs.durableStateRef || inputs.canonicalBranch || "")
+    );
+    currentRef = normalizeComparableRef(
+      inputs.currentRef || inputs.githubHeadRef || inputs.githubRefName || resolveCurrentRef({
+        currentRef: inputs.currentRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        repoWriteMode: inputs.repoWriteMode
+      })
+    );
+    if (!durableStateRef) {
+      throw new Error("durable-state-ref or canonical-branch is required for durable apply");
+    }
+    if (currentRef !== durableStateRef) {
+      throw new Error(
+        `Durable apply must run on durable-state-ref "${durableStateRef}" (resolved current ref: "${currentRef || "unknown"}")`
+      );
+    }
+    assertDurablePublicationConfiguration(inputs);
+    if (!dependencies.repoMutation) {
+      throw new Error("Durable apply requires repository state publication capability");
+    }
+    await logger.phase(
+      "durable-environment-publication-preflight",
+      async () => dependencies.repoMutation.preflightPush({
+        repoWriteMode: inputs.repoWriteMode,
+        currentRef: durableStateRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
+        githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
+        fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
+        authorityPaths: [".postman/resources.yaml"]
+      })
+    );
+  }
+  const trackedState = readResourcesState();
+  const trackedBindings = durableBindingsForProject(trackedState, projectKey);
+  const planInput = {
+    workspaceId: inputs.workspaceId,
+    projectName: inputs.projectName,
+    policy,
+    environments,
+    definitions,
+    explicitUids,
+    trackedBindings
+  };
+  const orphanEntries = projectDurableEnvironmentOrphans(planInput);
+  if (!inputs.workspaceId) {
+    if (operation === "apply") {
+      throw new Error("workspace-id is required for durable apply");
+    }
+    const offline = planDurableEnvironmentsOffline(planInput);
+    outputs["durable-environment-result-json"] = JSON.stringify({
+      operation,
+      policy,
+      definitionDigest: digest,
+      entries: projectDurableEnvironmentOfflinePlan(offline),
+      orphans: orphanEntries
+    });
+    outputs["sync-status"] = "durable-plan";
+    for (const [name, value] of Object.entries(outputs)) {
+      dependencies.core.setOutput(name, value);
+    }
+    return outputs;
+  }
+  let durableWriteState;
+  if (operation === "apply") {
+    durableWriteState = canonicalStateForDurableWrite(trackedState, inputs.workspaceId);
+    assertCanonicalEnvironmentReferences(durableWriteState);
+    assertPathWithinCwd(
+      `${inputs.artifactDir}/environments`,
+      "durable environment directory"
+    );
+    assertPathWithinCwd(".postman/resources.yaml", "durable resources state");
+    assertDirectoryPathAvailable(
+      `${inputs.artifactDir}/environments`,
+      "durable environment directory"
+    );
+    assertDirectoryPathAvailable(".postman", "durable resources directory");
+    const environmentDirectory = canonicalizeManifestRef(
+      `../${inputs.artifactDir}/environments`
+    );
+    const reviewedUidByArtifact = /* @__PURE__ */ new Map();
+    for (const slug of environments) {
+      const reviewedUid = String(
+        explicitUids[slug] || trackedBindings[slug]?.uid || ""
+      ).trim();
+      if (reviewedUid) {
+        reviewedUidByArtifact.set(
+          currentEnvironmentManifestRef(inputs.artifactDir, inputs.projectName, slug),
+          reviewedUid
+        );
+      }
+    }
+    const preservedEnvironmentFiles = /* @__PURE__ */ new Set([
+      ...canonicalOwnershipClaims(durableWriteState).filter((claim) => path7.posix.dirname(claim.artifact) === environmentDirectory).filter((claim) => reviewedUidByArtifact.get(claim.artifact) !== claim.uid).map((claim) => path7.posix.basename(claim.artifact)),
+      ...getExistingEnvironmentFileNames(
+        inputs.artifactDir,
+        inputs.projectName,
+        environments
+      ),
+      environmentFileName(inputs.projectName, "Mock")
+    ]);
+    assertUniqueEnvironmentFileNames(
+      inputs.projectName,
+      environments,
+      preservedEnvironmentFiles
+    );
+    const reviewedOwnershipPlan = planDurableEnvironmentsOffline(planInput).map((entry) => ({
+      ...entry,
+      uid: String(explicitUids[entry.slug] || entry.uid || "").trim() || void 0
+    }));
+    assertDurableOwnershipClaims(
+      durableWriteState,
+      inputs,
+      projectKey,
+      reviewedOwnershipPlan
+    );
+    assertDurableArtifactTargets(
+      durableWriteState,
+      inputs,
+      environments,
+      explicitUids
+    );
+  }
+  const initialLive = await logger.phase(
+    "durable-environment-plan",
+    async () => dependencies.postman.listEnvironments(inputs.workspaceId)
+  );
+  const livePlan = planDurableEnvironmentsLive(planInput, initialLive, {
+    reportUntrackedCandidates: operation === "plan"
+  });
+  const publishableLivePlan = livePlan.filter((entry) => entry.action !== "review-required");
+  const liveOwnershipState = durableWriteState ?? canonicalStateForDurableWrite(
+    trackedState,
+    inputs.workspaceId
+  );
+  assertDurableOwnershipClaims(
+    liveOwnershipState,
+    inputs,
+    projectKey,
+    publishableLivePlan
+  );
+  await assertNoActionOwnedDurableBindings(publishableLivePlan, dependencies.postman);
+  if (operation === "plan") {
+    outputs["durable-environment-uids-json"] = JSON.stringify(
+      Object.fromEntries(
+        livePlan.flatMap(
+          (entry) => entry.uid && entry.action !== "review-required" ? [[entry.slug, entry.uid]] : []
+        )
+      )
+    );
+    outputs["durable-environment-result-json"] = JSON.stringify({
+      operation,
+      policy,
+      definitionDigest: digest,
+      entries: projectDurableEnvironmentPlan(livePlan),
+      orphans: orphanEntries
+    });
+    outputs["sync-status"] = "durable-plan";
+    for (const [name, value] of Object.entries(outputs)) {
+      dependencies.core.setOutput(name, value);
+    }
+    return outputs;
+  }
+  if (!durableWriteState) {
+    throw new Error("Durable apply state preflight was not completed");
+  }
+  let applied;
+  try {
+    applied = await logger.phase(
+      "durable-environment-apply",
+      async () => applyDurableEnvironmentPlan(
+        planInput,
+        dependencies.postman,
+        initialLive,
+        livePlan
+      )
+    );
+  } catch (error) {
+    if (error instanceof DurableEnvironmentPartialApplyError) {
+      emitDurableEnvironmentRecoveryOutputs(
+        outputs,
+        dependencies,
+        operation,
+        policy,
+        digest,
+        error.completedEntries,
+        orphanEntries,
+        { slug: error.failedSlug, category: "apply-failed" }
+      );
+    }
+    throw error;
+  }
+  emitDurableEnvironmentRecoveryOutputs(
+    outputs,
+    dependencies,
+    operation,
+    policy,
+    digest,
+    applied,
+    orphanEntries
+  );
+  let nextState = durableWriteState;
+  const finalLive = await dependencies.postman.listEnvironments(inputs.workspaceId);
+  const preparedArtifacts = [];
+  for (const entry of applied) {
+    assertFinalDurableEnvironmentBinding(entry, finalLive);
+    const artifactRef = currentEnvironmentManifestRef(
+      inputs.artifactDir,
+      inputs.projectName,
+      entry.slug
+    );
+    const canonicalEnvironments = nextState.canonical?.environments ?? {};
+    const conflictingRef = Object.entries(canonicalEnvironments).find(
+      ([ref, uid]) => uid === entry.uid && canonicalizeManifestRef(ref) !== artifactRef
+    );
+    if (conflictingRef) {
+      throw new StateUnreadableError(
+        `durable UID ${entry.uid} is already tracked by ${conflictingRef[0]}`
+      );
+    }
+    nextState = {
+      ...nextState,
+      canonical: {
+        ...nextState.canonical ?? {},
+        environments: {
+          ...canonicalEnvironments,
+          [artifactRef]: entry.uid
+        }
+      }
+    };
+    nextState = upsertDurableEnvironmentProvisioningState(nextState, {
+      projectKey,
+      slug: entry.slug,
+      uid: entry.uid,
+      artifact: artifactRef,
+      displayName: entry.displayName,
+      policy,
+      definitionDigest: digest
+    });
+    const livePayload = await dependencies.postman.getEnvironment(entry.uid);
+    const finalPayload = assertFinalDurableEnvironmentPayload(
+      entry,
+      livePayload
+    );
+    const sanitizedPayload = sanitizeEnvironmentArtifact(finalPayload);
+    const yaml = serializeEnvironmentYaml({
+      ...sanitizedPayload && typeof sanitizedPayload === "object" && !Array.isArray(sanitizedPayload) ? sanitizedPayload : {},
+      name: entry.displayName
+    });
+    const filePath = `${inputs.artifactDir}/environments/${environmentFileName(inputs.projectName, entry.slug)}`;
+    assertPathWithinCwd(filePath, "durable environment artifact");
+    assertEnvironmentYamlRoundTrip(yaml, yaml);
+    preparedArtifacts.push({ filePath, yaml });
+  }
+  const serializableState = { ...nextState };
+  delete serializableState.cloudResources;
+  const stateYaml = dump(serializableState, { noRefs: true, lineWidth: -1 });
+  const parsedState = load(stateYaml);
+  parseDurableEnvironmentProvisioningState(parsedState);
+  ensureDir(`${inputs.artifactDir}/environments`);
+  ensureDir(".postman");
+  const publicationTargets = [
+    ...preparedArtifacts.map(({ filePath, yaml }) => ({
+      filePath,
+      content: yaml,
+      validateCandidate: (candidatePath) => {
+        assertEnvironmentYamlRoundTrip((0, import_node_fs8.readFileSync)(candidatePath, "utf8"), yaml);
+      }
+    })),
+    {
+      filePath: ".postman/resources.yaml",
+      content: stateYaml,
+      validateCandidate: (candidatePath) => {
+        const candidateState = load(
+          (0, import_node_fs8.readFileSync)(candidatePath, "utf8")
+        );
+        parseDurableEnvironmentProvisioningState(candidateState);
+      }
+    }
+  ];
+  const publicationSnapshots = publicationTargets.map(({ filePath }) => ({
+    filePath,
+    priorContent: (0, import_node_fs8.existsSync)(filePath) ? (0, import_node_fs8.readFileSync)(filePath, "utf8") : void 0
+  }));
+  const restorePublicationSnapshots = () => {
+    for (const snapshot of publicationSnapshots.slice().reverse()) {
+      if (snapshot.priorContent === void 0) {
+        (0, import_node_fs8.rmSync)(snapshot.filePath, { force: true });
+      } else {
+        writeFileAtomicSync(snapshot.filePath, snapshot.priorContent);
+      }
+    }
+  };
+  try {
+    for (const target of publicationTargets) {
+      writeFileAtomicSync(target.filePath, target.content, target.validateCandidate);
+    }
+  } catch (error) {
+    restorePublicationSnapshots();
+    throw error;
+  }
+  const durableStagePaths = [
+    ".postman/resources.yaml",
+    ...applied.map(
+      (entry) => `${inputs.artifactDir}/environments/${environmentFileName(inputs.projectName, entry.slug)}`
+    )
+  ];
+  let commit;
+  try {
+    commit = await logger.phase(
+      "durable-environment-state-publish",
+      async () => dependencies.repoMutation.commitAndPush({
+        repoWriteMode: inputs.repoWriteMode,
+        currentRef: durableStateRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        committerName: inputs.committerName,
+        committerEmail: inputs.committerEmail,
+        adoToken: inputs.provider === "azure-devops" ? inputs.adoToken : void 0,
+        githubToken: inputs.provider === "azure-devops" ? void 0 : inputs.githubToken,
+        fallbackToken: inputs.provider === "azure-devops" ? void 0 : inputs.ghFallbackToken,
+        forceStagePaths: durableStagePaths,
+        removePaths: [],
+        stagePaths: durableStagePaths
+      })
+    );
+  } catch (error) {
+    if (error instanceof RepoMutationPreCommitError && error.indexRestored) {
+      restorePublicationSnapshots();
+    }
+    throw error;
+  }
+  if (!commit.pushed) {
+    throw new Error(
+      "Durable environment state publication did not push the generated state to durable-state-ref"
+    );
+  }
+  const publishedEntries = applied.map((entry) => ({
+    ...entry,
+    cloudApplied: true,
+    statePublished: true
+  }));
+  outputs["durable-environment-result-json"] = JSON.stringify({
+    operation,
+    policy,
+    definitionDigest: digest,
+    entries: publishedEntries,
+    orphans: orphanEntries
+  });
+  outputs["commit-sha"] = commit.commitSha;
+  outputs["resolved-current-ref"] = commit.resolvedCurrentRef || currentRef;
+  outputs["sync-status"] = "durable-applied";
+  outputs["repo-sync-summary-json"] = JSON.stringify({
+    status: "durable-applied",
+    definitionDigest: digest,
+    environmentCount: applied.length,
+    commitSha: commit.commitSha,
+    pushed: commit.pushed
+  });
+  for (const [name, value] of Object.entries(outputs)) {
+    dependencies.core.setOutput(name, value);
+  }
+  return outputs;
+}
 async function runRepoSyncInner(inputs, dependencies, executionContext) {
-  inputs = { ...inputs, onboardingScope: inputs.onboardingScope ?? "full" };
+  const durableOperation = normalizeDurableEnvironmentOperation(
+    String(inputs.durableEnvironmentOperation ?? "off")
+  );
+  if (durableOperation !== "off") {
+    if (durableOperation === "apply" && inputs.onboardingScope === "spec-only") {
+      throw new Error(
+        "Durable environment apply requires onboarding-scope=full so environment artifacts and state are published together"
+      );
+    }
+    if (durableOperation === "apply" && isScheduledCiEvent()) {
+      throw new Error("Durable apply is not authorized for scheduled execution");
+    }
+    const durableBranchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
+    if (durableOperation === "apply" && isDurableApplyDeniedByBranch(durableBranchDecision)) {
+      throw new Error(
+        `Durable apply is not authorized for pull-request or ${durableBranchDecision.tier} execution (${durableBranchDecision.reason})`
+      );
+    }
+    const structuredDurable = validateResolvedDurableEnvironmentDefinitions(
+      inputs.durableEnvironments ?? [],
+      inputs.durableEnvironmentDefinitions ?? /* @__PURE__ */ Object.create(null)
+    );
+    return runDurableEnvironmentProvisioning(
+      {
+        ...inputs,
+        durableEnvironmentOperation: durableOperation,
+        durableEnvironmentPolicy: normalizeDurableEnvironmentPolicy(
+          String(inputs.durableEnvironmentPolicy ?? "create-only")
+        ),
+        durableEnvironments: structuredDurable.environments,
+        durableEnvironmentDefinitions: structuredDurable.definitions,
+        durableEnvironmentUids: inputs.durableEnvironmentUids ?? /* @__PURE__ */ Object.create(null),
+        durableProjectKey: String(inputs.durableProjectKey ?? ""),
+        durableStateRef: String(
+          inputs.durableStateRef || inputs.canonicalBranch || ""
+        ).trim()
+      },
+      dependencies,
+      resolveRepoSyncLogger(dependencies)
+    );
+  }
+  const structuredEnvironments = validateResolvedEnvironmentDefinitions(
+    inputs.environments,
+    /* @__PURE__ */ Object.create(null)
+  );
+  inputs = {
+    ...inputs,
+    onboardingScope: inputs.onboardingScope ?? "full",
+    environments: structuredEnvironments.environments
+  };
   const mask = resolveRepoSyncMasker(dependencies);
   const logger = resolveRepoSyncLogger(dependencies);
   const branchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
@@ -120558,6 +122928,11 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     ...Object.keys(inputs.environmentUids)
   ]);
   const trackedState = readResourcesState();
+  assertNoLegacyDurableEnvironmentOverlap(
+    trackedState,
+    inputs,
+    onboardingScope === "full" ? environmentNames : []
+  );
   if (onboardingScope === "full") {
     const durableWorkspaceId = inputs.workspaceId.trim() || trackedState?.workspace?.id?.trim() || "";
     const preservedFileNames = isCanonicalWriter ? getPreservedEnvironmentFileNames(
@@ -120569,7 +122944,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
     ) : [];
     assertUniqueEnvironmentFileNames(
       inputs.projectName,
-      environmentNames,
+      inputs.mockEnvironmentEnabled ? [...environmentNames, "Mock"] : environmentNames,
       /* @__PURE__ */ new Set([
         ...preservedFileNames,
         ...getExistingEnvironmentFileNames(
@@ -120683,7 +123058,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
   if (inputs.environmentSyncEnabled && inputs.workspaceId && dependencies.internalIntegration) {
     const associations = Object.entries(envUids).map(([envName, envUid]) => ({
       envUid,
-      systemEnvId: inputs.systemEnvMap[envName] || ""
+      systemEnvId: hasOwn3(inputs.systemEnvMap, envName) ? inputs.systemEnvMap[envName] ?? "" : ""
     })).filter((entry) => entry.systemEnvId);
     if (associations.length > 0) {
       try {
@@ -121475,6 +123850,14 @@ function decideBranchTier(inputs, env = process.env) {
     env
   );
 }
+function isDurableApplyDeniedByBranch(decision) {
+  return decision.identity.isPrContext || decision.tier === "gated" || decision.tier === "preview";
+}
+function isScheduledCiEvent(env = process.env) {
+  return env.GITHUB_EVENT_NAME?.trim().toLowerCase() === "schedule" || env.BUILD_REASON?.trim().toLowerCase() === "schedule" || env.CI_PIPELINE_SOURCE?.trim().toLowerCase() === "schedule" || ["schedule", "scheduled"].includes(
+    env.BITBUCKET_PIPELINE_TRIGGER_TYPE?.trim().toLowerCase() ?? ""
+  );
+}
 function runGatedSkip(inputs, decision, actionCore) {
   actionCore.info(
     `branch-aware sync: gated run (${decision.reason}) \u2014 repo-sync skipped, zero workspace writes`
@@ -121486,6 +123869,59 @@ function runGatedSkip(inputs, decision, actionCore) {
     status: "skipped-branch-gate",
     reason: decision.reason
   });
+  for (const [name, value] of Object.entries(outputs)) {
+    actionCore.setOutput(name, value);
+  }
+  return outputs;
+}
+function runDurableOfflinePlanAction(inputs, actionCore) {
+  const projectKey = String(inputs.durableProjectKey ?? "");
+  if (!projectKey) {
+    throw new Error("durable-project-key is required for durable plan");
+  }
+  assertDurableStateIdentifier(projectKey, "durable-project-key", 256);
+  for (const uid of Object.values(inputs.durableEnvironmentUids ?? {})) {
+    assertDurableStateIdentifier(String(uid ?? ""), "durable environment UID", 1024);
+  }
+  const environments = inputs.durableEnvironments ?? [];
+  const definitions = inputs.durableEnvironmentDefinitions ?? /* @__PURE__ */ Object.create(null);
+  const policy = normalizeDurableEnvironmentPolicy(
+    String(inputs.durableEnvironmentPolicy ?? "create-only")
+  );
+  const digest = computeDurableEnvironmentDefinitionDigest({
+    workspaceId: inputs.workspaceId,
+    projectKey,
+    projectName: inputs.projectName,
+    policy,
+    environments: environments.map((slug) => {
+      const definition = definitions[slug];
+      if (!definition) {
+        throw new Error(`Durable environment "${slug}" is missing its rich definition`);
+      }
+      return definition;
+    })
+  });
+  const state = readResourcesState();
+  const planInput = {
+    workspaceId: inputs.workspaceId,
+    projectName: inputs.projectName,
+    policy,
+    environments,
+    definitions,
+    explicitUids: inputs.durableEnvironmentUids ?? /* @__PURE__ */ Object.create(null),
+    trackedBindings: durableBindingsForProject(state, projectKey)
+  };
+  const entries = planDurableEnvironmentsOffline(planInput);
+  const outputs = createOutputs(inputs);
+  outputs["durable-environment-definition-digest"] = digest;
+  outputs["durable-environment-result-json"] = JSON.stringify({
+    operation: "plan",
+    policy,
+    definitionDigest: digest,
+    entries: projectDurableEnvironmentOfflinePlan(entries),
+    orphans: projectDurableEnvironmentOrphans(planInput)
+  });
+  outputs["sync-status"] = "durable-plan";
   for (const [name, value] of Object.entries(outputs)) {
     actionCore.setOutput(name, value);
   }
@@ -121873,6 +124309,12 @@ var CLI_INPUT_NAMES = [
   "spec-sync-mode",
   "release-label",
   "environments-json",
+  "durable-environments-json",
+  "durable-environment-policy",
+  "durable-environment-operation",
+  "durable-environment-uids-json",
+  "durable-project-key",
+  "durable-state-ref",
   "git-provider",
   "ado-token",
   "repo-url",
@@ -122307,79 +124749,104 @@ async function runCli(argv = process.argv.slice(2), runtime = {}) {
     await runGcCommand(argv.slice(1), env, writeStdout);
     return;
   }
-  const config = parseCliArgs(argv, env);
-  const inputs = resolveInputs(config.inputEnv);
-  const branchDecision = decideBranchTier(inputs, config.inputEnv);
-  if (branchDecision.tier !== "gated") {
-    assertResultPathOutsideGeneratedPaths(config.resultJsonPath, inputs);
-  }
-  const partialOutputs = {};
-  const reporter = new ConsoleReporter((name, value) => {
-    partialOutputs[name] = String(value ?? "");
-    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
-  });
-  if (branchDecision.tier === "gated") {
-    const result2 = runGatedSkip(inputs, branchDecision, reporter);
-    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result2, null, 2));
-    await writeOptionalFile(config.dotenvPath, toDotenv(result2));
-    writeStdout(`${JSON.stringify(result2, null, 2)}
-`);
-    return;
-  }
-  await timedStage(reporter, "access-token mint", () => mintAccessTokenIfNeeded(inputs, reporter));
-  const initialMasker = createSecretMasker([
-    inputs.postmanApiKey,
-    inputs.postmanAccessToken,
-    inputs.adoToken,
-    inputs.githubToken,
-    inputs.ghFallbackToken,
-    inputs.sslClientCert,
-    inputs.sslClientKey,
-    inputs.sslClientPassphrase,
-    inputs.sslExtraCaCerts
-  ]);
-  await timedStage(reporter, "credential preflight", () => runCredentialPreflight({
-    apiBaseUrl: inputs.postmanApiBase,
-    iapubBaseUrl: inputs.postmanIapubBase,
-    postmanApiKey: inputs.postmanApiKey,
-    postmanAccessToken: inputs.postmanAccessToken,
-    explicitTeamId: inputs.teamId || void 0,
-    mode: inputs.credentialPreflight,
-    mask: initialMasker,
-    log: reporter
-  }));
-  const resolvingExec = createCliExec(initialMasker);
-  const resolved = await timedStage(reporter, "API-key/team resolution", () => resolvePostmanApiKeyAndTeamId(
-    inputs,
-    reporter,
-    resolvingExec,
-    initialMasker,
-    {
-      allowApiKeyCreation: inputs.onboardingScope === "full",
-      persistGeneratedApiKeySecret: false,
-      env
+  let durableOperation;
+  try {
+    const config = parseCliArgs(argv, env);
+    const inputs = resolveInputs(config.inputEnv);
+    durableOperation = inputs.durableEnvironmentOperation;
+    const branchDecision = decideBranchTier(inputs, config.inputEnv);
+    if (branchDecision.tier !== "gated") {
+      assertResultPathOutsideGeneratedPaths(config.resultJsonPath, inputs);
     }
-  ));
-  const dependencies = createCliDependencies(inputs, resolved, reporter);
-  if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
-    dependencies.core.warning(
-      "Skipping system environment association because postman-access-token is not configured"
-    );
-  }
-  if (inputs.workspaceLinkEnabled && !dependencies.internalIntegration) {
-    dependencies.core.warning(
-      "Skipping workspace linking because postman-access-token is not configured"
-    );
-  }
-  const result = await timedStage(
-    reporter,
-    "runRepoSync finalize",
-    () => (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies, { branchDecision })
-  );
-  writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
-  await writeOptionalFile(config.dotenvPath, toDotenv(result));
-  writeStdout(`${JSON.stringify(result, null, 2)}
+    const partialOutputs = {};
+    const reporter = new ConsoleReporter((name, value) => {
+      partialOutputs[name] = String(value ?? "");
+      writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
+    });
+    if (inputs.durableEnvironmentOperation === "apply" && isScheduledCiEvent(config.inputEnv)) {
+      throw new Error("Durable apply is not authorized for scheduled execution");
+    }
+    if (inputs.durableEnvironmentOperation === "apply" && isDurableApplyDeniedByBranch(branchDecision)) {
+      throw new Error(
+        `Durable apply is not authorized for pull-request or ${branchDecision.tier} execution (${branchDecision.reason})`
+      );
+    }
+    if (inputs.durableEnvironmentOperation === "plan" && (branchDecision.tier === "gated" || !inputs.workspaceId || !inputs.postmanAccessToken && !inputs.postmanApiKey)) {
+      const result2 = runDurableOfflinePlanAction(inputs, reporter);
+      writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result2, null, 2));
+      await writeOptionalFile(config.dotenvPath, toDotenv(result2));
+      writeStdout(`${JSON.stringify(result2, null, 2)}
 `);
+      return;
+    }
+    if (branchDecision.tier === "gated") {
+      const result2 = runGatedSkip(inputs, branchDecision, reporter);
+      writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result2, null, 2));
+      await writeOptionalFile(config.dotenvPath, toDotenv(result2));
+      writeStdout(`${JSON.stringify(result2, null, 2)}
+`);
+      return;
+    }
+    await timedStage(reporter, "access-token mint", () => mintAccessTokenIfNeeded(inputs, reporter));
+    const initialMasker = createSecretMasker([
+      inputs.postmanApiKey,
+      inputs.postmanAccessToken,
+      inputs.adoToken,
+      inputs.githubToken,
+      inputs.ghFallbackToken,
+      inputs.sslClientCert,
+      inputs.sslClientKey,
+      inputs.sslClientPassphrase,
+      inputs.sslExtraCaCerts
+    ]);
+    await timedStage(reporter, "credential preflight", () => runCredentialPreflight({
+      apiBaseUrl: inputs.postmanApiBase,
+      iapubBaseUrl: inputs.postmanIapubBase,
+      postmanApiKey: inputs.postmanApiKey,
+      postmanAccessToken: inputs.postmanAccessToken,
+      explicitTeamId: inputs.teamId || void 0,
+      mode: inputs.credentialPreflight,
+      mask: initialMasker,
+      log: reporter
+    }));
+    const resolvingExec = createCliExec(initialMasker);
+    const resolved = await timedStage(reporter, "API-key/team resolution", () => resolvePostmanApiKeyAndTeamId(
+      inputs,
+      reporter,
+      resolvingExec,
+      initialMasker,
+      {
+        allowApiKeyCreation: inputs.onboardingScope === "full" && inputs.durableEnvironmentOperation === "off",
+        persistGeneratedApiKeySecret: false,
+        env
+      }
+    ));
+    const dependencies = createCliDependencies(inputs, resolved, reporter);
+    if (inputs.durableEnvironmentOperation === "off" && inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
+      dependencies.core.warning(
+        "Skipping system environment association because postman-access-token is not configured"
+      );
+    }
+    if (inputs.durableEnvironmentOperation === "off" && inputs.workspaceLinkEnabled && !dependencies.internalIntegration) {
+      dependencies.core.warning(
+        "Skipping workspace linking because postman-access-token is not configured"
+      );
+    }
+    const result = await timedStage(
+      reporter,
+      "runRepoSync finalize",
+      () => (runtime.executeRepoSync ?? runRepoSync)(inputs, dependencies, { branchDecision })
+    );
+    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
+    await writeOptionalFile(config.dotenvPath, toDotenv(result));
+    writeStdout(`${JSON.stringify(result, null, 2)}
+`);
+  } catch (error) {
+    if (durableOperation !== void 0 && durableOperation !== "off" || isDurableEnvironmentFailure(error)) {
+      throw toDurableEnvironmentBoundaryError(error);
+    }
+    throw error;
+  }
 }
 async function runGcCommand(argv, env, writeStdout) {
   let onlyBranch;

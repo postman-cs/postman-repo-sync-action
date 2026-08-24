@@ -183,9 +183,41 @@ export const postmanRepoSyncActionContract: {
       default: ''
     },
     'environments-json': {
-      description: 'JSON array of environment slugs to create or update.',
+      description: 'JSON array of legacy branch-owned environment slug strings to create or update.',
       required: false,
       default: '["prod"]'
+    },
+    'durable-environments-json': {
+      description: 'Opt-in JSON array of complete durable environment definition objects. String entries are not accepted, and supplying definitions alone does not authorize mutation.',
+      required: false,
+      default: '[]'
+    },
+    'durable-environment-policy': {
+      description: 'Durable environment lifecycle policy. Create-only preserves existing values; refresh replaces the complete values array after identity validation.',
+      required: false,
+      default: 'create-only',
+      allowedValues: ['create-only', 'refresh']
+    },
+    'durable-environment-operation': {
+      description: 'Durable provisioning operation. Off preserves legacy behavior, plan is read-only, and apply requires explicit trusted mutation authorization.',
+      required: false,
+      default: 'off',
+      allowedValues: ['off', 'plan', 'apply']
+    },
+    'durable-environment-uids-json': {
+      description: 'Optional JSON map of durable environment slug to explicitly reviewed Postman environment UID.',
+      required: false,
+      default: '{}'
+    },
+    'durable-project-key': {
+      description: 'Stable logical project key required for durable plan or apply operations.',
+      required: false,
+      default: ''
+    },
+    'durable-state-ref': {
+      description: 'Trusted persistent Git ref that owns durable state. An empty value defaults at runtime to the resolved canonical-branch value.',
+      required: false,
+      default: ''
     },
     'git-provider': {
       description: "Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected when omitted.",
@@ -380,6 +412,15 @@ export const postmanRepoSyncActionContract: {
     },
     'environment-uids-json': {
       description: 'JSON map of environment slug to Postman environment uid.'
+    },
+    'durable-environment-result-json': {
+      description: 'Value-free durable environment plan or apply result JSON.'
+    },
+    'durable-environment-definition-digest': {
+      description: 'Versioned SHA-256 digest of the normalized durable definition envelope.'
+    },
+    'durable-environment-uids-json': {
+      description: 'JSON map of durable environment slug to validated Postman environment uid.'
     },
     'mock-url': {
       description: 'Created or reused mock server URL.'

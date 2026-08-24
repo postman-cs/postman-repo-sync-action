@@ -124,6 +124,30 @@ afterAll(async () => {
 });
 
 describe('git smart-HTTP transport', () => {
+  it('preflights authenticated fetch and dry-run publication without changing the ref', async () => {
+    const repo = await fixture.createRemoteRepo('preflight', {
+      acceptTokens: ['fallback-token']
+    });
+    const clone = await cloneWorkRepo(repo, 'ws10-git-preflight');
+    const before = await fixture.revParse(repo, 'refs/heads/main');
+
+    const result = await service(repo, clone).preflightPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'refs/heads/main',
+      fallbackToken: 'fallback-token'
+    });
+
+    expect(result.resolvedCurrentRef).toBe('main');
+    expect(await fixture.revParse(repo, 'refs/heads/main')).toBe(before);
+    expect(
+      serviceAuthAttempts().some((attempt) =>
+        attempt.service === 'git-receive-pack' &&
+        attempt.token === 'fallback-token' &&
+        attempt.accepted
+      )
+    ).toBe(true);
+  });
+
   it('pushes with the fallback token as x-access-token Basic credentials', async () => {
     const repo = await fixture.createRemoteRepo('accepted', { acceptTokens: ['fallback-token'] });
     const clone = await cloneWorkRepo(repo, 'ws10-git-accepted');

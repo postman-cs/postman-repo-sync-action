@@ -17,6 +17,11 @@ type JsonRecord = Record<string, unknown>;
 export type MockVisibility = 'public' | 'private' | 'unknown';
 export type RequestedMockVisibility = Exclude<MockVisibility, 'unknown'>;
 
+export type CreateEnvironmentOptions = {
+  /** Existing exact-name matches are refreshed by default, reused, or rejected. */
+  onExisting?: 'refresh' | 'reuse' | 'error';
+};
+
 export interface MockRecord {
   uid: string;
   name: string;
@@ -513,7 +518,10 @@ export class PostmanGatewayAssetsClient {
   // Verified live (scripts/live-gateway-probe.ts, 2026-06-30): the env service
   // proxied through this bifrost is `sync`, NOT `environment` (which answered
   // invalidServiceError). Import needs a client-generated id; list is POST (not
-  // GET); get-one is the sync subpath.
+  // GET); get-one is the sync subpath. The public Postman API also documents
+  // POST /environments?workspace=, but that route authenticates with a PMAK.
+  // Repo-sync deliberately keeps asset operations on the short-lived access
+  // token gateway, so PMAK remains only at the token-mint boundary.
 
   /**
    * Create/upsert an environment through the sync service.
@@ -528,14 +536,23 @@ export class PostmanGatewayAssetsClient {
    * uid (live-verified 2026-06-30 — the bare id 403s mock / 400s monitor
    * "environment is not a valid ID"), matching what `/list/environment` returns.
    * The sync read/update routes re-derive the bare id via `toModelId`.
+   * `onExisting: reuse` makes both initial discovery and ambiguous-create
+   * adoption return the live UID without a PUT, preserving customer values.
    */
   async createEnvironment(
     workspaceId: string,
     name: string,
-    values: Array<{ key: string; value: string; type?: string; enabled?: boolean }>
+    values: Array<{ key: string; value: string; type?: string; enabled?: boolean }>,
+    options: CreateEnvironmentOptions = {}
   ): Promise<string> {
     const ws = workspaceId || this.workspaceId;
     const envName = String(name ?? '').trim();
+    const onExisting = options.onExisting ?? 'refresh';
+    if (onExisting !== 'refresh' && onExisting !== 'reuse' && onExisting !== 'error') {
+      throw new Error(
+        `Unsupported createEnvironment onExisting mode "${String(onExisting)}". Allowed values: refresh, reuse, error`
+      );
+    }
     const flightKey = `environment:${ws}:${envName}`;
     const normalizedValues = values.map((v) => ({
       key: v.key,
@@ -543,10 +560,18 @@ export class PostmanGatewayAssetsClient {
       type: v.type ?? 'default',
       enabled: v.enabled ?? true
     }));
-    return this.singleFlight(flightKey, JSON.stringify(normalizedValues), 'environment', async () => {
+    const fingerprint = JSON.stringify({ onExisting, values: normalizedValues });
+    return this.singleFlight(flightKey, fingerprint, 'environment', async () => {
       const existing = await this.findEnvironmentByName(ws, envName);
       if (existing?.uid) {
-        await this.updateEnvironment(existing.uid, envName, values);
+        if (onExisting === 'error') {
+          throw new Error(
+            `Environment "${envName}" already exists in workspace ${ws}; explicit durable adoption is required`
+          );
+        }
+        if (onExisting === 'refresh') {
+          await this.updateEnvironment(existing.uid, envName, values);
+        }
         return existing.uid;
       }
 
@@ -581,7 +606,15 @@ export class PostmanGatewayAssetsClient {
           return match?.uid ?? null;
         }, error);
         if (adopted) {
-          await this.updateEnvironment(adopted, envName, values);
+          if (onExisting === 'error' && this.toModelId(adopted) !== id) {
+            throw new Error(
+              `Environment "${envName}" appeared during create reconciliation with unreviewed UID ${adopted}; explicit durable adoption is required`,
+              { cause: error }
+            );
+          }
+          if (onExisting === 'refresh') {
+            await this.updateEnvironment(adopted, envName, values);
+          }
           return adopted;
         }
         if (adopted === undefined) {

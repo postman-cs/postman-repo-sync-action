@@ -59,6 +59,52 @@ describe('cli', () => {
     expect(config.dotenvPath).toBe('.env.repo-sync');
   });
 
+  it('preserves the legacy string environment JSON and lifecycle mode through CLI transport', () => {
+    const environmentsJson = JSON.stringify(['dev-refresh']);
+    const config = parseCliArgs([
+      '--project-name',
+      'core-payments',
+      '--environments-json',
+      environmentsJson
+    ], {});
+
+    expect(config.inputEnv.INPUT_ENVIRONMENTS_JSON).toBe(environmentsJson);
+    const inputs = resolveInputs(config.inputEnv);
+    expect(inputs.environments).toEqual(['dev-refresh']);
+    expect(inputs.environmentDefinitions).toBeUndefined();
+  });
+
+  it('maps every durable provisioning flag without interpreting its payload', () => {
+    const definitions = JSON.stringify([
+      {
+        slug: 'dev',
+        values: [{ key: 'baseUrl', value: 'https://dev.example.com' }]
+      }
+    ]);
+    const uids = JSON.stringify({ dev: 'env-dev' });
+    const config = parseCliArgs([
+      '--durable-environments-json',
+      definitions,
+      '--durable-environment-policy',
+      'create-only',
+      '--durable-environment-operation',
+      'plan',
+      '--durable-environment-uids-json',
+      uids,
+      '--durable-project-key',
+      'core-payments',
+      '--durable-state-ref',
+      'develop'
+    ], {});
+
+    expect(config.inputEnv.INPUT_DURABLE_ENVIRONMENTS_JSON).toBe(definitions);
+    expect(config.inputEnv.INPUT_DURABLE_ENVIRONMENT_POLICY).toBe('create-only');
+    expect(config.inputEnv.INPUT_DURABLE_ENVIRONMENT_OPERATION).toBe('plan');
+    expect(config.inputEnv.INPUT_DURABLE_ENVIRONMENT_UIDS_JSON).toBe(uids);
+    expect(config.inputEnv.INPUT_DURABLE_PROJECT_KEY).toBe('core-payments');
+    expect(config.inputEnv.INPUT_DURABLE_STATE_REF).toBe('develop');
+  });
+
   it('resolves credentials from flags, action inputs, then plain environment variables', () => {
     const plain = resolveInputs({
       POSTMAN_API_KEY: 'plain-api-key',
@@ -360,6 +406,122 @@ describe('runCli credential preflight seam', () => {
     return fetchMock;
   }
 
+  it('returns a non-echoing durable diagnostic for a legacy-strategy pull request', async () => {
+    const canary = 'feature/provider-secret-canary\u2028next';
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    let failure: unknown;
+    try {
+      await runCli(
+        [
+          '--project-name', 'portable-poc',
+          '--workspace-id', 'ws-123',
+          '--durable-project-key', 'portable-poc',
+          '--durable-state-ref', 'main',
+          '--durable-environment-operation', 'apply',
+          '--durable-environments-json', '[{"slug":"dev","values":[]}]'
+        ],
+        {
+          env: {
+            GITHUB_ACTIONS: 'true',
+            GITHUB_EVENT_NAME: 'pull_request',
+            GITHUB_HEAD_REF: canary,
+            GITHUB_REF: 'refs/pull/42/merge',
+            GITHUB_REF_NAME: '42/merge'
+          },
+          executeRepoSync: vi.fn()
+        }
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({ code: 'DURABLE_ENVIRONMENT_OPERATION_FAILED' });
+    const message = (failure as Error).message;
+    expect(message).not.toContain('provider-secret-canary');
+    expect(message).not.toMatch(/[\r\n\u2028\u2029]/u);
+    expect(message.length).toBeLessThanOrEqual(450);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects scheduled durable apply before credential or repo-sync work', async () => {
+    const fetchMock = vi.fn();
+    const executeRepoSync = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(runCli(
+      [
+        '--project-name', 'portable-poc',
+        '--workspace-id', 'ws-123',
+        '--durable-project-key', 'portable-poc',
+        '--durable-state-ref', 'main',
+        '--durable-environment-operation', 'apply',
+        '--durable-environments-json', '[{"slug":"dev","values":[]}]'
+      ],
+      {
+        env: {
+          GITHUB_ACTIONS: 'true',
+          GITHUB_EVENT_NAME: 'schedule',
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_REF_NAME: 'main',
+          POSTMAN_API_KEY: 'must-not-be-used'
+        },
+        executeRepoSync
+      }
+    )).rejects.toMatchObject({ code: 'DURABLE_ENVIRONMENT_OPERATION_FAILED' });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(executeRepoSync).not.toHaveBeenCalled();
+  });
+
+  it('produces an offline durable plan without credentials or network access', async () => {
+    const fetchMock = vi.fn();
+    const executeRepoSync = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    let stdout = '';
+
+    await withTempCwd(async () => {
+      await runCli(
+        [
+          '--project-name', 'portable-poc',
+          '--durable-project-key', 'portable-poc',
+          '--durable-environment-operation', 'plan',
+          '--durable-environments-json', JSON.stringify([
+            {
+              slug: 'dev',
+              values: [
+                { key: 'baseUrl', value: 'https://dev.example.com' },
+                { key: 'jwtToken', value: '', type: 'secret' }
+              ]
+            }
+          ])
+        ],
+        {
+          env: {},
+          executeRepoSync,
+          writeStdout: (chunk) => {
+            stdout += chunk;
+          }
+        }
+      );
+    });
+
+    const result = JSON.parse(stdout) as Record<string, string>;
+    const plan = JSON.parse(result['durable-environment-result-json'] ?? '{}') as {
+      operation?: string;
+      entries?: Array<{ slug?: string; action?: string }>;
+    };
+    expect(result['sync-status']).toBe('durable-plan');
+    expect(plan.operation).toBe('plan');
+    expect(plan.entries).toEqual([
+      expect.objectContaining({ slug: 'dev', action: 'unresolved' })
+    ]);
+    expect(stdout).not.toContain('https://dev.example.com');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(executeRepoSync).not.toHaveBeenCalled();
+  });
+
   it('fails closed before repo sync when enforce sees a cross-org team mismatch', async () => {
     const fetchMock = stubIdentityFetch(111, 222);
     const executeRepoSync = vi.fn();
@@ -596,6 +758,24 @@ describe('runCli credential preflight seam', () => {
     ).rejects.toThrow(/Unsupported credential-preflight/);
 
     expect(executeRepoSync).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes invalid durable operation values before the CLI boundary', async () => {
+    const canary = 'provider-secret-canary';
+    let failure: Error | undefined;
+    try {
+      await runCli(
+        ['--durable-environment-operation', `bad\u2028${canary}`],
+        { env: {}, writeStdout: () => undefined }
+      );
+    } catch (error) {
+      failure = error as Error;
+    }
+
+    expect(failure?.message).toContain('DURABLE_ENVIRONMENT_OPERATION_FAILED');
+    expect(failure?.message).not.toContain(canary);
+    expect(failure?.message).not.toContain('\u2028');
+    expect(failure?.message.split(/\r?\n/u)).toHaveLength(1);
   });
 });
 

@@ -97,6 +97,7 @@ afterAll(() => {
 });
 
 type ResourcesYamlShape = {
+  version?: number;
   workspace?: {
     id?: string;
   };
@@ -617,7 +618,7 @@ describe('repo sync action', () => {
     },
     { environments: ['caf\u00e9', 'cafe\u0301'], message: /same artifact filename/ },
     { environments: ['stra\u00dfe', 'strasse'], message: /same artifact filename/ },
-    { environments: [''], message: /non-empty filesystem name/ },
+    { environments: [''], message: /non-empty string|non-empty filesystem name/ },
     { environments: ['..\\..\\outside'], message: /path separators/ },
     { environments: ['prod\u0085west'], message: /control characters/ },
     { environments: ['prod\ud800'], message: /well-formed Unicode/ }
@@ -2707,7 +2708,7 @@ describe('repo sync action', () => {
           deps(postman)
         )
       ).rejects.toThrow(/CONTRACT_PREBUILT_COLLECTIONS_INVALID|symlink|repository root|artifact-dir/);
-      rmSync('postman/collections/core-payments', { force: true });
+      rmSync('postman/collections/core-payments', { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     });
 
@@ -3015,6 +3016,10 @@ describe('repo sync action', () => {
       expect(postman.getCollection).toHaveBeenCalledWith('col-baseline-tracked');
       expect(postman.getCollection).toHaveBeenCalledWith('col-smoke-tracked');
       expect(postman.getCollection).toHaveBeenCalledWith('col-contract-tracked');
+      const resources = loadYaml(
+        readFileSync('.postman/resources.yaml', 'utf8')
+      ) as ResourcesYamlShape;
+      expect(resources.version).toBe(2);
     });
 
     it('skips local spec discovery for workspace-only runs in spec-only scope', async () => {
@@ -7527,6 +7532,76 @@ describe('runAction credential preflight', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('rejects durable apply on a legacy-strategy pull request with a non-echoing diagnostic', async () => {
+    const canary = 'feature/provider-secret-canary\u2028next';
+    process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_EVENT_NAME = 'pull_request';
+    process.env.GITHUB_HEAD_REF = canary;
+    process.env.GITHUB_REF = 'refs/pull/43/merge';
+    process.env.GITHUB_REF_NAME = '43/merge';
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { core } = createRunActionCore(baseInputValues({
+      'branch-strategy': 'legacy',
+      'durable-environment-operation': 'apply',
+      'durable-environments-json': '[{"slug":"dev","values":[]}]',
+      'durable-project-key': 'portable-poc',
+      'durable-state-ref': 'main'
+    }), []);
+
+    let failure: unknown;
+    try {
+      await runAction(core, createExecStub());
+    } catch (error) {
+      failure = error;
+    } finally {
+      delete process.env.GITHUB_ACTIONS;
+      delete process.env.GITHUB_EVENT_NAME;
+      delete process.env.GITHUB_HEAD_REF;
+      delete process.env.GITHUB_REF;
+      delete process.env.GITHUB_REF_NAME;
+    }
+
+    expect(failure).toMatchObject({ code: 'DURABLE_ENVIRONMENT_OPERATION_FAILED' });
+    const message = (failure as Error).message;
+    expect(message).not.toContain('provider-secret-canary');
+    expect(message).not.toMatch(/[\r\n\u2028\u2029]/u);
+    expect(message.length).toBeLessThanOrEqual(450);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects scheduled durable apply before credential or API work', async () => {
+    process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_EVENT_NAME = 'schedule';
+    process.env.GITHUB_REF = 'refs/heads/main';
+    process.env.GITHUB_REF_NAME = 'main';
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { core } = createRunActionCore(baseInputValues({
+      'branch-strategy': 'preview',
+      'canonical-branch': 'main',
+      'durable-environment-operation': 'apply',
+      'durable-environments-json': '[{"slug":"dev","values":[]}]',
+      'durable-project-key': 'portable-poc',
+      'durable-state-ref': 'main'
+    }), []);
+
+    let failure: unknown;
+    try {
+      await runWithFakeTimers(() => runAction(core, createExecStub()));
+    } catch (error) {
+      failure = error;
+    } finally {
+      delete process.env.GITHUB_ACTIONS;
+      delete process.env.GITHUB_EVENT_NAME;
+      delete process.env.GITHUB_REF;
+      delete process.env.GITHUB_REF_NAME;
+    }
+
+    expect(failure).toMatchObject({ code: 'DURABLE_ENVIRONMENT_OPERATION_FAILED' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('runAction logs PMAK and session identity lines before the first environment call', async () => {
     const events: string[] = [];
     vi.stubGlobal('fetch', createRunActionFetchRouter({ events }));
@@ -7646,6 +7721,26 @@ describe('runAction credential preflight', () => {
       runWithFakeTimers(() => runAction(core, createExecStub()))
     ).rejects.toThrow(/Unsupported credential-preflight/);
     expect(events).toHaveLength(0);
+  });
+
+  it('sanitizes invalid durable operation values before the Action boundary', async () => {
+    const canary = 'provider-secret-canary';
+    const { core } = createRunActionCore(
+      baseInputValues({ 'durable-environment-operation': `bad\u2028${canary}` }),
+      []
+    );
+
+    let failure: Error | undefined;
+    try {
+      await runAction(core, createExecStub());
+    } catch (error) {
+      failure = error as Error;
+    }
+
+    expect(failure?.message).toContain('DURABLE_ENVIRONMENT_OPERATION_FAILED');
+    expect(failure?.message).not.toContain(canary);
+    expect(failure?.message).not.toContain('\u2028');
+    expect(failure?.message.split(/\r?\n/u)).toHaveLength(1);
   });
 
   it('reactive advice still rewrites a Bifrost UNAUTHENTICATED with default preflight enabled', async () => {

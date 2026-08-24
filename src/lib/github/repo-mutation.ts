@@ -35,9 +35,18 @@ export interface CommitAndPushOptions extends RepoMutationContext {
   committerEmail: string;
   committerName: string;
   fallbackToken?: string;
+  /** Exact generated files that may bypass repository ignore rules. */
+  forceStagePaths?: string[];
   githubToken?: string;
   removePaths?: string[];
   stagePaths: string[];
+}
+
+export interface PreflightPushOptions extends RepoMutationContext {
+  adoToken?: string;
+  authorityPaths?: string[];
+  fallbackToken?: string;
+  githubToken?: string;
 }
 
 export interface RepoMutationServiceOptions {
@@ -47,6 +56,19 @@ export interface RepoMutationServiceOptions {
   repository: string;
   repoUrl?: string;
   secretMasker?: SecretMasker;
+}
+
+/** Publication failed before a generated commit existed; callers may restore working files. */
+export class RepoMutationPreCommitError extends Error {
+  readonly code = 'REPO_MUTATION_PRE_COMMIT_FAILED';
+
+  constructor(
+    message: string,
+    readonly indexRestored = true
+  ) {
+    super(message);
+    this.name = 'RepoMutationPreCommitError';
+  }
 }
 
 function normalizeBranchRef(value: string | undefined): string {
@@ -303,6 +325,191 @@ export class RepoMutationService {
       options.secretMasker ?? createSecretMasker([]);
   }
 
+  private async restoreOriginOrThrow(
+    originalRemote: string,
+    secretMasker: SecretMasker
+  ): Promise<void> {
+    let restoreFailure = '';
+    try {
+      const restored = await this.execute('git', [
+        'remote',
+        'set-url',
+        'origin',
+        originalRemote
+      ]);
+      if (restored.exitCode !== 0) {
+        restoreFailure = restored.stderr || restored.stdout || 'git remote set-url failed';
+      }
+    } catch (error) {
+      restoreFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (restoreFailure) {
+      throw new Error(secretMasker(
+        `REPO_PUSH_ORIGIN_RESTORE_FAILED: Could not restore origin remote: ${restoreFailure}`
+      ));
+    }
+  }
+
+  /** Authenticate, read the state ref, and prove a dry-run push before cloud mutation. */
+  async preflightPush(options: PreflightPushOptions): Promise<{ resolvedCurrentRef: string }> {
+    const resolvedCurrentRef = resolveCurrentRef(options);
+    const authorityPaths = normalizeStagePaths(options.authorityPaths ?? []);
+    assertMutationPathsAreContained(this.cwd, authorityPaths);
+    const tokens =
+      this.provider === 'azure-devops'
+        ? buildPushTokenOrder({ adoToken: options.adoToken })
+        : buildPushTokenOrder({
+            fallbackToken: options.fallbackToken,
+            githubToken: options.githubToken
+          });
+    const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
+    if (!supportsTokenRemote(this.provider)) {
+      throw new Error(
+        `repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`
+      );
+    }
+    if (!resolvedCurrentRef) {
+      throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
+    }
+    if (tokens.length === 0 && !usePersistedCredentials) {
+      throw new Error('No push token configured for repo-write-mode=commit-and-push');
+    }
+
+    const secretMasker = createSecretMasker(tokens);
+    const preexistingStaged = await this.execute('git', ['diff', '--cached', '--quiet']);
+    if (preexistingStaged.exitCode === 1) {
+      throw new Error(
+        'Pre-existing staged changes are present; refusing repository publication'
+      );
+    }
+    if (preexistingStaged.exitCode !== 0) {
+      const cause = preexistingStaged.stderr || preexistingStaged.stdout || 'git diff failed';
+      throw new Error(secretMasker(`Failed to inspect pre-existing staged changes: ${cause}`));
+    }
+
+    const preexistingUnstaged = await this.execute('git', ['diff', '--quiet']);
+    if (preexistingUnstaged.exitCode === 1) {
+      throw new Error(
+        'Pre-existing unstaged tracked changes are present; refusing repository publication'
+      );
+    }
+    if (preexistingUnstaged.exitCode !== 0) {
+      const cause = preexistingUnstaged.stderr || preexistingUnstaged.stdout || 'git diff failed';
+      throw new Error(secretMasker(`Failed to inspect pre-existing unstaged changes: ${cause}`));
+    }
+
+    if (authorityPaths.length > 0) {
+      for (const ignored of [false, true]) {
+        const authorityStatus = await this.execute('git', [
+          'ls-files',
+          '--others',
+          ...(ignored ? ['--ignored'] : []),
+          '--exclude-standard',
+          '--',
+          ...authorityPaths
+        ]);
+        if (authorityStatus.exitCode !== 0) {
+          throw new Error(this.secretMasker(
+            authorityStatus.stderr || authorityStatus.stdout ||
+            'Failed to inspect durable authority paths'
+          ));
+        }
+        if (authorityStatus.stdout.trim()) {
+          throw new Error(
+            'DURABLE_STATE_DIRTY: Durable authority paths must match the checked-out commit before cloud mutation'
+          );
+        }
+      }
+    }
+
+    const remote = await this.execute('git', ['remote', 'get-url', 'origin']);
+    if (remote.exitCode !== 0 || !remote.stdout.trim()) {
+      throw new Error(secretMasker(
+        remote.stderr || remote.stdout || 'REPO_PUSH_PREFLIGHT_FAILED: origin remote is unavailable'
+      ));
+    }
+    const originalRemote = remote.stdout.trim();
+    let remoteChanged = false;
+    let lastError = '';
+    let preflightSucceeded = false;
+    let preflightFailed = false;
+    let preflightError: unknown;
+
+    try {
+      const candidates: Array<string | null> = usePersistedCredentials ? [null] : tokens;
+      for (const token of candidates) {
+        const resetConfigArgs = token === null
+          ? []
+          : buildScopedExtraHeaderResetConfigs(
+              this.provider,
+              originalRemote || this.repoUrl || ''
+            ).flatMap((config) => ['-c', config]);
+
+        if (token !== null) {
+          const setRemote = await this.execute('git', [
+            'remote',
+            'set-url',
+            'origin',
+            buildAuthenticatedRemoteUrl(
+              this.provider,
+              this.repository,
+              token,
+              this.repoUrl || originalRemote
+            )
+          ]);
+          if (setRemote.exitCode !== 0) {
+            lastError = setRemote.stderr || setRemote.stdout || 'could not configure authenticated origin';
+            continue;
+          }
+          remoteChanged = true;
+        }
+
+        const fetch = await this.execute('git', [
+          ...resetConfigArgs,
+          'fetch',
+          '--no-tags',
+          'origin',
+          `refs/heads/${resolvedCurrentRef}`
+        ]);
+        const fetchError = fetch.stderr || fetch.stdout || '';
+        const targetBranchDoesNotExist = /couldn't find remote ref|remote ref .* not found/iu.test(
+          fetchError
+        );
+        if (fetch.exitCode !== 0 && !targetBranchDoesNotExist) {
+          lastError = fetchError;
+          continue;
+        }
+
+        const dryRun = await this.execute('git', [
+          ...resetConfigArgs,
+          'push',
+          '--dry-run',
+          'origin',
+          `HEAD:refs/heads/${resolvedCurrentRef}`
+        ]);
+        if (dryRun.exitCode === 0) {
+          preflightSucceeded = true;
+          break;
+        }
+        lastError = dryRun.stderr || dryRun.stdout || '';
+      }
+    } catch (error) {
+      preflightFailed = true;
+      preflightError = error;
+    }
+
+    if (remoteChanged) {
+      await this.restoreOriginOrThrow(originalRemote, secretMasker);
+    }
+
+    if (preflightFailed) throw preflightError;
+    if (preflightSucceeded) return { resolvedCurrentRef };
+
+    throw new Error(secretMasker(
+      `REPO_PUSH_PREFLIGHT_FAILED: Could not read and dry-run publish ${resolvedCurrentRef}: ${lastError || 'repository publication access was denied'}`
+    ));
+  }
+
   async commitAndPush(options: CommitAndPushOptions): Promise<{
     commitSha: string;
     pushed: boolean;
@@ -310,9 +517,17 @@ export class RepoMutationService {
   }> {
     const resolvedCurrentRef = resolveCurrentRef(options);
     const removePaths = normalizeStagePaths(options.removePaths ?? []);
-    const stagePaths = normalizeStagePaths([...options.stagePaths, ...removePaths]);
+    const forceStagePaths = normalizeStagePaths(options.forceStagePaths ?? []);
+    const stagePaths = normalizeStagePaths([
+      ...options.stagePaths,
+      ...forceStagePaths,
+      ...removePaths
+    ]);
     assertMutationPathsAreContained(this.cwd, stagePaths);
+    assertMutationPathsAreContained(this.cwd, forceStagePaths);
     assertMutationPathsAreContained(this.cwd, removePaths);
+    const forceStagePathSet = new Set(forceStagePaths);
+    const regularStagePaths = stagePaths.filter((stagePath) => !forceStagePathSet.has(stagePath));
     const tokens =
       this.provider === 'azure-devops'
         ? buildPushTokenOrder({ adoToken: options.adoToken })
@@ -321,29 +536,51 @@ export class RepoMutationService {
             githubToken: options.githubToken
           });
     const secretMasker = createSecretMasker(tokens);
+    let stagingStarted = false;
+    const failBeforeCommit = async (
+      message: string,
+      resetOwnedIndexPaths = false
+    ): Promise<never> => {
+      let detail = secretMasker(message);
+      let indexRestored = true;
+      if (resetOwnedIndexPaths) {
+        try {
+          const reset = await this.execute('git', [
+            'reset',
+            '--quiet',
+            'HEAD',
+            '--',
+            ...stagePaths
+          ]);
+          if (reset.exitCode !== 0) {
+            indexRestored = false;
+            const cause = reset.stderr || reset.stdout || 'git reset failed';
+            detail += secretMasker(`; failed to restore the generated-path index: ${cause}`);
+          }
+        } catch (error) {
+          indexRestored = false;
+          const cause = error instanceof Error ? error.message : String(error);
+          detail += secretMasker(`; failed to restore the generated-path index: ${cause}`);
+        }
+      }
+      throw new RepoMutationPreCommitError(detail, indexRestored);
+    };
+    const executeBeforeCommit = async (
+      command: string,
+      args: string[]
+    ): Promise<ExecuteResult> => {
+      try {
+        return await this.execute(command, args);
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        return await failBeforeCommit(
+          `Repository publication command failed before commit: ${cause}`,
+          stagingStarted
+        );
+      }
+    };
 
     if (stagePaths.length === 0) {
-      return {
-        commitSha: '',
-        pushed: false,
-        resolvedCurrentRef
-      };
-    }
-
-    const changed = await this.execute('git', [
-      'status',
-      '--porcelain=v1',
-      '--untracked-files=all',
-      '--',
-      ...stagePaths
-    ]);
-    if (changed.exitCode !== 0) {
-      throw new Error(this.secretMasker(changed.stderr || changed.stdout || 'Failed to inspect generated changes'));
-    }
-    const hasPlannedRemoval = removePaths.some((removePath) =>
-      existsSync(path.resolve(this.cwd, removePath))
-    );
-    if (!changed.stdout.trim() && !hasPlannedRemoval) {
       return {
         commitSha: '',
         pushed: false,
@@ -354,38 +591,172 @@ export class RepoMutationService {
     const usePersistedCredentials = tokens.length === 0 && this.provider === 'azure-devops';
     if (options.repoWriteMode === 'commit-and-push') {
       if (!supportsTokenRemote(this.provider)) {
-        throw new Error(`repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`);
+        await failBeforeCommit(
+          `repo-write-mode=commit-and-push is not supported for git provider "${this.provider}"`
+        );
       }
       if (!resolvedCurrentRef) {
-        throw new Error('No current ref could be resolved for repo-write-mode=commit-and-push');
+        await failBeforeCommit(
+          'No current ref could be resolved for repo-write-mode=commit-and-push'
+        );
       }
       if (tokens.length === 0 && !usePersistedCredentials) {
-        throw new Error('No push token configured for repo-write-mode=commit-and-push');
+        await failBeforeCommit('No push token configured for repo-write-mode=commit-and-push');
       }
     }
 
-    await this.execute('git', ['config', 'user.name', options.committerName]);
-    await this.execute('git', ['config', 'user.email', options.committerEmail]);
-    for (const removePath of removePaths) {
-      rmSync(path.resolve(this.cwd, removePath), { force: true });
+    for (const forceStagePath of forceStagePaths) {
+      const absoluteForceStagePath = path.resolve(this.cwd, forceStagePath);
+      let isFile = false;
+      try {
+        isFile = existsSync(absoluteForceStagePath) && lstatSync(absoluteForceStagePath).isFile();
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        await failBeforeCommit(`Failed to inspect force-stage path ${forceStagePath}: ${cause}`);
+      }
+      if (!isFile) {
+        await failBeforeCommit(
+          `Force-stage path must identify an exact generated file: ${forceStagePath}`
+        );
+      }
     }
-    await this.execute('git', ['add', '-A', '--', ...stagePaths]);
 
-    const staged = await this.execute('git', ['diff', '--cached', '--quiet']);
-    if (staged.exitCode === 0) {
-      return {
-        commitSha: '',
-        pushed: false,
-        resolvedCurrentRef
-      };
-    }
-
-    await this.execute('git', [
-      'commit',
-      '-m',
-      'chore: sync Postman artifacts and metadata'
+    const changed = await executeBeforeCommit('git', [
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--',
+      ...stagePaths
     ]);
-    let commitSha = (await this.execute('git', ['rev-parse', 'HEAD'])).stdout.trim();
+    if (changed.exitCode !== 0) {
+      await failBeforeCommit(
+        this.secretMasker(changed.stderr || changed.stdout || 'Failed to inspect generated changes')
+      );
+    }
+    const hasPlannedRemoval = removePaths.some((removePath) =>
+      existsSync(path.resolve(this.cwd, removePath))
+    );
+    const preexistingStaged = await executeBeforeCommit('git', ['diff', '--cached', '--quiet']);
+    if (preexistingStaged.exitCode === 1) {
+      await failBeforeCommit(
+        'Pre-existing staged changes are present; refusing repository publication'
+      );
+    }
+    if (preexistingStaged.exitCode !== 0) {
+      const cause = preexistingStaged.stderr || preexistingStaged.stdout || 'git diff failed';
+      await failBeforeCommit(`Failed to inspect pre-existing staged changes: ${cause}`);
+    }
+    let hasForcedChanges = false;
+    if (forceStagePaths.length > 0) {
+      const forcedChanged = await executeBeforeCommit('git', [
+        'status',
+        '--porcelain=v1',
+        '--untracked-files=all',
+        '--ignored=matching',
+        '--',
+        ...forceStagePaths
+      ]);
+      if (forcedChanged.exitCode !== 0) {
+        await failBeforeCommit(
+          forcedChanged.stderr || forcedChanged.stdout || 'Failed to inspect force-staged changes'
+        );
+      }
+      hasForcedChanges = Boolean(forcedChanged.stdout.trim());
+    }
+    const hasGeneratedChanges = Boolean(changed.stdout.trim()) || hasForcedChanges || hasPlannedRemoval;
+    if (!hasGeneratedChanges) {
+      if (options.repoWriteMode !== 'commit-and-push') {
+        return {
+          commitSha: '',
+          pushed: false,
+          resolvedCurrentRef
+        };
+      }
+    }
+
+    let commitSha = '';
+    if (hasGeneratedChanges || options.repoWriteMode === 'commit-and-push') {
+      await executeBeforeCommit('git', ['config', 'user.name', options.committerName]);
+      await executeBeforeCommit('git', ['config', 'user.email', options.committerEmail]);
+      for (const removePath of removePaths) {
+        try {
+          rmSync(path.resolve(this.cwd, removePath), { force: true });
+        } catch (error) {
+          const cause = error instanceof Error ? error.message : String(error);
+          await failBeforeCommit(`Failed to remove generated path: ${cause}`);
+        }
+      }
+      if (regularStagePaths.length > 0) {
+        stagingStarted = true;
+        const added = await executeBeforeCommit('git', ['add', '-A', '--', ...regularStagePaths]);
+        if (added.exitCode !== 0) {
+          const cause = added.stderr || added.stdout || 'git add failed';
+          await failBeforeCommit(`Failed to stage generated changes: ${cause}`, true);
+        }
+      }
+      if (forceStagePaths.length > 0) {
+        stagingStarted = true;
+        const forceAdded = await executeBeforeCommit('git', [
+          'add',
+          '-f',
+          '-A',
+          '--',
+          ...forceStagePaths
+        ]);
+        if (forceAdded.exitCode !== 0) {
+          const cause = forceAdded.stderr || forceAdded.stdout || 'git add failed';
+          await failBeforeCommit(`Failed to force-stage generated files: ${cause}`, true);
+        }
+      }
+
+      const staged = await executeBeforeCommit('git', [
+        'diff',
+        '--cached',
+        '--quiet',
+        '--',
+        ...stagePaths
+      ]);
+      if (staged.exitCode === 0) {
+        if (options.repoWriteMode !== 'commit-and-push') {
+          return {
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef
+          };
+        }
+      } else if (staged.exitCode !== 1) {
+        const cause = staged.stderr || staged.stdout || 'git diff failed';
+        await failBeforeCommit(`Failed to inspect staged generated changes: ${cause}`, true);
+      } else {
+        const committed = await executeBeforeCommit('git', [
+          'commit',
+          '--only',
+          '-m',
+          'chore: sync Postman artifacts and metadata',
+          '--',
+          ...stagePaths
+        ]);
+        if (committed.exitCode !== 0) {
+          const cause = committed.stderr || committed.stdout || 'git commit failed';
+          await failBeforeCommit(`Failed to commit generated changes: ${cause}`, true);
+        }
+        const resolvedCommit = await this.execute('git', ['rev-parse', 'HEAD']);
+        if (resolvedCommit.exitCode !== 0 || !resolvedCommit.stdout.trim()) {
+          const cause = resolvedCommit.stderr || resolvedCommit.stdout || 'git rev-parse failed';
+          throw new Error(secretMasker(`Failed to resolve generated commit: ${cause}`));
+        }
+        commitSha = resolvedCommit.stdout.trim();
+      }
+    }
+
+    const currentHead = commitSha
+      ? { exitCode: 0, stdout: commitSha, stderr: '' }
+      : await this.execute('git', ['rev-parse', 'HEAD']);
+    if (currentHead.exitCode !== 0 || !currentHead.stdout.trim()) {
+      const cause = currentHead.stderr || currentHead.stdout || 'git rev-parse failed';
+      throw new Error(secretMasker(`Failed to resolve publication commit: ${cause}`));
+    }
+    const desiredHead = currentHead.stdout.trim();
 
     if (options.repoWriteMode !== 'commit-and-push') {
       return {
@@ -467,11 +838,8 @@ export class RepoMutationService {
           }
 
           if (fetch.exitCode === 0) {
-            // During rebase, "theirs" is the replayed commit. Generated paths are authoritative.
             const rebase = await this.execute('git', [
               'rebase',
-              '-X',
-              'theirs',
               'FETCH_HEAD'
             ]);
             if (rebase.exitCode !== 0) {
@@ -484,6 +852,19 @@ export class RepoMutationService {
               );
             }
             commitSha = (await this.execute('git', ['rev-parse', 'HEAD'])).stdout.trim();
+            const generatedPathDrift = await this.execute('git', [
+              'diff',
+              '--quiet',
+              desiredHead,
+              'HEAD',
+              '--',
+              ...stagePaths
+            ]);
+            if (generatedPathDrift.exitCode !== 0) {
+              throw new Error(
+                'REPO_PUSH_STATE_DRIFT: Generated state paths changed while reconciling the remote ref; refusing to claim publication'
+              );
+            }
           }
 
           const push = await this.execute('git', [
@@ -512,7 +893,7 @@ export class RepoMutationService {
       }
     } finally {
       if (remoteChanged) {
-        await this.execute('git', ['remote', 'set-url', 'origin', originalRemote]);
+        await this.restoreOriginOrThrow(originalRemote, secretMasker);
       }
     }
 

@@ -7,6 +7,23 @@ import { environmentFileName } from './environment-yaml.js';
 
 export type CloudResourceMap = Record<string, string>;
 
+export type DurableEnvironmentPolicy = 'create-only' | 'refresh';
+
+export type DurableEnvironmentProvisioningEntry = {
+  artifact: string;
+  displayName: string;
+  policy: DurableEnvironmentPolicy;
+  definitionDigest: string;
+} & Record<string, unknown>;
+
+export type DurableEnvironmentProvisioningProject = {
+  environments?: Record<string, DurableEnvironmentProvisioningEntry>;
+} & Record<string, unknown>;
+
+export type EnvironmentProvisioningState = {
+  projects?: Record<string, DurableEnvironmentProvisioningProject>;
+} & Record<string, unknown>;
+
 export type PostmanResourcesState = {
   /** State schema version. Absent = v1 (legacy). v2 is canonical-only. */
   version?: number;
@@ -24,6 +41,8 @@ export type PostmanResourcesState = {
     environments?: CloudResourceMap;
     specs?: CloudResourceMap;
   };
+  /** State v3 durable-environment metadata. UIDs remain canonical.environments-owned. */
+  environmentProvisioning?: EnvironmentProvisioningState;
 } & Record<string, unknown>;
 
 /** Contract violation raised when tracked state exists but cannot be trusted. */

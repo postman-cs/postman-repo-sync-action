@@ -66,6 +66,48 @@ The example permissions let `GITHUB_TOKEN` commit generated artifacts and update
     github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Complete environment definitions
+
+Durable customer environments use a separate opt-in contract. `durable-environments-json` accepts rich definition objects and leaves the legacy branch-owned `environments-json` behavior unchanged:
+
+```yaml
+with:
+  durable-environments-json: >-
+    [{"slug":"dev-refresh","values":[
+      {"key":"baseUrl","value":"https://dev-refresh.example.com"},
+      {"key":"variable1","value":"value1"},
+      {"key":"variable2","value":"value2","enabled":false},
+      {"key":"jwtToken","value":"","type":"secret"}
+    ]}]
+  durable-environment-operation: apply
+  durable-environment-policy: create-only
+  durable-project-key: core-payments
+  durable-state-ref: develop
+```
+
+The supported definition is exactly `{ slug, values }`. Each value supports `key`, `value`, `type` (`default` or `secret`), and `enabled`. Repo-sync owns the cloud display name (`<project-name> - <slug>`) and rejects IDs, UIDs, arbitrary names, file paths, exported Postman metadata, unknown fields, duplicate slugs or keys, and the reserved `x-pm-onboarding` key.
+
+Rich values are the complete creation template. Under `refresh` they are authoritative; under `create-only` they are used only for creation and existing values remain unchanged. Repo-sync does not add `CI`, response thresholds, resolver-specific slots, or a second `baseUrl`. Legacy string entries remain on `environments-json` and can continue using `env-runtime-urls-json`.
+
+Secret entries must have an omitted or empty value. The JWT or other credential is supplied only to the collection run, for example with Postman CLI `--env-var "jwtToken=$RUNTIME_JWT"` after the CI secret provider has populated and masked `RUNTIME_JWT`. Repo-sync rejects populated secret entries before discovery or mutation and never persists their values in Postman environments, repository artifacts, or logs.
+
+`durable-environment-operation` defaults to `off`, so existing callers do not parse or provision durable definitions. `plan` is read-only and `apply` is the explicit mutation boundary. `durable-environment-policy` defaults to `create-only`:
+
+- `refresh` creates missing durable environments and replaces their complete values array with the requested rich definition.
+- `create-only` creates missing environments but preserves an existing environment's customer values. Explicit or tracked UIDs must match the exact workspace-scoped display name before reuse.
+
+Durable provisioning runs as a separate planner/executor and is not renamed or marked as a preview/channel asset. Apply must run on the exclusive `durable-state-ref` with `repo-write-mode: commit-and-push`; local-only commits are not authoritative state. Before Postman discovery, repo-sync authenticates a fetch and dry-run push to that ref. Final publication rechecks generated state paths after remote reconciliation and fails without claiming publication if the ref or permission changes. Same-repository and fork pull requests cannot apply. An untracked exact-name environment is reported but never adopted until its reviewed UID is supplied through `durable-environment-uids-json`, and omitted tracked environments are reported as retained orphans without deletion. The optional dedicated `Mock` environment remains action-owned outside this lifecycle.
+
+The caller must serialize the entire apply over `(repository, durable-state-ref, .postman/resources.yaml)`. Repo-sync cannot detect a missing external lock. A GitHub caller can use a stable concurrency group:
+
+```yaml
+concurrency:
+  group: durable-environments-${{ github.repository }}-develop
+  cancel-in-progress: false
+```
+
+For Azure Pipelines, run repo-sync in a deployment job bound to a dedicated Environment such as `postman-durable-state-<repository>-develop`, configure an exclusive-lock check on that Environment, and set pipeline `lockBehavior: sequential`. Other CI systems need an equivalent non-cancelling lock covering checkout, Postman discovery and mutation, verification, and the state push. Until the customer/provider adapter supplies that lock, durable apply is unsupported; offline and live plan remain safe.
+
 `postman-access-token` is required: every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace-to-repository linking and system environment association runs through the access-token gateway. Use `postman-resolve-service-token-action` to mint it at runtime from a [Postman service account](https://learning.postman.com/docs/administration/service-accounts/) PMAK. Without it the action fails fast — the PMAK is not an asset-routing fallback; it only mints/re-mints the access token, powers the generated CI workflow's `postman login --with-api-key`, and mints the CI `POSTMAN_API_KEY` secret. See [docs/credentials.md](docs/credentials.md).
 
 ### Disable CI workflow generation
@@ -169,7 +211,13 @@ with:
 | `mock-visibility` | Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync. | no | `private` |
 | `mock-environment-enabled` | Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential. | no | `false` |
 | `monitor-cron` | Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run). | no | `""` |
-| `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
+| `environments-json` | JSON array of legacy branch-owned environment slug strings to create or update. | no | `["prod"]` |
+| `durable-environments-json` | Opt-in JSON array of complete durable environment definition objects. String entries are not accepted, and supplying definitions alone does not authorize mutation. | no | `[]` |
+| `durable-environment-policy` | Durable environment lifecycle policy. Create-only preserves existing values; refresh replaces the complete values array after identity validation. | no | `create-only` |
+| `durable-environment-operation` | Durable provisioning operation. Off preserves legacy behavior, plan is read-only, and apply requires explicit trusted mutation authorization. | no | `off` |
+| `durable-environment-uids-json` | Optional JSON map of durable environment slug to explicitly reviewed Postman environment UID. | no | `{}` |
+| `durable-project-key` | Stable logical project key required for durable plan or apply operations. | no | `""` |
+| `durable-state-ref` | Trusted persistent Git ref that owns durable state. An empty value defaults at runtime to the resolved canonical-branch value. | no | `""` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
 | `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
 | `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
@@ -215,6 +263,9 @@ with:
 | `workspace-link-status` | Whether workspace linking succeeded, was skipped, or failed. |
 | `environment-sync-status` | Whether environment sync succeeded, was skipped, or failed. |
 | `environment-uids-json` | JSON map of environment slug to Postman environment uid. |
+| `durable-environment-result-json` | Value-free durable environment plan or apply result JSON. |
+| `durable-environment-definition-digest` | Versioned SHA-256 digest of the normalized durable definition envelope. |
+| `durable-environment-uids-json` | JSON map of durable environment slug to validated Postman environment uid. |
 | `mock-url` | Created or reused mock server URL. |
 | `mock-visibility` | Authoritatively observed mock visibility: public or private. |
 | `mock-auth-required` | Whether the collection runner must supply postmanPrivateMockApiKey at runtime. |
@@ -314,7 +365,7 @@ For `commit-and-push`, the push target is resolved from `current-ref`, then `GIT
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
 
-Asset reuse priority is explicit inputs (`environment-uids-json`, `mock-url`, `monitor-id`), then live discovery by exact workspace-scoped name, collection UID, and environment UID, then create. The gateway's live `published` field must match the requested `mock-visibility`, and explicit URLs must match the expected workspace, collection, and environment. Mismatched or unknown visibility fails closed; private reuse installs the same runtime `x-api-key` hook as private creation. Under the private default, a previously public mock must be changed to private in Postman or explicitly reused with `mock-visibility: public`. Creates submit once and reconcile on ambiguous gateway errors; overlapping compatible creates inside one process share a single in-flight promise. Adopted environments are updated to the requested values. Mock environment assignment has no verified patch route, so a mock is reused only when its live environment already matches; mismatches are never claimed as converged. Concurrent jobs against the same workspace can still race because Postman does not expose create idempotency keys—serialize those workflows with GitHub Actions `concurrency` (or an equivalent CI lock) when duplicate mocks/monitors/environments would be harmful.
+Legacy asset reuse priority is explicit inputs (`environment-uids-json`, `mock-url`, `monitor-id`), then live discovery by exact workspace-scoped name, collection UID, and environment UID, then create or refresh. Durable environments use the stricter reviewed-UID adoption and state-v3 rules above. The gateway's live `published` field must match the requested `mock-visibility`, and explicit URLs must match the expected workspace, collection, and environment. Mismatched or unknown visibility fails closed; private reuse installs the same runtime `x-api-key` hook as private creation. Under the private default, a previously public mock must be changed to private in Postman or explicitly reused with `mock-visibility: public`. Creates submit once and reconcile on ambiguous gateway errors; overlapping compatible creates inside one process share a single in-flight promise. Mock environment assignment has no verified patch route, so a mock is reused only when its live environment already matches; mismatches are never claimed as converged. Concurrent jobs against the same workspace can still race because Postman does not expose create idempotency keys—serialize those workflows with the provider lock documented for the owning resource class.
 
 Deeper reference:
 

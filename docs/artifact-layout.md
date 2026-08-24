@@ -36,14 +36,22 @@ Definitions and request files use `$kind:` discriminators (for example, `$kind: 
 
 Environment files mirror Postman v12 Local Mode's canonical filesystem serializer: values contain `key`, optional `value`, `disabled`, `description`, `secret`, and `source` fields, and the environment can carry a valid integer `color`. Resolved `secret: true` entries omit `value`, and legacy `type: secret` values are redacted into canonical secret entries before repository serialization. Filenames use the same sanitization rules on the full stable cloud display name and remain unchanged across versioned runs; names that collide under Unicode normalization or case-folding fail closed. During legacy migration, repo-sync atomically promotes each validated YAML and `.postman/resources.yaml` before deleting a JSON file whose prior manifest UID matches. Conflicting ownership and untracked current YAML targets fail before cloud mutation; untracked legacy JSON is preserved with a warning. A failed manifest promotion leaves the legacy JSON recoverable; spec-only runs preserve environment mappings and artifacts as-is.
 
+## Environment definition and lifecycle inputs
+
+`environments-json` remains the legacy string-slug contract for branch-owned environments. Durable customer environments use `durable-environments-json`, a rich-object array shaped as `{slug, values}`. Rich values support `key`, `value`, `type`, and `enabled`. Empty `type: secret` slots are allowed, but populated secrets fail before cloud work. IDs, UIDs, names, paths, export metadata, unknown fields, duplicate identities, and the action-owned `x-pm-onboarding` key are rejected.
+
+Durable operation defaults to `off`. `plan` emits a value-free projection; `apply` runs a fresh live plan and writes only on the configured durable state ref. `create-only` creates absent assets and preserves reviewed existing UIDs. `refresh` replaces the complete value set for reviewed UIDs. Exact-name discovery alone never adopts an existing environment. Preview/channel and dedicated Mock environments retain their separate action-owned lifecycle.
+
 Note that v3 collections are run with `postman collection run` (Postman CLI). Newman cannot execute the v3 format.
 
 ## Spec and workflow metadata
 
-`.postman/resources.yaml` is state v2. Its current mappings are canonical: `canonical.collections`, `canonical.environments`, and `canonical.specs` map repository-relative artifact paths to Postman resource UIDs. For example:
+`.postman/resources.yaml` is state v3 after durable provisioning. Canonical mappings remain the sole UID authority, while `environmentProvisioning` adds durable logical metadata without duplicating UIDs. State v2 remains accepted as migration input. For example:
+
+The canonical UID maps remain `canonical.collections`, `canonical.environments`, and `canonical.specs`.
 
 ```yaml
-version: 2
+version: 3
 workspace:
   id: <workspace UID>
 canonical:

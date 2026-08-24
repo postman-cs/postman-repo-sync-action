@@ -53,6 +53,12 @@ describe('postman-repo-sync-action contract', () => {
       'mock-environment-enabled',
       'monitor-cron',
       'environments-json',
+      'durable-environments-json',
+      'durable-environment-policy',
+      'durable-environment-operation',
+      'durable-environment-uids-json',
+      'durable-project-key',
+      'durable-state-ref',
       'git-provider',
       'ado-token',
       'repo-url',
@@ -97,6 +103,9 @@ describe('postman-repo-sync-action contract', () => {
       'workspace-link-status',
       'environment-sync-status',
       'environment-uids-json',
+      'durable-environment-result-json',
+      'durable-environment-definition-digest',
+      'durable-environment-uids-json',
       'mock-url',
       'mock-visibility',
       'mock-auth-required',
@@ -148,6 +157,67 @@ describe('postman-repo-sync-action contract', () => {
         INPUT_CREDENTIAL_PREFLIGHT: 'sometimes'
       })
     ).toThrow(/Unsupported credential-preflight/);
+  });
+
+  it('declares the opt-in durable environment contract without changing legacy defaults', () => {
+    const expected = {
+      'durable-environments-json': { default: '[]', allowedValues: undefined },
+      'durable-environment-policy': {
+        default: 'create-only',
+        allowedValues: ['create-only', 'refresh']
+      },
+      'durable-environment-operation': {
+        default: 'off',
+        allowedValues: ['off', 'plan', 'apply']
+      },
+      'durable-environment-uids-json': { default: '{}', allowedValues: undefined },
+      'durable-project-key': { default: '', allowedValues: undefined },
+      'durable-state-ref': { default: '', allowedValues: undefined }
+    } as const;
+
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string; description?: string }>;
+    };
+
+    for (const [name, definition] of Object.entries(expected)) {
+      const contractInput = postmanRepoSyncActionContract.inputs[name];
+      expect(contractInput.required).toBe(false);
+      expect(contractInput.default).toBe(definition.default);
+      expect(contractInput.allowedValues).toEqual(definition.allowedValues);
+      expect(actionYaml.inputs[name]).toMatchObject({
+        required: false,
+        default: definition.default
+      });
+    }
+
+    expect(postmanRepoSyncActionContract.inputs['environments-json'].default).toBe('["prod"]');
+    expect(actionYaml.inputs['environments-json']?.default).toBe('["prod"]');
+    expect(postmanRepoSyncActionContract.inputs['environments-json'].description).toContain(
+      'slug strings'
+    );
+    expect(postmanRepoSyncActionContract.inputs['environments-json'].description)
+      .not.toContain('rich definitions');
+    expect(actionYaml.inputs['environments-json']?.description).toBe(
+      postmanRepoSyncActionContract.inputs['environments-json'].description
+    );
+    expect(postmanRepoSyncActionContract.inputs['durable-state-ref'].description).toContain(
+      'resolved canonical-branch value'
+    );
+  });
+
+  it('does not parse dormant durable inputs until plan or apply is selected', () => {
+    expect(() => resolveInputs({
+      INPUT_PROJECT_NAME: 'core-payments',
+      INPUT_DURABLE_ENVIRONMENT_OPERATION: 'off',
+      INPUT_DURABLE_ENVIRONMENTS_JSON: 'not-json',
+      INPUT_DURABLE_ENVIRONMENT_POLICY: 'not-a-policy',
+      INPUT_DURABLE_ENVIRONMENT_UIDS_JSON: 'not-json'
+    })).not.toThrow();
+    expect(() => resolveInputs({
+      INPUT_PROJECT_NAME: 'core-payments',
+      INPUT_DURABLE_ENVIRONMENT_OPERATION: 'plan',
+      INPUT_DURABLE_ENVIRONMENTS_JSON: 'not-json'
+    })).toThrow(/durable-environments-json must contain valid JSON/);
   });
 
   it('defaults mock visibility to private while preserving an explicit public opt-out', () => {
@@ -215,13 +285,13 @@ describe('postman-repo-sync-action contract', () => {
     expect(readme).toContain('Use this for customer-managed PR workflows.');
   });
 
-  it('documents the canonical Collection v3 artifact and state-v2 layouts', () => {
+  it('documents the canonical Collection v3 artifact and state-v3 layouts', () => {
     const artifactLayout = readFileSync(resolve(repoRoot, 'docs/artifact-layout.md'), 'utf8');
 
     expect(artifactLayout).toContain('`.resources/definition.yaml`');
     expect(artifactLayout).toContain('`$kind:`');
     expect(artifactLayout).toContain('legacy `collection.yaml`');
-    expect(artifactLayout).toContain('version: 2');
+    expect(artifactLayout).toContain('version: 3');
     expect(artifactLayout).toContain('`canonical.collections`');
     expect(artifactLayout).toContain('`canonical.environments`');
     expect(artifactLayout).toContain('`canonical.specs`');

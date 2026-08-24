@@ -482,6 +482,19 @@ describe('exact live identity and duplicate handling', () => {
 });
 
 describe('environment convergence', () => {
+  it('rejects an invalid existing-environment policy before making gateway calls', async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(buildClient(fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [],
+      { onExisting: 'typo' as never }
+    )).rejects.toThrow(/Unsupported createEnvironment onExisting mode/);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('updates an adopted environment to the requested values after an ambiguous import', async () => {
     const state = emptyState();
     const api = liveApi(state, true);
@@ -495,6 +508,112 @@ describe('environment convergence', () => {
       .map((call) => envelope(call[1] as RequestInit))
       .find((request) => request.method === 'put');
     expect(update?.body).toMatchObject({ name: 'Acme - prod', values });
+  });
+
+  it('reuses an exact-name environment without updating it in reuse mode', async () => {
+    const state = emptyState();
+    state.environments.push({
+      id: 'existing-env',
+      name: 'Acme - prod',
+      owner: '10490519'
+    });
+    const api = liveApi(state);
+
+    await expect(buildClient(api.fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [{ key: 'baseUrl', value: 'https://new.example.com' }],
+      { onExisting: 'reuse' }
+    )).resolves.toBe('10490519-existing-env');
+
+    expect(api.counts.environment).toBe(0);
+    expect(api.counts.environmentUpdate).toBe(0);
+  });
+
+  it('rejects an exact-name environment in error mode without importing or updating', async () => {
+    const state = emptyState();
+    state.environments.push({
+      id: 'existing-env',
+      name: 'Acme - prod',
+      owner: '10490519'
+    });
+    const api = liveApi(state);
+
+    await expect(buildClient(api.fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [{ key: 'baseUrl', value: 'https://new.example.com' }],
+      { onExisting: 'error' }
+    )).rejects.toThrow(/already exists.*explicit durable adoption is required/);
+
+    expect(api.counts.environment).toBe(0);
+    expect(api.counts.environmentUpdate).toBe(0);
+  });
+
+  it('adopts an ambiguously created environment without updating it in reuse mode', async () => {
+    const api = liveApi(emptyState(), true);
+
+    await expect(buildClient(api.fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [{ key: 'baseUrl', value: 'https://api.example.com' }],
+      { onExisting: 'reuse' }
+    )).resolves.toMatch(/^10490519-/);
+
+    expect(api.counts.environment).toBe(1);
+    expect(api.counts.environmentUpdate).toBe(0);
+  });
+
+  it('reconciles its ambiguously accepted create without updating in error mode', async () => {
+    const api = liveApi(emptyState(), true);
+
+    await expect(buildClient(api.fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [{ key: 'baseUrl', value: 'https://api.example.com' }],
+      { onExisting: 'error' }
+    )).resolves.toMatch(/^10490519-/);
+
+    expect(api.counts.environment).toBe(1);
+    expect(api.counts.environmentUpdate).toBe(0);
+  });
+
+  it('refuses a concurrent exact-name environment after an ambiguous create in error mode', async () => {
+    const concurrentId = '00000000-0000-4000-8000-000000000000';
+    let environmentLists = 0;
+    let imports = 0;
+    let updates = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const request = envelope(init);
+      const method = String(request.method ?? '');
+      const path = String(request.path ?? '');
+      if (method === 'post' && path.startsWith('/list/environment')) {
+        environmentLists += 1;
+        return jsonResponse({
+          data: environmentLists === 1
+            ? []
+            : [{ id: concurrentId, name: 'Acme - prod', owner: '10490519' }]
+        });
+      }
+      if (method === 'post' && path.startsWith('/environment/import')) {
+        imports += 1;
+        return jsonResponse({ error: { name: 'serverError' } }, { status: 503 });
+      }
+      if (method === 'put' && path.startsWith('/environment/')) {
+        updates += 1;
+      }
+      return jsonResponse({});
+    });
+
+    await expect(buildClient(fetchImpl).createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      [{ key: 'baseUrl', value: 'https://api.example.com' }],
+      { onExisting: 'error' }
+    )).rejects.toThrow(/appeared during create reconciliation.*unreviewed UID.*explicit durable adoption is required/);
+
+    expect(imports).toBe(1);
+    expect(updates).toBe(0);
   });
 });
 
@@ -568,6 +687,40 @@ describe('same-process overlap', () => {
     await expect(first).resolves.toBe('10490519-env-one');
     expect(imports).toBe(1);
   });
+
+  it('fails instead of collapsing refresh and reuse policies for the same environment', async () => {
+    let resolveImport: ((response: Response) => void) | undefined;
+    const importGate = new Promise<Response>((resolve) => {
+      resolveImport = resolve;
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const request = envelope(init);
+      const method = String(request.method ?? '');
+      const path = String(request.path ?? '');
+      if (method === 'post' && path.startsWith('/list/environment')) {
+        return jsonResponse({ data: [] });
+      }
+      if (method === 'post' && path.startsWith('/environment/import')) {
+        return importGate;
+      }
+      return jsonResponse({});
+    });
+    const values = [{ key: 'baseUrl', value: 'https://api.example.com' }];
+    const a = buildClient(fetchImpl);
+    const b = buildClient(fetchImpl);
+
+    const refresh = a.createEnvironment('ws-1', 'Acme - prod', values);
+    const reuse = b.createEnvironment(
+      'ws-1',
+      'Acme - prod',
+      values,
+      { onExisting: 'reuse' }
+    );
+
+    await expect(reuse).rejects.toThrow(/incompatible concurrent environment create/i);
+    resolveImport?.(jsonResponse({ data: { id: 'env-one', owner: '10490519' } }));
+    await expect(refresh).resolves.toBe('10490519-env-one');
+  });
 });
 
 
@@ -598,6 +751,8 @@ describe('fresh-process orchestration live discovery reuse', () => {
       specSyncMode: 'update',
       releaseLabel: undefined,
       environments: ['prod'],
+      environmentDefinitions: {},
+      environmentWriteMode: 'refresh',
       repoUrl: 'https://github.com/example/demo',
       integrationBackend: 'bifrost',
       workspaceLinkEnabled: false,

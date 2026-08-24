@@ -7,6 +7,9 @@ import { promisify } from 'node:util';
 import {
   createRepoSyncDependencies,
   decideBranchTier,
+  isDurableApplyDeniedByBranch,
+  isScheduledCiEvent,
+  runDurableOfflinePlanAction,
   runGatedSkip,
   resolveInputs,
   resolvePostmanApiKeyAndTeamId,
@@ -16,6 +19,10 @@ import {
   type ResolvedInputs
 } from './index.js';
 import { runCredentialPreflight } from './lib/postman/credential-identity.js';
+import {
+  isDurableEnvironmentFailure,
+  toDurableEnvironmentBoundaryError
+} from './lib/postman/durable-environment-diagnostics.js';
 import { mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import type { RetryEvent } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
@@ -50,6 +57,12 @@ const CLI_INPUT_NAMES = [
   'spec-sync-mode',
   'release-label',
   'environments-json',
+  'durable-environments-json',
+  'durable-environment-policy',
+  'durable-environment-operation',
+  'durable-environment-uids-json',
+  'durable-project-key',
+  'durable-state-ref',
   'git-provider',
   'ado-token',
   'repo-url',
@@ -564,8 +577,11 @@ export async function runCli(
     return;
   }
 
+  let durableOperation: ResolvedInputs['durableEnvironmentOperation'] | undefined;
+  try {
   const config = parseCliArgs(argv, env);
   const inputs = resolveInputs(config.inputEnv);
+  durableOperation = inputs.durableEnvironmentOperation;
   const branchDecision = decideBranchTier(inputs, config.inputEnv);
   // Non-gated runs still generate artifact/CI files even when repo-write-mode=none.
   if (branchDecision.tier !== 'gated') {
@@ -576,6 +592,33 @@ export async function runCli(
     partialOutputs[name] = String(value ?? '');
     writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
   });
+
+  if (
+    inputs.durableEnvironmentOperation === 'apply' &&
+    isScheduledCiEvent(config.inputEnv)
+  ) {
+    throw new Error('Durable apply is not authorized for scheduled execution');
+  }
+  if (
+    inputs.durableEnvironmentOperation === 'apply' &&
+    isDurableApplyDeniedByBranch(branchDecision)
+  ) {
+    throw new Error(
+      `Durable apply is not authorized for pull-request or ${branchDecision.tier} execution (${branchDecision.reason})`
+    );
+  }
+  if (
+    inputs.durableEnvironmentOperation === 'plan' &&
+    (branchDecision.tier === 'gated' ||
+      !inputs.workspaceId ||
+      (!inputs.postmanAccessToken && !inputs.postmanApiKey))
+  ) {
+    const result = runDurableOfflinePlanAction(inputs, reporter);
+    writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
+    await writeOptionalFile(config.dotenvPath, toDotenv(result));
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
 
   // Match the action entrypoint: a gated branch must never mint an access
   // token, run credential preflight, or construct a Postman client.
@@ -626,7 +669,8 @@ export async function runCli(
       resolvingExec,
       initialMasker,
       {
-        allowApiKeyCreation: inputs.onboardingScope === 'full',
+        allowApiKeyCreation:
+          inputs.onboardingScope === 'full' && inputs.durableEnvironmentOperation === 'off',
         persistGeneratedApiKeySecret: false,
         env
       }
@@ -634,12 +678,20 @@ export async function runCli(
 
   const dependencies = createCliDependencies(inputs, resolved, reporter);
 
-  if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
+  if (
+    inputs.durableEnvironmentOperation === 'off' &&
+    inputs.environmentSyncEnabled &&
+    !dependencies.internalIntegration
+  ) {
     dependencies.core.warning(
       'Skipping system environment association because postman-access-token is not configured'
     );
   }
-  if (inputs.workspaceLinkEnabled && !dependencies.internalIntegration) {
+  if (
+    inputs.durableEnvironmentOperation === 'off' &&
+    inputs.workspaceLinkEnabled &&
+    !dependencies.internalIntegration
+  ) {
     dependencies.core.warning(
       'Skipping workspace linking because postman-access-token is not configured'
     );
@@ -652,7 +704,16 @@ export async function runCli(
   writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(result, null, 2));
   await writeOptionalFile(config.dotenvPath, toDotenv(result));
 
-  writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+  } catch (error) {
+    if (
+      (durableOperation !== undefined && durableOperation !== 'off') ||
+      isDurableEnvironmentFailure(error)
+    ) {
+      throw toDurableEnvironmentBoundaryError(error);
+    }
+    throw error;
+  }
 }
 
 /**

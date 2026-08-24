@@ -29,6 +29,15 @@ import {
   environmentFileName
 } from './lib/postman/environment-yaml.js';
 import {
+  computeDurableEnvironmentDefinitionDigest,
+  parseDurableEnvironmentDefinitionsJson,
+  parseEnvironmentDefinitionsJson,
+  validateResolvedDurableEnvironmentDefinitions,
+  validateResolvedEnvironmentDefinitions,
+  type DurableEnvironmentPolicy,
+  type EnvironmentDefinition
+} from './lib/postman/environment-definitions.js';
+import {
   assertEnvironmentArtifactOwnership,
   canonicalizeManifestRef,
   currentEnvironmentManifestRef,
@@ -40,10 +49,36 @@ import {
   type CloudResourceMap,
   type PostmanResourcesState
 } from './lib/postman/environment-reconciliation.js';
+import {
+  assertCanonicalEnvironmentReferences,
+  parseDurableEnvironmentProvisioningState,
+  upsertDurableEnvironmentProvisioningState
+} from './lib/postman/durable-environment-state.js';
+import {
+  applyDurableEnvironmentPlan,
+  durableEnvironmentObservedDigest,
+  DurableEnvironmentPartialApplyError,
+  parseDurableEnvironmentValues,
+  planDurableEnvironmentsLive,
+  planDurableEnvironmentsOffline,
+  projectDurableEnvironmentOrphans,
+  projectDurableEnvironmentOfflinePlan,
+  projectDurableEnvironmentPlan,
+  type DurableEnvironmentBinding,
+  type DurableEnvironmentResultEntry,
+} from './lib/postman/durable-environment-provisioning.js';
+import {
+  isDurableEnvironmentFailure,
+  toDurableEnvironmentBoundaryError
+} from './lib/postman/durable-environment-diagnostics.js';
 import { writeFileAtomicSync } from './lib/fs/atomic-file.js';
 import { assertPathWithinCwd, hasControlCharacter } from './lib/repo/path-sandbox.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
-import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
+import {
+  RepoMutationPreCommitError,
+  RepoMutationService,
+  resolveCurrentRef
+} from './lib/github/repo-mutation.js';
 import { detectRepoContext, type GitProvider } from './lib/repo/context.js';
 import {
   actionSink,
@@ -137,6 +172,17 @@ export interface ResolvedInputs {
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
   environments: string[];
+  /** @deprecated Unreleased prototype field retained only for source compatibility. */
+  environmentDefinitions?: Record<string, EnvironmentDefinition>;
+  /** @deprecated Unreleased prototype field retained only for source compatibility. */
+  environmentWriteMode?: 'refresh' | 'create-only';
+  durableEnvironments?: string[];
+  durableEnvironmentDefinitions?: Record<string, EnvironmentDefinition>;
+  durableEnvironmentPolicy?: DurableEnvironmentPolicy;
+  durableEnvironmentOperation?: 'off' | 'plan' | 'apply';
+  durableEnvironmentUids?: Record<string, string>;
+  durableProjectKey?: string;
+  durableStateRef?: string;
   repoUrl: string;
   integrationBackend: string;
   workspaceLinkEnabled: boolean;
@@ -202,6 +248,9 @@ interface RepoSyncOutputs {
   'workspace-link-status': Status;
   'environment-sync-status': Status;
   'environment-uids-json': string;
+  'durable-environment-result-json': string;
+  'durable-environment-definition-digest': string;
+  'durable-environment-uids-json': string;
   'mock-url': string;
   'mock-visibility': string;
   'mock-auth-required': string;
@@ -453,7 +502,7 @@ export function getInput(
   if (hasNormalized && hasRunner) {
     if (normalizedValue && runnerValue && normalizedValue !== runnerValue) {
       throw new Error(
-        `Conflicting values for ${name}: ${normalizedName}=${JSON.stringify(normalizedValue)} vs ${runnerName}=${JSON.stringify(runnerValue)}`
+        `Conflicting values for ${name}: both ${normalizedName} and ${runnerName} are set with different values`
       );
     }
   }
@@ -476,21 +525,36 @@ function parseJsonMap(raw: string): Record<string, string> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Expected JSON object');
   }
-  return Object.fromEntries(
-    Object.entries(parsed as Record<string, unknown>).map(([key, value]) => [
-      String(key),
-      String(value ?? '')
-    ])
-  );
+  const result = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    result[String(key)] = String(value ?? '');
+  }
+  return result;
 }
 
-function parseJsonArray(raw: string): string[] {
-  if (!raw.trim()) return [];
-  const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error('Expected JSON array');
+function parseDurableEnvironmentUidMap(raw: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || '{}') as unknown;
+  } catch {
+    throw new Error('durable-environment-uids-json must contain valid JSON');
   }
-  return parsed.map((entry) => String(entry));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('durable-environment-uids-json must contain a JSON object');
+  }
+  const result = Object.create(null) as Record<string, string>;
+  for (const [slug, uid] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof uid !== 'string') {
+      throw new Error('durable-environment-uids-json values must be Postman UID strings');
+    }
+    assertDurableStateIdentifier(uid, 'durable environment UID', 1024);
+    result[slug] = uid;
+  }
+  return result;
+}
+
+function hasOwn(record: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 function readInput(
@@ -515,6 +579,24 @@ function normalizeCollectionSyncMode(value: string): 'refresh' | 'version' {
     return value;
   }
   return 'refresh';
+}
+
+function normalizeDurableEnvironmentPolicy(value: string): DurableEnvironmentPolicy {
+  if (value === 'refresh' || value === 'create-only') {
+    return value;
+  }
+  throw new Error(
+    `Unsupported durable-environment-policy "${value}". Allowed values: create-only, refresh`
+  );
+}
+
+function normalizeDurableEnvironmentOperation(value: string): 'off' | 'plan' | 'apply' {
+  if (value === 'off' || value === 'plan' || value === 'apply') {
+    return value;
+  }
+  throw new Error(
+    `Unsupported durable-environment-operation "${value}". Allowed values: off, plan, apply`
+  );
 }
 
 function normalizeSpecSyncMode(value: string): 'update' | 'version' {
@@ -618,7 +700,20 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     env
   );
 
-  const environments = parseJsonArray(getInput('environments-json', env) || '["prod"]');
+  const parsedEnvironments = parseEnvironmentDefinitionsJson(
+    getInput('environments-json', env) || '["prod"]'
+  );
+  const durableEnvironmentOperation = normalizeDurableEnvironmentOperation(
+    getInput('durable-environment-operation', env) || 'off'
+  );
+  const parsedDurableEnvironments = durableEnvironmentOperation === 'off'
+    ? {
+        environments: [] as string[],
+        definitions: Object.create(null) as Record<string, EnvironmentDefinition>
+      }
+    : parseDurableEnvironmentDefinitionsJson(
+        getInput('durable-environments-json', env) || '[]'
+      );
   const secretsResolverProvider = parseSecretsResolverProvider(getInput('secrets-resolver', env));
   const systemEnvMap = parseJsonMap(getInput('system-env-map-json', env) || '{}');
   const environmentUids = parseJsonMap(getInput('environment-uids-json', env) || '{}');
@@ -642,7 +737,27 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     secretsResolverProvider,
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
     releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
-    environments: environments.length > 0 ? environments : ['prod'],
+    environments:
+      parsedEnvironments.environments.length > 0 ? parsedEnvironments.environments : ['prod'],
+    durableEnvironments: parsedDurableEnvironments.environments,
+    durableEnvironmentDefinitions: parsedDurableEnvironments.definitions,
+    durableEnvironmentPolicy: durableEnvironmentOperation === 'off'
+      ? 'create-only'
+      : normalizeDurableEnvironmentPolicy(
+          getInput('durable-environment-policy', env) || 'create-only'
+        ),
+    durableEnvironmentOperation,
+    durableEnvironmentUids: durableEnvironmentOperation === 'off'
+      ? Object.create(null) as Record<string, string>
+      : parseDurableEnvironmentUidMap(
+          getInput('durable-environment-uids-json', env) || '{}'
+        ),
+    durableProjectKey: durableEnvironmentOperation === 'off'
+      ? ''
+      : getInput('durable-project-key', env),
+    durableStateRef: durableEnvironmentOperation === 'off'
+      ? ''
+      : getInput('durable-state-ref', env) || getInput('canonical-branch', env),
     repoUrl: repoContext.repoUrl || '',
     integrationBackend: getInput('integration-backend', env) || 'bifrost',
     workspaceLinkEnabled: parseBooleanInput(getInput('workspace-link-enabled', env), true),
@@ -827,8 +942,9 @@ function buildEnvironmentValues(
 
 const LEGACY_BASELINE_COLLECTION_PREFIX = '[Baseline]';
 
-const RESOURCES_STATE_VERSION = 2;
-const SUPPORTED_STATE_VERSIONS = new Set([1, RESOURCES_STATE_VERSION]);
+const LEGACY_RESOURCES_STATE_VERSION = 2;
+const RESOURCES_STATE_VERSION = 3;
+const SUPPORTED_STATE_VERSIONS = new Set([1, 2, RESOURCES_STATE_VERSION]);
 
 type SpecReference = {
   repoRelativePath: string;
@@ -864,10 +980,10 @@ function readResourcesState(): PostmanResourcesState | null {
   const state = parsed as PostmanResourcesState;
   if (state.version !== undefined && !SUPPORTED_STATE_VERSIONS.has(Number(state.version))) {
     throw new StateUnreadableError(
-      `.postman/resources.yaml declares unsupported state version ${String(state.version)} (supported: 1, ${RESOURCES_STATE_VERSION}). Upgrade the action or fix the file.`
+      `.postman/resources.yaml declares unsupported state version ${String(state.version)} (supported: 1, ${LEGACY_RESOURCES_STATE_VERSION}, ${RESOURCES_STATE_VERSION}). Upgrade the action or fix the file.`
     );
   }
-  // State v2 is canonical-only on disk. Existing materialization code reads
+  // State v2/v3 is canonical on disk. Existing materialization code reads
   // cloudResources, so present a transient alias and strip it in the writer.
   if (state.canonical && !state.cloudResources) {
     state.cloudResources = { ...state.canonical };
@@ -1158,6 +1274,9 @@ function createOutputs(inputs: ResolvedInputs): RepoSyncOutputs {
     'workspace-link-status': 'skipped',
     'environment-sync-status': 'skipped',
     'environment-uids-json': JSON.stringify(inputs.environmentUids),
+    'durable-environment-result-json': '[]',
+    'durable-environment-definition-digest': '',
+    'durable-environment-uids-json': '{}',
     'mock-url': '',
     'mock-visibility': '',
     'mock-auth-required': 'false',
@@ -1200,6 +1319,12 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_SPEC_SYNC_MODE: readInput(actionCore, 'spec-sync-mode') || 'update',
     INPUT_RELEASE_LABEL: readInput(actionCore, 'release-label'),
     INPUT_ENVIRONMENTS_JSON: readInput(actionCore, 'environments-json') || '["prod"]',
+    INPUT_DURABLE_ENVIRONMENTS_JSON: readInput(actionCore, 'durable-environments-json') || '[]',
+    INPUT_DURABLE_ENVIRONMENT_POLICY: readInput(actionCore, 'durable-environment-policy') || 'create-only',
+    INPUT_DURABLE_ENVIRONMENT_OPERATION: readInput(actionCore, 'durable-environment-operation') || 'off',
+    INPUT_DURABLE_ENVIRONMENT_UIDS_JSON: readInput(actionCore, 'durable-environment-uids-json') || '{}',
+    INPUT_DURABLE_PROJECT_KEY: readInput(actionCore, 'durable-project-key'),
+    INPUT_DURABLE_STATE_REF: readInput(actionCore, 'durable-state-ref'),
     INPUT_GIT_PROVIDER: readInput(actionCore, 'git-provider'),
     INPUT_REPO_URL: readInput(actionCore, 'repo-url'),
     INPUT_INTEGRATION_BACKEND: readInput(actionCore, 'integration-backend') || 'bifrost',
@@ -1469,8 +1594,8 @@ async function upsertEnvironments(
     }
 
     const values = buildEnvironmentValues(envName, runtimeUrl, {
-        secretsResolverProvider: inputs.secretsResolverProvider
-      });
+      secretsResolverProvider: inputs.secretsResolverProvider
+    });
     if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
     try {
       envUids[envName] = await dependencies.postman.createEnvironment(
@@ -1688,7 +1813,11 @@ function buildResourcesManifest(
   delete manifest.localResources;
   delete manifest.cloudResources;
   delete manifest.canonical;
-  manifest.version = RESOURCES_STATE_VERSION;
+  // Durable state v3 is opt-in. Legacy/off runs preserve an existing v3 file
+  // but must not migrate v1/v2 callers merely because this release can read v3.
+  manifest.version = priorState?.version === RESOURCES_STATE_VERSION
+    ? RESOURCES_STATE_VERSION
+    : LEGACY_RESOURCES_STATE_VERSION;
   if (workspaceId) {
     manifest.workspace = { id: workspaceId };
   }
@@ -2915,9 +3044,872 @@ export async function runRepoSync(
     telemetry.emitCompletion('failure');
     // The rethrow reaches setFailed, which names that the run died but not
     // where. The phase line already named the stage; this carries the cause chain.
-    logger.failure('repo sync failed', error);
+    logger.failure(
+      'repo sync failed',
+      inputs.durableEnvironmentOperation && inputs.durableEnvironmentOperation !== 'off'
+        ? toDurableEnvironmentBoundaryError(error)
+        : error
+    );
     throw error;
   }
+}
+
+function normalizeComparableRef(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/^refs\/heads\//u, '')
+    .replace(/^origin\//u, '');
+}
+
+function assertDurableStateIdentifier(
+  value: string,
+  label: 'durable-project-key' | 'durable environment UID',
+  maxScalars: number
+): void {
+  if (!value || value !== value.trim() || !value.isWellFormed()) {
+    throw new Error(`${label} must be a non-empty, trimmed, well-formed string`);
+  }
+  if (Array.from(value).length > maxScalars) {
+    throw new Error(`${label} exceeds its supported identity length`);
+  }
+  if (Array.from(value).some((character) => {
+    const point = character.codePointAt(0) ?? 0;
+    return point <= 0x1f || (point >= 0x7f && point <= 0x9f);
+  })) {
+    throw new Error(`${label} must not contain control code points`);
+  }
+}
+
+function assertDurablePublicationConfiguration(inputs: ResolvedInputs): void {
+  if (inputs.repoWriteMode !== 'commit-and-push') {
+    throw new Error(
+      'Durable apply requires repo-write-mode=commit-and-push repository state publication'
+    );
+  }
+  if (
+    inputs.provider !== 'github' &&
+    inputs.provider !== 'gitlab' &&
+    inputs.provider !== 'azure-devops'
+  ) {
+    throw new Error(
+      `Durable apply cannot publish state with git provider "${inputs.provider}"`
+    );
+  }
+  if (
+    inputs.provider !== 'azure-devops' &&
+    !inputs.githubToken &&
+    !inputs.ghFallbackToken
+  ) {
+    throw new Error(
+      `Durable apply requires a push token for git provider "${inputs.provider}"`
+    );
+  }
+}
+
+function durableBindingsForProject(
+  state: PostmanResourcesState | null,
+  projectKey: string
+): Record<string, DurableEnvironmentBinding> {
+  const bindings = Object.create(null) as Record<string, DurableEnvironmentBinding>;
+  for (const entry of parseDurableEnvironmentProvisioningState(state)) {
+    if (entry.projectKey === projectKey) {
+      bindings[entry.slug] = { uid: entry.uid, displayName: entry.displayName };
+    }
+  }
+  return bindings;
+}
+
+function assertNoLegacyDurableEnvironmentOverlap(
+  state: PostmanResourcesState | null,
+  inputs: Pick<ResolvedInputs, 'artifactDir' | 'projectName' | 'environmentUids' | 'workspaceId'>,
+  environmentNames: Iterable<string>
+): void {
+  const durableBindings = parseDurableEnvironmentProvisioningState(state);
+  if (durableBindings.length === 0) return;
+
+  const trackedWorkspaceId = String(state?.workspace?.id ?? '').trim();
+  const requestedWorkspaceId = inputs.workspaceId.trim();
+  if (
+    trackedWorkspaceId &&
+    requestedWorkspaceId &&
+    trackedWorkspaceId !== requestedWorkspaceId
+  ) {
+    throw new StateUnreadableError(
+      'Legacy sync cannot change the workspace owned by durable environment state'
+    );
+  }
+
+  const requestedArtifacts = new Set(
+    [...environmentNames].map((environmentName) =>
+      currentEnvironmentManifestRef(inputs.artifactDir, inputs.projectName, environmentName)
+    )
+  );
+  const requestedUids = new Set(
+    Object.values(inputs.environmentUids)
+      .map((uid) => String(uid ?? '').trim())
+      .filter(Boolean)
+  );
+  const conflict = durableBindings.find((binding) =>
+    requestedArtifacts.has(binding.artifact) || requestedUids.has(binding.uid)
+  );
+  if (conflict) {
+    throw new StateUnreadableError(
+      `Legacy environment sync overlaps durable environment ${conflict.projectKey}/${conflict.slug}; use durable environment inputs for this binding`
+    );
+  }
+}
+
+function canonicalStateForDurableWrite(
+  state: PostmanResourcesState | null,
+  workspaceId: string
+): PostmanResourcesState {
+  if (state?.workspace?.id && state.workspace.id !== workspaceId) {
+    throw new StateUnreadableError(
+      `tracked workspace ${state.workspace.id} does not match durable workspace ${workspaceId}`
+    );
+  }
+  if (state && state.version !== 2 && state.version !== 3) {
+    throw new StateUnreadableError(
+      'durable provisioning requires resources state v2 or v3; run the environment YAML migration first'
+    );
+  }
+  const canonical = state?.canonical ?? state?.cloudResources ?? {};
+  return {
+    ...(state ?? {}),
+    version: 3,
+    workspace: { ...(state?.workspace ?? {}), id: workspaceId },
+    canonical: {
+      ...canonical,
+      environments: { ...(canonical.environments ?? {}) }
+    }
+  };
+}
+
+type DurableOwnershipPlanEntry = {
+  slug: string;
+  displayName: string;
+  uid?: string;
+};
+
+type CanonicalOwnershipClaim = {
+  resourceClass: 'environment' | 'collection' | 'spec';
+  artifact: string;
+  uid: string;
+};
+
+function canonicalOwnershipClaims(state: PostmanResourcesState): CanonicalOwnershipClaim[] {
+  const claims: CanonicalOwnershipClaim[] = [];
+  const canonical = state.canonical ?? {};
+  for (const [resourceClass, entries] of [
+    ['environment', canonical.environments],
+    ['collection', canonical.collections],
+    ['spec', canonical.specs]
+  ] as const) {
+    for (const [rawArtifact, rawUid] of Object.entries(entries ?? {})) {
+      if (typeof rawUid !== 'string' || !rawUid.trim()) {
+        throw new StateUnreadableError(
+          `canonical.${resourceClass}s must contain non-empty string UID claims`
+        );
+      }
+      const uid = rawUid.trim();
+      claims.push({
+        resourceClass,
+        artifact: canonicalizeManifestRef(rawArtifact),
+        uid
+      });
+    }
+  }
+  return claims;
+}
+
+/** Validate repository ownership claims before the first durable cloud write. */
+function assertDurableOwnershipClaims(
+  state: PostmanResourcesState,
+  inputs: Pick<ResolvedInputs, 'artifactDir' | 'projectName'>,
+  projectKey: string,
+  plan: readonly DurableOwnershipPlanEntry[]
+): void {
+  const claims = canonicalOwnershipClaims(state);
+  const durableClaims = parseDurableEnvironmentProvisioningState(state);
+  const mockArtifact = currentEnvironmentManifestRef(
+    inputs.artifactDir,
+    inputs.projectName,
+    'Mock'
+  );
+
+  for (const entry of plan) {
+    const artifact = currentEnvironmentManifestRef(
+      inputs.artifactDir,
+      inputs.projectName,
+      entry.slug
+    );
+    if (artifact.toLocaleLowerCase('en-US') === mockArtifact.toLocaleLowerCase('en-US')) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} collides with the action-owned Mock environment`
+      );
+    }
+
+    const artifactClaims = claims.filter((claim) => claim.artifact === artifact);
+    if (artifactClaims.length > 1) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is claimed more than once in canonical state`
+      );
+    }
+    const artifactClaim = artifactClaims[0];
+    if (artifactClaim && artifactClaim.resourceClass !== 'environment') {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is claimed by canonical ${artifactClaim.resourceClass} state`
+      );
+    }
+    if (artifactClaim && (!entry.uid || artifactClaim.uid !== entry.uid)) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} artifact is already claimed by a different canonical environment UID`
+      );
+    }
+
+    if (entry.uid) {
+      const uidClaims = claims.filter((claim) => claim.uid === entry.uid);
+      if (
+        uidClaims.length > 1 ||
+        uidClaims.some((claim) =>
+          claim.resourceClass !== 'environment' || claim.artifact !== artifact
+        )
+      ) {
+        throw new StateUnreadableError(
+          `durable environment ${projectKey}/${entry.slug} UID is claimed by another canonical resource`
+        );
+      }
+    }
+
+    const conflictingDurable = durableClaims.find((claim) =>
+      (claim.projectKey !== projectKey || claim.slug !== entry.slug) &&
+      (claim.artifact === artifact || (entry.uid !== undefined && claim.uid === entry.uid))
+    );
+    if (conflictingDurable) {
+      throw new StateUnreadableError(
+        `durable environment ${projectKey}/${entry.slug} conflicts with tracked durable environment ${conflictingDurable.projectKey}/${conflictingDurable.slug}`
+      );
+    }
+  }
+}
+
+/**
+ * Fail before Postman discovery or mutation when a durable artifact target is
+ * outside the checkout, traverses a symlink, or would overwrite repository
+ * content that canonical state does not own.
+ */
+function assertDirectoryPathAvailable(directoryPath: string, label: string): void {
+  const cwd = path.resolve(process.cwd());
+  let candidate = path.resolve(directoryPath);
+  while (candidate !== cwd) {
+    try {
+      const candidateStat = lstatSync(candidate);
+      if (candidateStat.isSymbolicLink()) {
+        throw new StateUnreadableError(
+          `${label} cannot traverse symbolic link ${path.relative(cwd, candidate)}`
+        );
+      }
+      if (!candidateStat.isDirectory()) {
+        throw new StateUnreadableError(
+          `${label} cannot be created because ${path.relative(cwd, candidate)} is not a directory`
+        );
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    candidate = path.dirname(candidate);
+  }
+}
+
+function assertDurableArtifactTargets(
+  state: PostmanResourcesState,
+  inputs: Pick<ResolvedInputs, 'artifactDir' | 'projectName'>,
+  environmentNames: readonly string[],
+  explicitEnvironmentUids: Record<string, string>
+): void {
+  const environmentDirectory = `${inputs.artifactDir}/environments`;
+  assertPathWithinCwd(environmentDirectory, 'durable environment directory');
+  assertPathWithinCwd('.postman/resources.yaml', 'durable resources state');
+  assertDirectoryPathAvailable(environmentDirectory, 'durable environment directory');
+  assertDirectoryPathAvailable('.postman', 'durable resources directory');
+  for (const environmentName of environmentNames) {
+    assertPathWithinCwd(
+      `${environmentDirectory}/${environmentFileName(inputs.projectName, environmentName)}`,
+      'durable environment artifact'
+    );
+  }
+
+  assertEnvironmentArtifactOwnership(
+    {
+      ...state,
+      cloudResources: {
+        ...(state.cloudResources ?? {}),
+        ...(state.canonical ?? {})
+      }
+    },
+    inputs.artifactDir,
+    inputs.projectName,
+    environmentNames,
+    explicitEnvironmentUids,
+    false
+  );
+}
+
+function durableEnvironmentPayload(
+  payload: unknown,
+  slug: string
+): Record<string, unknown> {
+  const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+  if (!root) {
+    throw new Error(`Durable environment "${slug}" returned an unreadable payload`);
+  }
+  const nested = root.data && typeof root.data === 'object' && !Array.isArray(root.data)
+    ? root.data as Record<string, unknown>
+    : root;
+  if (!Array.isArray(nested.values)) {
+    throw new Error(
+      `Durable environment "${slug}" returned an incomplete payload without values`
+    );
+  }
+  return nested;
+}
+
+function hasActionOwnershipMarker(payload: unknown, slug: string): boolean {
+  const environment = durableEnvironmentPayload(payload, slug);
+  return parseDurableEnvironmentValues(environment)
+    .some((value) => value.key === 'x-pm-onboarding');
+}
+
+async function assertNoActionOwnedDurableBindings(
+  plan: readonly DurableOwnershipPlanEntry[],
+  postman: Pick<RepoSyncDependencies['postman'], 'getEnvironment'>
+): Promise<void> {
+  for (const entry of plan) {
+    if (!entry.uid) continue;
+    const payload = await postman.getEnvironment(entry.uid);
+    if (hasActionOwnershipMarker(payload, entry.slug)) {
+      throw new Error(
+        `Durable environment "${entry.slug}" is owned by the branch asset lifecycle and cannot be adopted`
+      );
+    }
+  }
+}
+
+function assertFinalDurableEnvironmentBinding(
+  entry: Pick<DurableEnvironmentResultEntry, 'slug' | 'displayName' | 'uid'>,
+  liveEntries: readonly { name: string; uid: string }[]
+): void {
+  const byName = liveEntries.filter((candidate) => candidate.name === entry.displayName);
+  const byUid = liveEntries.filter((candidate) => candidate.uid === entry.uid);
+  if (
+    byName.length !== 1 ||
+    byName[0]?.uid !== entry.uid ||
+    byUid.length !== 1 ||
+    byUid[0]?.name !== entry.displayName
+  ) {
+    throw new Error(
+      `Durable environment "${entry.slug}" UID/name binding changed before state publication`
+    );
+  }
+}
+
+function assertFinalDurableEnvironmentPayload(
+  entry: Pick<DurableEnvironmentResultEntry, 'slug' | 'displayName' | 'observedDigest'>,
+  payload: unknown
+): Record<string, unknown> {
+  const environment = durableEnvironmentPayload(payload, entry.slug);
+  if (environment.name !== entry.displayName) {
+    throw new Error(
+      `Durable environment "${entry.slug}" payload name changed before state publication`
+    );
+  }
+  const observedDigest = durableEnvironmentObservedDigest(environment, entry.slug);
+  if (!entry.observedDigest || observedDigest !== entry.observedDigest) {
+    throw new Error(
+      `Durable environment "${entry.slug}" value metadata changed before state publication`
+    );
+  }
+  return environment;
+}
+
+function emitDurableEnvironmentRecoveryOutputs(
+  outputs: RepoSyncOutputs,
+  dependencies: RepoSyncDependencies,
+  operation: 'apply',
+  policy: DurableEnvironmentPolicy,
+  definitionDigest: string,
+  entries: readonly DurableEnvironmentResultEntry[],
+  orphans: ReturnType<typeof projectDurableEnvironmentOrphans>,
+  failure?: { slug: string; category: 'apply-failed' }
+): void {
+  const recoveryEntries = entries.map((entry) => ({
+    ...entry,
+    cloudApplied: true,
+    statePublished: false
+  }));
+  outputs['durable-environment-result-json'] = JSON.stringify({
+    operation,
+    policy,
+    definitionDigest,
+    status: failure ? 'partial-failure' : 'cloud-applied/state-not-published',
+    entries: recoveryEntries,
+    orphans,
+    ...(failure ? { failure } : {})
+  });
+  outputs['durable-environment-uids-json'] = JSON.stringify(
+    Object.fromEntries(entries.map((entry) => [entry.slug, entry.uid]))
+  );
+  outputs['sync-status'] = failure
+    ? 'durable-partial-failure'
+    : 'durable-state-not-published';
+  for (const name of [
+    'durable-environment-definition-digest',
+    'durable-environment-result-json',
+    'durable-environment-uids-json',
+    'sync-status'
+  ] as const) {
+    dependencies.core.setOutput(name, outputs[name]);
+  }
+}
+
+async function runDurableEnvironmentProvisioning(
+  inputs: ResolvedInputs,
+  dependencies: RepoSyncDependencies,
+  logger: Logger
+): Promise<RepoSyncOutputs> {
+  const operation = normalizeDurableEnvironmentOperation(
+    String(inputs.durableEnvironmentOperation ?? 'off')
+  );
+  const policy = normalizeDurableEnvironmentPolicy(
+    String(inputs.durableEnvironmentPolicy ?? 'create-only')
+  );
+  const environments = inputs.durableEnvironments ?? [];
+  const definitions = inputs.durableEnvironmentDefinitions ?? Object.create(null) as Record<string, EnvironmentDefinition>;
+  const explicitUids = inputs.durableEnvironmentUids ?? Object.create(null) as Record<string, string>;
+  const projectKey = String(inputs.durableProjectKey ?? '');
+  const outputs = createOutputs(inputs);
+
+  if (operation === 'off') {
+    return outputs;
+  }
+  if (!projectKey) {
+    throw new Error('durable-project-key is required for durable plan or apply');
+  }
+  assertDurableStateIdentifier(projectKey, 'durable-project-key', 256);
+  for (const uid of Object.values(explicitUids)) {
+    assertDurableStateIdentifier(String(uid ?? ''), 'durable environment UID', 1024);
+  }
+  if (Object.keys(explicitUids).some((slug) => !environments.includes(slug))) {
+    throw new Error(
+      'durable-environment-uids-json contains a slug not declared by durable-environments-json'
+    );
+  }
+
+  const orderedDefinitions = environments.map((slug) => {
+    const definition = definitions[slug];
+    if (!definition) {
+      throw new Error(`Durable environment "${slug}" is missing its rich definition`);
+    }
+    return definition;
+  });
+  const digest = computeDurableEnvironmentDefinitionDigest({
+    workspaceId: inputs.workspaceId,
+    projectKey,
+    projectName: inputs.projectName,
+    policy,
+    environments: orderedDefinitions
+  });
+  outputs['durable-environment-definition-digest'] = digest;
+
+  let currentRef = '';
+  let durableStateRef = '';
+  if (operation === 'apply') {
+    if (!inputs.workspaceId) {
+      throw new Error('workspace-id is required for durable apply');
+    }
+    durableStateRef = normalizeComparableRef(
+      String(inputs.durableStateRef || inputs.canonicalBranch || '')
+    );
+    currentRef = normalizeComparableRef(
+      inputs.currentRef || inputs.githubHeadRef || inputs.githubRefName ||
+      resolveCurrentRef({
+        currentRef: inputs.currentRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        repoWriteMode: inputs.repoWriteMode
+      })
+    );
+    if (!durableStateRef) {
+      throw new Error('durable-state-ref or canonical-branch is required for durable apply');
+    }
+    if (currentRef !== durableStateRef) {
+      throw new Error(
+        `Durable apply must run on durable-state-ref "${durableStateRef}" (resolved current ref: "${currentRef || 'unknown'}")`
+      );
+    }
+    assertDurablePublicationConfiguration(inputs);
+    if (!dependencies.repoMutation) {
+      throw new Error('Durable apply requires repository state publication capability');
+    }
+    await logger.phase('durable-environment-publication-preflight', async () =>
+      dependencies.repoMutation!.preflightPush({
+        repoWriteMode: inputs.repoWriteMode,
+        currentRef: durableStateRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
+        githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
+        fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
+        authorityPaths: ['.postman/resources.yaml']
+      })
+    );
+  }
+
+  const trackedState = readResourcesState();
+  const trackedBindings = durableBindingsForProject(trackedState, projectKey);
+  const planInput = {
+    workspaceId: inputs.workspaceId,
+    projectName: inputs.projectName,
+    policy,
+    environments,
+    definitions,
+    explicitUids,
+    trackedBindings
+  };
+  const orphanEntries = projectDurableEnvironmentOrphans(planInput);
+
+  if (!inputs.workspaceId) {
+    if (operation === 'apply') {
+      throw new Error('workspace-id is required for durable apply');
+    }
+    const offline = planDurableEnvironmentsOffline(planInput);
+    outputs['durable-environment-result-json'] = JSON.stringify({
+      operation,
+      policy,
+      definitionDigest: digest,
+      entries: projectDurableEnvironmentOfflinePlan(offline),
+      orphans: orphanEntries
+    });
+    outputs['sync-status'] = 'durable-plan';
+    for (const [name, value] of Object.entries(outputs)) {
+      dependencies.core.setOutput(name, value);
+    }
+    return outputs;
+  }
+
+  let durableWriteState: PostmanResourcesState | undefined;
+  if (operation === 'apply') {
+    durableWriteState = canonicalStateForDurableWrite(trackedState, inputs.workspaceId);
+    assertCanonicalEnvironmentReferences(durableWriteState);
+    assertPathWithinCwd(
+      `${inputs.artifactDir}/environments`,
+      'durable environment directory'
+    );
+    assertPathWithinCwd('.postman/resources.yaml', 'durable resources state');
+    assertDirectoryPathAvailable(
+      `${inputs.artifactDir}/environments`,
+      'durable environment directory'
+    );
+    assertDirectoryPathAvailable('.postman', 'durable resources directory');
+    const environmentDirectory = canonicalizeManifestRef(
+      `../${inputs.artifactDir}/environments`
+    );
+    const reviewedUidByArtifact = new Map<string, string>();
+    for (const slug of environments) {
+      const reviewedUid = String(
+        explicitUids[slug] || trackedBindings[slug]?.uid || ''
+      ).trim();
+      if (reviewedUid) {
+        reviewedUidByArtifact.set(
+          currentEnvironmentManifestRef(inputs.artifactDir, inputs.projectName, slug),
+          reviewedUid
+        );
+      }
+    }
+    const preservedEnvironmentFiles = new Set([
+      ...canonicalOwnershipClaims(durableWriteState)
+        .filter((claim) => path.posix.dirname(claim.artifact) === environmentDirectory)
+        .filter((claim) => reviewedUidByArtifact.get(claim.artifact) !== claim.uid)
+        .map((claim) => path.posix.basename(claim.artifact)),
+      ...getExistingEnvironmentFileNames(
+        inputs.artifactDir,
+        inputs.projectName,
+        environments
+      ),
+      environmentFileName(inputs.projectName, 'Mock')
+    ]);
+    assertUniqueEnvironmentFileNames(
+      inputs.projectName,
+      environments,
+      preservedEnvironmentFiles
+    );
+    const reviewedOwnershipPlan = planDurableEnvironmentsOffline(planInput).map((entry) => ({
+      ...entry,
+      uid: String(explicitUids[entry.slug] || entry.uid || '').trim() || undefined
+    }));
+    assertDurableOwnershipClaims(
+      durableWriteState,
+      inputs,
+      projectKey,
+      reviewedOwnershipPlan
+    );
+    assertDurableArtifactTargets(
+      durableWriteState,
+      inputs,
+      environments,
+      explicitUids
+    );
+  }
+
+  const initialLive = await logger.phase('durable-environment-plan', async () =>
+    dependencies.postman.listEnvironments(inputs.workspaceId)
+  );
+  const livePlan = planDurableEnvironmentsLive(planInput, initialLive, {
+    reportUntrackedCandidates: operation === 'plan'
+  });
+  const publishableLivePlan = livePlan.filter((entry) => entry.action !== 'review-required');
+  const liveOwnershipState = durableWriteState ?? canonicalStateForDurableWrite(
+    trackedState,
+    inputs.workspaceId
+  );
+  assertDurableOwnershipClaims(
+    liveOwnershipState,
+    inputs,
+    projectKey,
+    publishableLivePlan
+  );
+  await assertNoActionOwnedDurableBindings(publishableLivePlan, dependencies.postman);
+  if (operation === 'plan') {
+    outputs['durable-environment-uids-json'] = JSON.stringify(
+      Object.fromEntries(
+        livePlan.flatMap((entry) =>
+          entry.uid && entry.action !== 'review-required'
+            ? [[entry.slug, entry.uid]]
+            : []
+        )
+      )
+    );
+    outputs['durable-environment-result-json'] = JSON.stringify({
+      operation,
+      policy,
+      definitionDigest: digest,
+      entries: projectDurableEnvironmentPlan(livePlan),
+      orphans: orphanEntries
+    });
+    outputs['sync-status'] = 'durable-plan';
+    for (const [name, value] of Object.entries(outputs)) {
+      dependencies.core.setOutput(name, value);
+    }
+    return outputs;
+  }
+
+  if (!durableWriteState) {
+    throw new Error('Durable apply state preflight was not completed');
+  }
+  let applied: DurableEnvironmentResultEntry[];
+  try {
+    applied = await logger.phase('durable-environment-apply', async () =>
+      applyDurableEnvironmentPlan(
+        planInput,
+        dependencies.postman as Parameters<typeof applyDurableEnvironmentPlan>[1],
+        initialLive,
+        livePlan
+      )
+    );
+  } catch (error) {
+    if (error instanceof DurableEnvironmentPartialApplyError) {
+      emitDurableEnvironmentRecoveryOutputs(
+        outputs,
+        dependencies,
+        operation,
+        policy,
+        digest,
+        error.completedEntries,
+        orphanEntries,
+        { slug: error.failedSlug, category: 'apply-failed' }
+      );
+    }
+    throw error;
+  }
+  emitDurableEnvironmentRecoveryOutputs(
+    outputs,
+    dependencies,
+    operation,
+    policy,
+    digest,
+    applied,
+    orphanEntries
+  );
+
+  let nextState = durableWriteState;
+  const finalLive = await dependencies.postman.listEnvironments(inputs.workspaceId);
+  const preparedArtifacts: Array<{ filePath: string; yaml: string }> = [];
+  for (const entry of applied) {
+    assertFinalDurableEnvironmentBinding(entry, finalLive);
+    const artifactRef = currentEnvironmentManifestRef(
+      inputs.artifactDir,
+      inputs.projectName,
+      entry.slug
+    );
+    const canonicalEnvironments = nextState.canonical?.environments ?? {};
+    const conflictingRef = Object.entries(canonicalEnvironments).find(
+      ([ref, uid]) => uid === entry.uid && canonicalizeManifestRef(ref) !== artifactRef
+    );
+    if (conflictingRef) {
+      throw new StateUnreadableError(
+        `durable UID ${entry.uid} is already tracked by ${conflictingRef[0]}`
+      );
+    }
+    nextState = {
+      ...nextState,
+      canonical: {
+        ...(nextState.canonical ?? {}),
+        environments: {
+          ...canonicalEnvironments,
+          [artifactRef]: entry.uid
+        }
+      }
+    };
+    nextState = upsertDurableEnvironmentProvisioningState(nextState, {
+      projectKey,
+      slug: entry.slug,
+      uid: entry.uid,
+      artifact: artifactRef,
+      displayName: entry.displayName,
+      policy,
+      definitionDigest: digest
+    });
+
+    const livePayload = await dependencies.postman.getEnvironment(entry.uid);
+    const finalPayload = assertFinalDurableEnvironmentPayload(
+      entry,
+      livePayload
+    );
+    const sanitizedPayload = sanitizeEnvironmentArtifact(finalPayload);
+    const yaml = serializeEnvironmentYaml({
+      ...(sanitizedPayload && typeof sanitizedPayload === 'object' && !Array.isArray(sanitizedPayload)
+        ? sanitizedPayload as Record<string, unknown>
+        : {}),
+      name: entry.displayName
+    });
+    const filePath = `${inputs.artifactDir}/environments/${environmentFileName(inputs.projectName, entry.slug)}`;
+    assertPathWithinCwd(filePath, 'durable environment artifact');
+    assertEnvironmentYamlRoundTrip(yaml, yaml);
+    preparedArtifacts.push({ filePath, yaml });
+  }
+
+  const serializableState = { ...nextState };
+  delete serializableState.cloudResources;
+  const stateYaml = dumpYaml(serializableState, { noRefs: true, lineWidth: -1 });
+  const parsedState = loadYaml(stateYaml) as PostmanResourcesState;
+  parseDurableEnvironmentProvisioningState(parsedState);
+
+  ensureDir(`${inputs.artifactDir}/environments`);
+  ensureDir('.postman');
+  const publicationTargets = [
+    ...preparedArtifacts.map(({ filePath, yaml }) => ({
+      filePath,
+      content: yaml,
+      validateCandidate: (candidatePath: string) => {
+        assertEnvironmentYamlRoundTrip(readFileSync(candidatePath, 'utf8'), yaml);
+      }
+    })),
+    {
+      filePath: '.postman/resources.yaml',
+      content: stateYaml,
+      validateCandidate: (candidatePath: string) => {
+        const candidateState = loadYaml(
+          readFileSync(candidatePath, 'utf8')
+        ) as PostmanResourcesState;
+        parseDurableEnvironmentProvisioningState(candidateState);
+      }
+    }
+  ];
+  const publicationSnapshots = publicationTargets.map(({ filePath }) => ({
+    filePath,
+    priorContent: existsSync(filePath) ? readFileSync(filePath, 'utf8') : undefined
+  }));
+  const restorePublicationSnapshots = (): void => {
+    for (const snapshot of publicationSnapshots.slice().reverse()) {
+      if (snapshot.priorContent === undefined) {
+        rmSync(snapshot.filePath, { force: true });
+      } else {
+        writeFileAtomicSync(snapshot.filePath, snapshot.priorContent);
+      }
+    }
+  };
+  try {
+    for (const target of publicationTargets) {
+      writeFileAtomicSync(target.filePath, target.content, target.validateCandidate);
+    }
+  } catch (error) {
+    restorePublicationSnapshots();
+    throw error;
+  }
+
+  const durableStagePaths = [
+    '.postman/resources.yaml',
+    ...applied.map((entry) =>
+      `${inputs.artifactDir}/environments/${environmentFileName(inputs.projectName, entry.slug)}`
+    )
+  ];
+  let commit: Awaited<ReturnType<RepoMutationService['commitAndPush']>>;
+  try {
+    commit = await logger.phase('durable-environment-state-publish', async () =>
+      dependencies.repoMutation!.commitAndPush({
+        repoWriteMode: inputs.repoWriteMode,
+        currentRef: durableStateRef,
+        githubHeadRef: inputs.githubHeadRef,
+        githubRefName: inputs.githubRefName,
+        committerName: inputs.committerName,
+        committerEmail: inputs.committerEmail,
+        adoToken: inputs.provider === 'azure-devops' ? inputs.adoToken : undefined,
+        githubToken: inputs.provider === 'azure-devops' ? undefined : inputs.githubToken,
+        fallbackToken: inputs.provider === 'azure-devops' ? undefined : inputs.ghFallbackToken,
+        forceStagePaths: durableStagePaths,
+        removePaths: [],
+        stagePaths: durableStagePaths
+      })
+    );
+  } catch (error) {
+    if (error instanceof RepoMutationPreCommitError && error.indexRestored) {
+      restorePublicationSnapshots();
+    }
+    throw error;
+  }
+  if (!commit.pushed) {
+    throw new Error(
+      'Durable environment state publication did not push the generated state to durable-state-ref'
+    );
+  }
+  const publishedEntries = applied.map((entry) => ({
+    ...entry,
+    cloudApplied: true,
+    statePublished: true
+  }));
+  outputs['durable-environment-result-json'] = JSON.stringify({
+    operation,
+    policy,
+    definitionDigest: digest,
+    entries: publishedEntries,
+    orphans: orphanEntries
+  });
+  outputs['commit-sha'] = commit.commitSha;
+  outputs['resolved-current-ref'] = commit.resolvedCurrentRef || currentRef;
+  outputs['sync-status'] = 'durable-applied';
+  outputs['repo-sync-summary-json'] = JSON.stringify({
+    status: 'durable-applied',
+    definitionDigest: digest,
+    environmentCount: applied.length,
+    commitSha: commit.commitSha,
+    pushed: commit.pushed
+  });
+  for (const [name, value] of Object.entries(outputs)) {
+    dependencies.core.setOutput(name, value);
+  }
+  return outputs;
 }
 
 async function runRepoSyncInner(
@@ -2925,7 +3917,59 @@ async function runRepoSyncInner(
   dependencies: RepoSyncDependencies,
   executionContext?: RepoSyncExecutionContext
 ): Promise<RepoSyncOutputs> {
-  inputs = { ...inputs, onboardingScope: inputs.onboardingScope ?? 'full' };
+  const durableOperation = normalizeDurableEnvironmentOperation(
+    String(inputs.durableEnvironmentOperation ?? 'off')
+  );
+  if (durableOperation !== 'off') {
+    if (durableOperation === 'apply' && inputs.onboardingScope === 'spec-only') {
+      throw new Error(
+        'Durable environment apply requires onboarding-scope=full so environment artifacts and state are published together'
+      );
+    }
+    if (durableOperation === 'apply' && isScheduledCiEvent()) {
+      throw new Error('Durable apply is not authorized for scheduled execution');
+    }
+    const durableBranchDecision = executionContext?.branchDecision ?? decideBranchTier(inputs);
+    if (
+      durableOperation === 'apply' &&
+      isDurableApplyDeniedByBranch(durableBranchDecision)
+    ) {
+      throw new Error(
+        `Durable apply is not authorized for pull-request or ${durableBranchDecision.tier} execution (${durableBranchDecision.reason})`
+      );
+    }
+    const structuredDurable = validateResolvedDurableEnvironmentDefinitions(
+      inputs.durableEnvironments ?? [],
+      inputs.durableEnvironmentDefinitions ?? Object.create(null)
+    );
+    return runDurableEnvironmentProvisioning(
+      {
+        ...inputs,
+        durableEnvironmentOperation: durableOperation,
+        durableEnvironmentPolicy: normalizeDurableEnvironmentPolicy(
+          String(inputs.durableEnvironmentPolicy ?? 'create-only')
+        ),
+        durableEnvironments: structuredDurable.environments,
+        durableEnvironmentDefinitions: structuredDurable.definitions,
+        durableEnvironmentUids: inputs.durableEnvironmentUids ?? Object.create(null),
+        durableProjectKey: String(inputs.durableProjectKey ?? ''),
+        durableStateRef: String(
+          inputs.durableStateRef || inputs.canonicalBranch || ''
+        ).trim()
+      },
+      dependencies,
+      resolveRepoSyncLogger(dependencies)
+    );
+  }
+  const structuredEnvironments = validateResolvedEnvironmentDefinitions(
+    inputs.environments,
+    Object.create(null)
+  );
+  inputs = {
+    ...inputs,
+    onboardingScope: inputs.onboardingScope ?? 'full',
+    environments: structuredEnvironments.environments
+  };
   const mask = resolveRepoSyncMasker(dependencies);
   // Normally the instance runRepoSync built and registered secrets on; the
   // fallback only matters for tests that call this path directly.
@@ -2980,6 +4024,11 @@ async function runRepoSyncInner(
     ...Object.keys(inputs.environmentUids)
   ]);
   const trackedState = readResourcesState();
+  assertNoLegacyDurableEnvironmentOverlap(
+    trackedState,
+    inputs,
+    onboardingScope === 'full' ? environmentNames : []
+  );
   if (onboardingScope === 'full') {
     const durableWorkspaceId = inputs.workspaceId.trim() || trackedState?.workspace?.id?.trim() || '';
     const preservedFileNames = isCanonicalWriter
@@ -2993,7 +4042,9 @@ async function runRepoSyncInner(
       : [];
     assertUniqueEnvironmentFileNames(
       inputs.projectName,
-      environmentNames,
+      inputs.mockEnvironmentEnabled
+        ? [...environmentNames, 'Mock']
+        : environmentNames,
       new Set([
         ...preservedFileNames,
         ...getExistingEnvironmentFileNames(
@@ -3140,7 +4191,9 @@ async function runRepoSyncInner(
     const associations = Object.entries(envUids)
       .map(([envName, envUid]) => ({
         envUid,
-        systemEnvId: inputs.systemEnvMap[envName] || ''
+        systemEnvId: hasOwn(inputs.systemEnvMap, envName)
+          ? inputs.systemEnvMap[envName] ?? ''
+          : ''
       }))
       .filter((entry) => entry.systemEnvId);
     if (associations.length > 0) {
@@ -4117,6 +5170,19 @@ export function decideBranchTier(
   );
 }
 
+export function isDurableApplyDeniedByBranch(decision: BranchDecision): boolean {
+  return decision.identity.isPrContext || decision.tier === 'gated' || decision.tier === 'preview';
+}
+
+export function isScheduledCiEvent(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.GITHUB_EVENT_NAME?.trim().toLowerCase() === 'schedule' ||
+    env.BUILD_REASON?.trim().toLowerCase() === 'schedule' ||
+    env.CI_PIPELINE_SOURCE?.trim().toLowerCase() === 'schedule' ||
+    ['schedule', 'scheduled'].includes(
+      env.BITBUCKET_PIPELINE_TRIGGER_TYPE?.trim().toLowerCase() ?? ''
+    );
+}
+
 /**
  * Gated tier (publish-gate / fork-PR / tag): repo-sync writes canonical
  * artifacts (collections export, envs, mocks, monitors, workspace link, git
@@ -4144,15 +5210,94 @@ export function runGatedSkip(
   return outputs;
 }
 
+export function runDurableOfflinePlanAction(
+  inputs: ResolvedInputs,
+  actionCore: Pick<CoreLike, 'setOutput'>
+): RepoSyncOutputs {
+  const projectKey = String(inputs.durableProjectKey ?? '');
+  if (!projectKey) {
+    throw new Error('durable-project-key is required for durable plan');
+  }
+  assertDurableStateIdentifier(projectKey, 'durable-project-key', 256);
+  for (const uid of Object.values(inputs.durableEnvironmentUids ?? {})) {
+    assertDurableStateIdentifier(String(uid ?? ''), 'durable environment UID', 1024);
+  }
+  const environments = inputs.durableEnvironments ?? [];
+  const definitions = inputs.durableEnvironmentDefinitions ?? Object.create(null) as Record<string, EnvironmentDefinition>;
+  const policy = normalizeDurableEnvironmentPolicy(
+    String(inputs.durableEnvironmentPolicy ?? 'create-only')
+  );
+  const digest = computeDurableEnvironmentDefinitionDigest({
+    workspaceId: inputs.workspaceId,
+    projectKey,
+    projectName: inputs.projectName,
+    policy,
+    environments: environments.map((slug) => {
+      const definition = definitions[slug];
+      if (!definition) {
+        throw new Error(`Durable environment "${slug}" is missing its rich definition`);
+      }
+      return definition;
+    })
+  });
+  const state = readResourcesState();
+  const planInput = {
+    workspaceId: inputs.workspaceId,
+    projectName: inputs.projectName,
+    policy,
+    environments,
+    definitions,
+    explicitUids: inputs.durableEnvironmentUids ?? Object.create(null),
+    trackedBindings: durableBindingsForProject(state, projectKey)
+  };
+  const entries = planDurableEnvironmentsOffline(planInput);
+  const outputs = createOutputs(inputs);
+  outputs['durable-environment-definition-digest'] = digest;
+  outputs['durable-environment-result-json'] = JSON.stringify({
+    operation: 'plan',
+    policy,
+    definitionDigest: digest,
+    entries: projectDurableEnvironmentOfflinePlan(entries),
+    orphans: projectDurableEnvironmentOrphans(planInput)
+  });
+  outputs['sync-status'] = 'durable-plan';
+  for (const [name, value] of Object.entries(outputs)) {
+    actionCore.setOutput(name, value);
+  }
+  return outputs;
+}
+
 export async function runAction(
   actionCore: CoreLike = core,
   actionExec: ExecLike = exec
 ): Promise<RepoSyncOutputs> {
+  let durableOperation: ResolvedInputs['durableEnvironmentOperation'] | undefined;
+  try {
   const inputs = readActionInputs(actionCore);
+  durableOperation = inputs.durableEnvironmentOperation;
 
   // Decide step (branch-aware sync): resolve the immutable BranchDecision from
   // provider CI env BEFORE any credential validation or token mint.
+  if (inputs.durableEnvironmentOperation === 'apply' && isScheduledCiEvent()) {
+    throw new Error('Durable apply is not authorized for scheduled execution');
+  }
   const branchDecision = decideBranchTier(inputs);
+  if (
+    inputs.durableEnvironmentOperation === 'apply' &&
+    isDurableApplyDeniedByBranch(branchDecision)
+  ) {
+    throw new Error(
+      `Durable apply is not authorized for pull-request or ${branchDecision.tier} execution (${branchDecision.reason})`
+    );
+  }
+  if (
+    inputs.durableEnvironmentOperation === 'plan' &&
+    (branchDecision.tier === 'gated' ||
+      !inputs.workspaceId ||
+      (!inputs.postmanAccessToken && !inputs.postmanApiKey))
+  ) {
+    return runDurableOfflinePlanAction(inputs, actionCore);
+  }
   if (branchDecision.tier === 'gated') {
     return runGatedSkip(inputs, branchDecision, actionCore);
   }
@@ -4207,8 +5352,10 @@ export async function runAction(
   });
 
   const resolved = await resolvePostmanApiKeyAndTeamId(inputs, actionCore, actionExec, masker, {
-    allowApiKeyCreation: inputs.onboardingScope === 'full',
-    persistGeneratedApiKeySecret: inputs.onboardingScope === 'full',
+    allowApiKeyCreation:
+      inputs.onboardingScope === 'full' && inputs.durableEnvironmentOperation === 'off',
+    persistGeneratedApiKeySecret:
+      inputs.onboardingScope === 'full' && inputs.durableEnvironmentOperation === 'off',
     env: process.env
   });
   const repository = inputs.repository;
@@ -4225,20 +5372,39 @@ export async function runAction(
     }
   );
 
-  if (inputs.environmentSyncEnabled && !dependencies.internalIntegration) {
+  if (
+    inputs.durableEnvironmentOperation === 'off' &&
+    inputs.environmentSyncEnabled &&
+    !dependencies.internalIntegration
+  ) {
     actionCore.warning(
       'Skipping system environment association because postman-access-token is not configured'
     );
   }
-  if (inputs.workspaceLinkEnabled && !dependencies.internalIntegration) {
+  if (
+    inputs.durableEnvironmentOperation === 'off' &&
+    inputs.workspaceLinkEnabled &&
+    !dependencies.internalIntegration
+  ) {
     actionCore.warning(
       'Skipping workspace linking because postman-access-token is not configured'
     );
   }
 
-  await persistSslSecrets(inputs, actionCore, actionExec, repository);
+  if (inputs.durableEnvironmentOperation === 'off') {
+    await persistSslSecrets(inputs, actionCore, actionExec, repository);
+  }
 
-  return runRepoSync(inputs, dependencies, { branchDecision });
+    return await runRepoSync(inputs, dependencies, { branchDecision });
+  } catch (error) {
+    if (
+      (durableOperation !== undefined && durableOperation !== 'off') ||
+      isDurableEnvironmentFailure(error)
+    ) {
+      throw toDurableEnvironmentBoundaryError(error);
+    }
+    throw error;
+  }
 }
 
 /**
