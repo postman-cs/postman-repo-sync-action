@@ -268,7 +268,7 @@ function resolvePackageVersion(): string {
         name?: string;
         version?: string;
       };
-      if (packageJson.name === '@postman-cse/onboarding-repo-sync' && packageJson.version) {
+      if (packageJson.name === '@postman/onboarding-repo-sync' && packageJson.version) {
         return String(packageJson.version).trim();
       }
     } catch {
