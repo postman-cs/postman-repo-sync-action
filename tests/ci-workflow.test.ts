@@ -199,7 +199,7 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(windows).toContain("if: steps.windows-node-modules.outputs.cache-hit != 'true'");
     expect(windows).toContain('run: npm ci --prefer-offline --no-audit --no-fund');
     expect(windows).toMatch(
-      /run: npm ci --prefer-offline --no-audit --no-fund\n {8}env:\n {10}NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/,
+      /name: Prefetch vendored dependencies\n {8}if: steps\.windows-node-modules\.outputs\.cache-hit != 'true'[\s\S]*?node \.github\/scripts\/prefetch-vendored-deps\.mjs[\s\S]*?run: npm ci --prefer-offline --no-audit --no-fund/,
     );
     // Cache hit skips only install; the full unfiltered package.json "test"
     // script runs via Node's built-in runner (no npm.cmd boot on Windows).
@@ -227,9 +227,11 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(windows).not.toContain('commitlint');
   });
 
-  it('scopes the locked-registry token to each npm ci install step', () => {
-    expect(ciWorkflow.match(/NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/g) ?? []).toHaveLength(3);
-    expect(namedStep(linux, 'Run gates')).not.toContain('NPM_TOKEN');
+  it('prefetches locked dependencies without exposing an npm credential', () => {
+    expect(ciWorkflow.match(/node \.github\/scripts\/prefetch-vendored-deps\.mjs/g) ?? []).toHaveLength(3);
+    expect(ciWorkflow.match(/DEPS_REPO: \$\{\{ secrets\.DEPS_REPO \}\}/g) ?? []).toHaveLength(3);
+    expect(ciWorkflow.match(/DEPS_TOKEN: \$\{\{ secrets\.DEPS_TOKEN \}\}/g) ?? []).toHaveLength(3);
+    expect(ciWorkflow).not.toContain('NPM_TOKEN');
     expect(windows).not.toMatch(/- run: node --run test\n\s+env:/);
   });
 
