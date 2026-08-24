@@ -19,7 +19,7 @@ interface RepoConfig {
   census: string[];
 }
 
-const CONFIG: RepoConfig = {"pkgName":"@postman-cse/onboarding-repo-sync","binName":"postman-repo-sync","pkgMain":"dist/index.cjs","actionMain":"dist/action.cjs","census":["action.cjs","cli.cjs","index.cjs"]};
+const CONFIG: RepoConfig = {"pkgName":"@postman/onboarding-repo-sync","binName":"postman-repo-sync","pkgMain":"dist/index.cjs","actionMain":"dist/action.cjs","census":["action.cjs","cli.cjs","index.cjs"]};
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -24,7 +24,7 @@ function stageReleaseDirectory(packageVersion = '2.1.10') {
   mkdirSync(packageDir);
   writeFileSync(
     join(packageDir, 'package.json'),
-    JSON.stringify({ name: '@postman-cse/onboarding-repo-sync', version: packageVersion })
+    JSON.stringify({ name: '@postman/onboarding-repo-sync', version: packageVersion })
   );
   const tarball = join(directory, 'release.tgz');
   execFileSync('tar', ['-czf', tarball, '-C', packRoot, 'package']);
@@ -41,7 +41,7 @@ function stageReleaseDirectory(packageVersion = '2.1.10') {
     repository: 'postman-cs/postman-repo-sync-action',
     commit_sha: 'abc123',
     tag: `v${packageVersion}`,
-    package_name: '@postman-cse/onboarding-repo-sync',
+    package_name: '@postman/onboarding-repo-sync',
     package_version: packageVersion,
     artifacts
   };
@@ -228,7 +228,7 @@ describe('release artifact contract', () => {
       mkdirSync(packageDir);
       writeFileSync(
         join(packageDir, 'package.json'),
-        JSON.stringify({ name: '@postman-cse/onboarding-repo-sync', version: '9.9.9' })
+        JSON.stringify({ name: '@postman/onboarding-repo-sync', version: '9.9.9' })
       );
       execFileSync('tar', ['-czf', join(directory, 'release.tgz'), '-C', packRoot, 'package']);
       rmSync(packRoot, { recursive: true, force: true });
@@ -291,7 +291,7 @@ describe('release artifact contract', () => {
       publishJob.indexOf('node "$VERIFIER" release-artifacts')
     );
     expect(publishJob.indexOf('node "$VERIFIER" release-artifacts')).toBeLessThan(
-      publishJob.indexOf('Publish npm package or verify registry identity')
+      publishJob.indexOf('Publish GitHub release assets')
     );
 
     // In-process entrypoint (same module CI extracts); avoids double node spawn under host load.
