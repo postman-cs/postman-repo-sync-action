@@ -180,11 +180,8 @@ jobs:
           echo "published=true" >> "$GITHUB_OUTPUT"
       - name: Verify npm registry identity
         if: steps.npm-publish.outputs.published == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"; fi
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
           SRI=$(node -e "const fs=require('fs'),crypto=require('crypto');console.log('sha512-'+crypto.createHash('sha512').update(fs.readFileSync('release-artifacts/release.tgz')).digest('base64'))")
