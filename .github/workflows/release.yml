@@ -216,7 +216,7 @@ jobs:
 
   advance-major-alias:
     needs: [classify, publish]
-    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.outputs.published == 'true' }}
+    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -249,7 +249,7 @@ jobs:
 
   dispatch-live-monitor:
     needs: [classify, publish]
-    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.outputs.published == 'true' }}
+    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
@@ -267,7 +267,7 @@ jobs:
   # composite's daily cron remains the backstop when App secrets are absent.
   notify-composite:
     needs: [classify, publish, advance-major-alias]
-    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.outputs.published == 'true' && needs['advance-major-alias'].result == 'success' }}
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success' }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
