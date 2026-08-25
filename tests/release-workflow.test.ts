@@ -203,7 +203,7 @@ describe('release workflow publishing contract', () => {
     expect(monitor).not.toContain('contents: write');
     expect(monitor).not.toContain('pull-requests: write');
     expect(monitor).toContain('actions/checkout@v7');
-    expect(monitor).toContain("needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success'");
+    expect(monitor).toContain("needs.classify.outputs.release_kind == 'immutable' && needs.publish.outputs.published == 'true'");
     expect(monitor).toContain('E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}');
     expect(monitor).toContain('E2E_GATE_SUITE: smoke');
     expect(monitor).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
@@ -240,7 +240,7 @@ describe('release workflow publishing contract', () => {
     const notify = job('notify-composite');
     expect(notify).toContain('needs: [classify, publish, advance-major-alias]');
     expect(notify).toContain(
-      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success'"
+      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.outputs.published == 'true' && needs['advance-major-alias'].result == 'success'"
     );
     expect(notify).toMatch(/permissions:\s*\{\}/);
     expect(notify).toContain(
