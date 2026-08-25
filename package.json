@@ -54,8 +54,6 @@
     "@actions/core": "^3.0.1",
     "@actions/exec": "^3.0.0",
     "@postman-cse/automation-core": "^1.6.0",
-    "@postman/runtime.models": "^1.13.1",
-    "@postman/v3.export": "0.2.28",
     "js-yaml": "^5.2.1",
     "undici": "^8.10.0"
   },
@@ -63,6 +61,8 @@
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
+    "@postman/runtime.models": "^1.13.1",
+    "@postman/v3.export": "0.2.28",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.0",
     "esbuild": "0.28.1",
