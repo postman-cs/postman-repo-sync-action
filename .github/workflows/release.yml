@@ -220,7 +220,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          token: ${{ secrets.GH_PAT_JARED }}
+          token: ${{ secrets.RELEASE_WORKFLOW_TOKEN }}
           fetch-depth: 1
       - name: Advance rolling major alias without regression
         run: |

@@ -119,7 +119,7 @@ describe('auto-release workflow', () => {
   });
 
   it('fetches full history and tags so burnt versions are visible', () => {
-    expect(autoReleaseWorkflow).toContain('token: ${{ secrets.GH_PAT_JARED }}');
+    expect(autoReleaseWorkflow).toContain('token: ${{ secrets.RELEASE_WORKFLOW_TOKEN }}');
     expect(autoReleaseWorkflow).toContain('fetch-depth: 0');
     expect(autoReleaseWorkflow).toContain('fetch-tags: true');
   });
