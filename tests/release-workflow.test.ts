@@ -224,7 +224,7 @@ describe('release workflow publishing contract', () => {
     expect(alias).toContain('scripts/release-policy.mjs');
     expect(alias).toContain('Candidate $CANDIDATE is older than current alias');
     expect(alias).toContain('actions/checkout@v7');
-    expect(alias).toContain('token: ${{ secrets.GH_PAT }}');
+    expect(alias).toContain('token: ${{ secrets.GH_PAT_JARED }}');
     expect(alias).toContain('fetch-depth: 1');
     expect(alias).toContain('git ls-remote --exit-code --tags origin "refs/tags/$MAJOR"');
     expect(alias).toContain('git fetch --depth=1 --no-tags origin "refs/tags/$MAJOR:refs/tags/$MAJOR"');
