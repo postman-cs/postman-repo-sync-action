@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createLogger, type LogSink } from '@postman-cse/automation-core';
+import { createLogger, type LogSink } from '@postman-cs/automation-core';
 
 import { runRepoSync, type RepoSyncDependencies, type ResolvedInputs } from '../src/index.js';
 

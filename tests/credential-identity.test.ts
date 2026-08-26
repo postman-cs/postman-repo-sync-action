@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HttpError } from '@postman-cse/automation-core';
+import { HttpError } from '@postman-cs/automation-core';
 import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
 import {
   __resetIdentityMemo,
