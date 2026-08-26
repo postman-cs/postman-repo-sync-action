@@ -34,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          token: ${{ secrets.GH_PAT }}
           # Full history and tags: the version selector reads every tag ever
           # cut so it can skip burnt versions instead of reusing them.
           fetch-depth: 0
