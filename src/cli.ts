@@ -21,6 +21,7 @@ import type { RetryEvent } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
 import { runGc } from './lib/repo/gc-runner.js';
 import { renderGcSummary } from './lib/repo/preview-gc.js';
+import { activateWorkingDirectory } from './lib/working-directory.js';
 
 interface CliConfig {
   inputEnv: NodeJS.ProcessEnv;
@@ -39,6 +40,7 @@ const execFileAsync = promisify(execFile);
 type ReporterCore = RepoSyncDependencies['core'];
 
 const CLI_INPUT_NAMES = [
+  'working-directory',
   'project-name',
   'workspace-id',
   'baseline-collection-id',
@@ -565,6 +567,7 @@ export async function runCli(
   }
 
   const config = parseCliArgs(argv, env);
+  activateWorkingDirectory(config.inputEnv.INPUT_WORKING_DIRECTORY, process.cwd());
   const inputs = resolveInputs(config.inputEnv);
   const branchDecision = decideBranchTier(inputs, config.inputEnv);
   // Non-gated runs still generate artifact/CI files even when repo-write-mode=none.
@@ -576,6 +579,11 @@ export async function runCli(
     partialOutputs[name] = String(value ?? '');
     writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
   });
+  if (inputs.generateCiWorkflowDefaulted) {
+    reporter.info(
+      'working-directory is set; generate-ci-workflow defaulted to false. Use the root monorepo dispatcher workflow.'
+    );
+  }
 
   // Match the action entrypoint: a gated branch must never mint an access
   // token, run credential preflight, or construct a Postman client.

@@ -89,6 +89,7 @@ import {
   type BranchDecision,
   type BranchStrategy
 } from './lib/repo/branch-decision.js';
+import { activateWorkingDirectory } from './lib/working-directory.js';
 
 type EnvironmentValues = {
   key: string;
@@ -101,6 +102,7 @@ type Status = 'success' | 'skipped' | 'failed';
 export type CiRunnerOs = 'linux' | 'windows';
 
 export interface ResolvedInputs {
+  workingDirectory?: string;
   projectName: string;
   workspaceId: string;
   baselineCollectionId: string;
@@ -141,6 +143,7 @@ export interface ResolvedInputs {
   provider: GitProvider;
   ciWorkflowBase64: string;
   generateCiWorkflow: boolean;
+  generateCiWorkflowDefaulted?: boolean;
   ciRunnerOs?: CiRunnerOs;
   monitorType: string;
   ciWorkflowPath: string;
@@ -602,8 +605,23 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   const postmanRegion = parsePostmanRegion(getInput('postman-region', env));
   const postmanStack = parsePostmanStack(getInput('postman-stack', env));
   const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion, env);
+  const workingDirectory = getInput('working-directory', env);
+  const generateCiWorkflowInput = getInput('generate-ci-workflow', env);
+  let generateCiWorkflow = parseBooleanInput(generateCiWorkflowInput, true);
+  let generateCiWorkflowDefaulted = false;
+  if (workingDirectory) {
+    if (!generateCiWorkflowInput) {
+      generateCiWorkflow = false;
+      generateCiWorkflowDefaulted = true;
+    } else if (generateCiWorkflow) {
+      throw new Error(
+        'generate-ci-workflow=true is not supported with working-directory because GitHub ignores nested workflow files. Set generate-ci-workflow=false and use the monorepo dispatcher guide.'
+      );
+    }
+  }
 
   return {
+    workingDirectory,
     projectName: getInput('project-name', env),
     workspaceId: getInput('workspace-id', env),
     baselineCollectionId: getInput('baseline-collection-id', env),
@@ -657,7 +675,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     ghFallbackToken: getInput('gh-fallback-token', env),
     provider: repoContext.provider,
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
-    generateCiWorkflow: parseBooleanInput(getInput('generate-ci-workflow', env), true),
+    generateCiWorkflow,
+    generateCiWorkflowDefaulted,
     ciRunnerOs: parseCiRunnerOs(getInput('ci-runner-os', env)),
     monitorType: getInput('monitor-type', env) || 'cloud',
     ciWorkflowPath:
@@ -1211,6 +1230,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
 
   const inputs = resolveInputs({
     ...process.env,
+    INPUT_WORKING_DIRECTORY: readInput(actionCore, 'working-directory'),
     INPUT_PROJECT_NAME: projectName,
     INPUT_WORKSPACE_ID: readInput(actionCore, 'workspace-id'),
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
@@ -4015,6 +4035,7 @@ export function createRepoSyncDependencies(
     repository &&
     (inputs.repoWriteMode === 'commit-only' || inputs.repoWriteMode === 'commit-and-push')
       ? new RepoMutationService({
+          cwd: process.cwd(),
           provider: inputs.provider,
           repository,
           repoUrl: inputs.repoUrl || undefined,
@@ -4109,7 +4130,16 @@ export async function runAction(
   actionCore: CoreLike = core,
   actionExec: ExecLike = exec
 ): Promise<RepoSyncOutputs> {
+  activateWorkingDirectory(
+    actionCore.getInput('working-directory'),
+    process.env.GITHUB_WORKSPACE ?? process.cwd()
+  );
   const inputs = readActionInputs(actionCore);
+  if (inputs.generateCiWorkflowDefaulted) {
+    actionCore.info(
+      'working-directory is set; generate-ci-workflow defaulted to false. Use the root monorepo dispatcher workflow.'
+    );
+  }
 
   // Decide step (branch-aware sync): resolve the immutable BranchDecision from
   // provider CI env BEFORE any credential validation or token mint.

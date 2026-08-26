@@ -10,6 +10,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 const CI_TIMEOUT_MS = 30_000;
 
 const windowsCwdSensitiveTests = [
+  'tests/working-directory.test.ts',
   'tests/repo-sync-action.test.ts',
   'tests/contract/credential-matrix.test.ts',
   'tests/contract/cassette-replay.test.ts',

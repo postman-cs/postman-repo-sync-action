@@ -90,11 +90,14 @@ export const postmanRepoSyncActionContract: {
     committerEmail: 'support@postman.com'
   },
   inputs: {
-
-    'generate-ci-workflow': {
-      description: 'Whether to generate the CI workflow file',
+    'working-directory': {
+      description: 'Repository-root-relative directory used for all local inputs and generated artifacts.',
       required: false,
-      default: 'true'
+      default: ''
+    },
+    'generate-ci-workflow': {
+      description: 'Whether to generate the CI workflow file. Defaults to true at the repository root and false when working-directory is set.',
+      required: false
     },
     'ci-workflow-path': {
       description: 'Path to write the generated CI workflow file',

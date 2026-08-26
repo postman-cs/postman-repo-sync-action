@@ -8,6 +8,7 @@ Part of the [Postman API Onboarding suite](https://github.com/postman-cs/postman
 
 - [Usage](#usage)
 - [Examples](#examples)
+- [Monorepos](#monorepos)
 - [Inputs](#inputs) / [Outputs](#outputs)
 - [How it works](#how-it-works)
 
@@ -134,6 +135,13 @@ with:
 
 On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.postman_environment.json`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
 
+## Monorepos
+
+Set `working-directory` to a service directory to keep its `postman/` and `.postman/` state isolated.
+Use one repository-root dispatcher workflow; nested `.github/workflows/` directories are ignored by
+GitHub. See the [monorepo onboarding guide](docs/monorepo.md) for the supported layout, change
+detection, concurrency, loop prevention, credentials, and CLI usage.
+
 ### mTLS certificates for Postman CLI runs
 
 The generated CI workflow can run [Postman CLI collection runs](https://learning.postman.com/docs/postman-cli/postman-cli-collections/) with client certificates. Pass the cert material as inputs; when a GitHub token and repository context are available, the action persists them as repository secrets (`POSTMAN_SSL_CLIENT_CERT_B64`, `POSTMAN_SSL_CLIENT_KEY_B64`, `POSTMAN_SSL_CLIENT_PASSPHRASE`, `POSTMAN_SSL_EXTRA_CA_CERTS_B64`) for the generated workflow:
@@ -150,7 +158,8 @@ with:
 <!-- inputs-table:start -->
 | Name | Description | Required | Default |
 | --- | --- | --- | --- |
-| `generate-ci-workflow` | Whether to generate the CI workflow file | no | `true` |
+| `working-directory` | Repository-root-relative directory used for all local inputs and generated artifacts. | no | `""` |
+| `generate-ci-workflow` | Whether to generate the CI workflow file. Defaults to true at the repository root and false when working-directory is set. | no |  |
 | `ci-workflow-path` | Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise. | no |  |
 | `ci-runner-os` | Runner operating system for the generated CI workflow. Use windows for native PowerShell Azure DevOps CI. | no | `linux` |
 | `project-name` | Service project name used for environment, mock, and monitor naming. | yes |  |
