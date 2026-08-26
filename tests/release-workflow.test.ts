@@ -217,13 +217,14 @@ describe('release workflow publishing contract', () => {
   it('keeps a single non-regressing rolling major alias job after publish with bounded fetch', () => {
     const alias = job('advance-major-alias');
     expect(alias).toMatch(/^ {2}advance-major-alias:/m);
-    expect(alias).toMatch(/permissions:\n\s+contents: write\n\s+actions: write/);
+    expect(alias).toMatch(/permissions:\n\s+contents: read/);
     expect(alias).toContain('Advance rolling major alias without regression');
     expect(alias).toContain('require(\'./package.json\').version');
     expect(alias).toContain('isSemverOlder');
     expect(alias).toContain('scripts/release-policy.mjs');
     expect(alias).toContain('Candidate $CANDIDATE is older than current alias');
     expect(alias).toContain('actions/checkout@v7');
+    expect(alias).toContain('token: ${{ secrets.GH_PAT }}');
     expect(alias).toContain('fetch-depth: 1');
     expect(alias).toContain('git ls-remote --exit-code --tags origin "refs/tags/$MAJOR"');
     expect(alias).toContain('git fetch --depth=1 --no-tags origin "refs/tags/$MAJOR:refs/tags/$MAJOR"');

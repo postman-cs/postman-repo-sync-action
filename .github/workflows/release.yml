@@ -216,11 +216,11 @@ jobs:
     if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      actions: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
+          token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
       - name: Advance rolling major alias without regression
         run: |
