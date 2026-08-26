@@ -167,6 +167,12 @@ describe('auto-release workflow', () => {
     expect(autoReleaseWorkflow).toContain('workflows: [Release]');
     expect(autoReleaseWorkflow).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(autoReleaseWorkflow).toContain('git rev-parse --verify "${ALIAS}^{commit}"');
+    expect(autoReleaseWorkflow).toContain(
+      'CURRENT_VERSION="$(git show "${ALIAS}^{commit}:package.json"'
+    );
+    expect(autoReleaseWorkflow).toContain('"$LATEST_VERSION" "$CURRENT_VERSION"');
+    expect(autoReleaseWorkflow).toContain('git tag -fa "$ALIAS"');
+    expect(autoReleaseWorkflow).toContain('git push origin "$ALIAS" --force');
   });
 
   it('never cancels a cut in flight', () => {

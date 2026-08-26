@@ -217,6 +217,7 @@ describe('release workflow publishing contract', () => {
   it('keeps a single non-regressing rolling major alias job after publish with bounded fetch', () => {
     const alias = job('advance-major-alias');
     expect(alias).toMatch(/^ {2}advance-major-alias:/m);
+    expect(alias).toMatch(/permissions:\n\s+contents: write\n\s+actions: write/);
     expect(alias).toContain('Advance rolling major alias without regression');
     expect(alias).toContain('require(\'./package.json\').version');
     expect(alias).toContain('isSemverOlder');
