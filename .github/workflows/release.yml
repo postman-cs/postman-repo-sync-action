@@ -149,11 +149,9 @@ jobs:
       - name: Publish npm package
         id: npm-publish
         continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"; fi
+          sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           echo "published=false" >> "$GITHUB_OUTPUT"
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
@@ -207,7 +205,7 @@ jobs:
         run: |
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
-          MESSAGE="npm publish for $PKG@$VERSION did not complete (missing/invalid NPM_TOKEN or registry error); GitHub Release remains authoritative; recover via backfill-npm.yml once publish access exists"
+          MESSAGE="npm publish for $PKG@$VERSION did not complete (OIDC trusted publisher or registry error); GitHub Release remains authoritative; recover via backfill-npm.yml if needed"
           echo "::warning::$MESSAGE"
           echo "::warning::$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
 
