@@ -1,7 +1,7 @@
 /**
  * Cross-action cassette replay: repo-sync drives its REAL runAction composition
  * root offline from a committed cassette through the SAME shared transport
- * bootstrap uses (`@postman-cse/automation-core/cassette`), with zero live
+ * bootstrap uses (`@postman-cs/automation-core/cassette`), with zero live
  * transport.
  *
  * "Zero live transport" is structural. The only fetch the run can see is
@@ -13,7 +13,7 @@
  * Regenerate with `npm run record:cassettes`.
  */
 import { describe, expect, it } from 'vitest';
-import { createReplayFetch } from '@postman-cse/automation-core/cassette';
+import { createReplayFetch } from '@postman-cs/automation-core/cassette';
 
 import { runContractAction, type ContractRunResult } from './harness.js';
 import { createPlatform } from './platform-fake.js';

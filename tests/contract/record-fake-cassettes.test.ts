@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyCassette,
   createRecordingFetch
-} from '@postman-cse/automation-core/cassette';
+} from '@postman-cs/automation-core/cassette';
 
 import { createSecretMasker } from '../../src/lib/secrets.js';
 import { createPlatform } from './platform-fake.js';

@@ -3,7 +3,7 @@ import {
   retry,
   sleep as defaultSleep,
   type AccessTokenGatewayClient
-} from '@postman-cse/automation-core';
+} from '@postman-cs/automation-core';
 import {
   isManagedPrivateMockAuthRootHook,
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,

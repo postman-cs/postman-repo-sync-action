@@ -17,7 +17,7 @@ src/
     ci-workflow-template.ts        # Generated ci.yml template
     ssl-validation.ts              # mTLS cert validation
     secrets.ts                    # Secret handling
-  @postman-cse/automation-core    # Shared gateway transport, retry, and HttpError
+  @postman-cs/automation-core    # Shared gateway transport, retry, and HttpError
   postman-v3/converter.ts          # Collection -> canonical v3 YAML (@postman libs)
 tests/
 ```
