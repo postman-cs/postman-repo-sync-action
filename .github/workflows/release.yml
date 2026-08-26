@@ -205,7 +205,7 @@ jobs:
         run: |
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
-          MESSAGE="npm publish for $PKG@$VERSION did not complete (OIDC trusted publisher or registry error); GitHub Release remains authoritative; recover via backfill-npm.yml if needed"
+          MESSAGE="npm publish for $PKG@$VERSION did not complete (OIDC trusted publisher or registry error); GitHub Release remains authoritative; rerun this release after trusted publishing is restored"
           echo "::warning::$MESSAGE"
           echo "::warning::$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
 
