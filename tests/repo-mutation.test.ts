@@ -341,6 +341,32 @@ describe('repo mutation helpers', () => {
     ]);
   });
 
+  it('fails when the commit is rejected instead of reporting the previous HEAD', async () => {
+    const execute = createExecuteMock(
+      createCommandMap({
+        'git commit -m chore: sync Postman artifacts and metadata': {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'pre-commit hook declined the commit'
+        }
+      })
+    );
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(
+      repoMutation.commitAndPush({
+        repoWriteMode: 'commit-only',
+        committerName: 'Postman',
+        committerEmail: 'support@postman.com',
+        stagePaths: ['postman', '.postman', '.github/workflows']
+      })
+    ).rejects.toThrow('pre-commit hook declined the commit');
+    expect(execute).not.toHaveBeenCalledWith('git', ['rev-parse', 'HEAD']);
+  });
+
   it('returns before git mutations when no stage paths are provided', async () => {
     const execute = createExecuteMock(createCommandMap({}));
     const repoMutation = new RepoMutationService({

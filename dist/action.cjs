@@ -115407,12 +115407,23 @@ var RepoMutationService = class {
         resolvedCurrentRef
       };
     }
-    await this.execute("git", [
+    const commit = await this.execute("git", [
       "commit",
       "-m",
       "chore: sync Postman artifacts and metadata"
     ]);
-    let commitSha = (await this.execute("git", ["rev-parse", "HEAD"])).stdout.trim();
+    if (commit.exitCode !== 0) {
+      throw new Error(
+        secretMasker(commit.stderr || commit.stdout || "Failed to commit generated changes")
+      );
+    }
+    const revision = await this.execute("git", ["rev-parse", "HEAD"]);
+    let commitSha = revision.stdout.trim();
+    if (revision.exitCode !== 0 || !commitSha) {
+      throw new Error(
+        secretMasker(revision.stderr || revision.stdout || "Failed to resolve generated commit")
+      );
+    }
     if (options.repoWriteMode !== "commit-and-push") {
       return {
         commitSha,
