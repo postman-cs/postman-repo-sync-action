@@ -56,7 +56,7 @@ The plain-env fallback (3) is what makes Jenkins [`withCredentials`](https://www
 
 Unlike some sibling actions, the repo-sync **binary makes no runtime tool downloads on any path** — not even when a `postman-api-key` is supplied. With a PMAK it only mints the access token and runs a `GET /me` preflight; both are ordinary API calls. So there is no lint/CLI-install or breaking-change download to disable for a locked-down run.
 
-One thing does carry a downstream network dependency: with `generate-ci-workflow` at its default (`true`), repo-sync **writes** a CI workflow file into the repo that, *when your CI later runs it*, `curl | sh`-installs the [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) from `dl-cli.pstmn.io` and runs `postman login --with-api-key`. That is a requirement of the *generated pipeline*, executed by your CI later — not of this binary. If your downstream runners are also locked down, either set `generate-ci-workflow: false`, or pre-provision the Postman CLI and mirror `dl-cli.pstmn.io` for those runners.
+One thing does carry a downstream network dependency: at the repository root, `generate-ci-workflow` defaults to `true`, so repo-sync **writes** a CI workflow file that, *when your CI later runs it*, `curl | sh`-installs the [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) from `dl-cli.pstmn.io` and runs `postman login --with-api-key`. Service-directory runs default it to `false` because GitHub ignores nested workflow files. This is a requirement of the *generated pipeline*, executed by your CI later — not of this binary. If your downstream runners are also locked down, either set `generate-ci-workflow: false`, or pre-provision the Postman CLI and mirror `dl-cli.pstmn.io` for those runners.
 
 ### Minting an access token
 
@@ -121,7 +121,7 @@ Pre-minting the access token on a connected host and injecting it as `POSTMAN_AC
 
 ## Run
 
-Run from **inside the git checkout** you want to sync — repo-sync writes artifacts under `postman/` and `.postman/` and (in commit modes) commits them. Inputs are the same kebab-case names as [`action.yml`](../action.yml), passed as `--<input-name> <value>`:
+Run from **inside the git checkout** you want to sync — repo-sync writes artifacts under `postman/` and `.postman/` and (in commit modes) commits them. For monorepos, run from the checkout root and pass `--working-directory services/<service>`. Inputs are the same kebab-case names as [`action.yml`](../action.yml), passed as `--<input-name> <value>`:
 
 ```bash
 export POSTMAN_ACCESS_TOKEN="<minted-token>"
@@ -228,5 +228,5 @@ pipeline {
 - **Platform:** linux-x64 (glibc) only. arm64/Windows/macOS targets are not built yet.
 - **Network:** not air-gapped — requires outbound access to the Postman API/gateway hosts for the whole run. See [Network requirements](#network-requirements).
 - **git:** the binary bundles Node, not git. `--repo-write-mode commit-only` and `commit-and-push` shell out to `git`, which must be on the agent; `commit-and-push` also needs push credentials on the checked-out ref. `--repo-write-mode none` writes files only and needs no git.
-- **Generated CI workflow:** with `generate-ci-workflow: true` (default), the workflow file repo-sync writes installs the Postman CLI from `dl-cli.pstmn.io` and runs `postman login` *when your CI later executes it*. That is a downstream requirement, not one of this binary. Disable with `generate-ci-workflow: false` or pre-provision the CLI on those runners.
+- **Generated CI workflow:** at the repository root, `generate-ci-workflow` defaults to `true`; with `working-directory`, it defaults to `false` and explicit `true` is rejected because GitHub ignores nested workflows. A generated root workflow installs the Postman CLI from `dl-cli.pstmn.io` and runs `postman login` *when your CI later executes it*. That is a downstream requirement, not one of this binary. Disable with `generate-ci-workflow: false` or pre-provision the CLI on those runners.
 - **Version:** the embedded `--version` and telemetry version are baked in at build time from the release tag; the versioned filename (`postman-repo-sync-<version>-linux-x64`) also carries it.
