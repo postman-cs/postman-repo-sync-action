@@ -49,7 +49,7 @@ The same gates run locally before any push:
 
 ## npm package
 
-The CLI publishes as `@postman/onboarding-repo-sync` with versions that match the GitHub release tag. The rolling current-major `vN` alias updates the action channel and skips npm publishing.
+The CLI publishes as `@postman-cs/onboarding-repo-sync` with versions that match the GitHub release tag. The rolling current-major `vN` alias updates the action channel and skips npm publishing.
 
 ## Compatibility
 

@@ -1,5 +1,5 @@
 {
-  "name": "@postman/onboarding-repo-sync",
+  "name": "@postman-cs/onboarding-repo-sync",
   "version": "2.8.7",
   "description": "Postman repo sync GitHub Action.",
   "type": "module",

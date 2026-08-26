@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"; fi
-          PKG='@postman/onboarding-repo-sync'
+          PKG='@postman-cs/onboarding-repo-sync'
           for TAG in ${{ inputs.tags }}; do
             DIR="$(mktemp -d)"
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'release.tgz' --dir "$DIR"

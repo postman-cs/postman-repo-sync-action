@@ -113143,9 +113143,9 @@ function renderGcWorkflowTemplate() {
     "          # provider ambient credential (GITHUB_TOKEN via git ls-remote) for branch existence.",
     "          # Daily scheduled run is the retention executor (TTL contract of last resort).",
     '          if [ -n "${{ inputs.branch }}" ]; then',
-    '            npx @postman-cse/onboarding-repo-sync gc --branch "${{ inputs.branch }}" --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
+    '            npx @postman-cs/onboarding-repo-sync gc --branch "${{ inputs.branch }}" --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
     "          else",
-    '            npx @postman-cse/onboarding-repo-sync gc --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
+    '            npx @postman-cs/onboarding-repo-sync gc --workspace-id "$POSTMAN_WORKSPACE_ID" --repo-url "$REPO_URL"',
     "          fi",
     "      - name: Orphan audit summary (job summary)",
     "        if: always()",
@@ -121635,7 +121635,7 @@ function resolvePackageVersion() {
   for (const packageJsonPath of candidates) {
     try {
       const packageJson = JSON.parse((0, import_node_fs7.readFileSync)(packageJsonPath, "utf8"));
-      if (packageJson.name === "@postman/onboarding-repo-sync" && packageJson.version) {
+      if (packageJson.name === "@postman-cs/onboarding-repo-sync" && packageJson.version) {
         return String(packageJson.version).trim();
       }
     } catch {
