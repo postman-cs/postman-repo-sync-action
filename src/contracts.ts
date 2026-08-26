@@ -183,7 +183,7 @@ export const postmanRepoSyncActionContract: {
       default: ''
     },
     'environments-json': {
-      description: 'JSON array of environment slugs to create or update.',
+      description: 'JSON array of environment slugs or full definitions ({slug, values}) to create or replace. Secret-typed values must be empty runtime slots.',
       required: false,
       default: '["prod"]'
     },

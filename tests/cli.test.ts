@@ -59,6 +59,16 @@ describe('cli', () => {
     expect(config.dotenvPath).toBe('.env.repo-sync');
   });
 
+  it('passes a rich environments-json value through the CLI without rewriting it', () => {
+    const value = '[{"slug":"dev","values":[{"key":"jwtToken","type":"secret"}]}]';
+    const config = parseCliArgs(['--environments-json', value], {});
+
+    expect(config.inputEnv.INPUT_ENVIRONMENTS_JSON).toBe(value);
+    expect(resolveInputs(config.inputEnv).environmentDefinitions?.dev).toEqual([
+      { key: 'jwtToken', value: '', type: 'secret', enabled: true }
+    ]);
+  });
+
   it('resolves credentials from flags, action inputs, then plain environment variables', () => {
     const plain = resolveInputs({
       POSTMAN_API_KEY: 'plain-api-key',

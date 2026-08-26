@@ -68,6 +68,15 @@ The example permissions let `GITHUB_TOKEN` commit generated artifacts and update
 
 `postman-access-token` is required: every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace-to-repository linking and system environment association runs through the access-token gateway. Use `postman-resolve-service-token-action` to mint it at runtime from a [Postman service account](https://learning.postman.com/docs/administration/service-accounts/) PMAK. Without it the action fails fast — the PMAK is not an asset-routing fallback; it only mints/re-mints the access token, powers the generated CI workflow's `postman login --with-api-key`, and mints the CI `POSTMAN_API_KEY` secret. See [docs/credentials.md](docs/credentials.md).
 
+To manage the complete values for an environment, use a rich entry in the same input. String entries remain backward-compatible and receive generated values; rich entries replace the environment values exactly as supplied (plus the action's branch-ownership marker when applicable).
+
+```yaml
+environments-json: >-
+  [{"slug":"dev","values":[{"key":"baseUrl","value":"https://dev.example.com"},{"key":"jwtToken","value":"","type":"secret"}]}]
+```
+
+Secret-typed values must be empty. Supply the real secret as a masked runtime variable from the customer's vault when running the collection; repo-sync neither reads nor persists that value. `value`, `type`, and `enabled` default to `""`, `"default"`, and `true`. `env-runtime-urls-json` and generated credential slots apply only to string entries because a rich entry is the complete desired definition.
+
 ### Disable CI workflow generation
 
 For existing repositories that already own their CI workflow, disable workflow generation:
@@ -169,7 +178,7 @@ with:
 | `mock-visibility` | Required mock access policy. Public is anonymous; private requires a runtime x-api-key supplied by the caller and is never persisted by repo-sync. | no | `private` |
 | `mock-environment-enabled` | Create or update a dedicated manual-validation environment whose baseUrl is the validated mock URL. This environment is excluded from runtime CI selection and never contains a mock credential. | no | `false` |
 | `monitor-cron` | Cron expression for monitor scheduling (e.g. '0 */6 * * *'). When empty, the monitor is created disabled and triggered to run once per workflow invocation (and once on every subsequent run). | no | `""` |
-| `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
+| `environments-json` | JSON array of environment slugs or full definitions ({slug, values}) to create or replace. Secret-typed values must be empty runtime slots. | no | `["prod"]` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
 | `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
 | `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
