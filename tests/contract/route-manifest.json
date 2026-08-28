@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "routes": [
     {
+      "id": "github-api.actions-secrets.public-key",
+      "service": "github-api",
+      "method": "GET",
+      "path": "/repos/{param}/{param}/actions/secrets/public-key",
+      "classification": "intentionally-unsimulated",
+      "reason": "Fetches the repository public key used for GitHub Actions secret encryption. Focused tests use an injected fetcher; a live cassette would contain authenticated repository traffic."
+    },
+    {
+      "id": "github-api.actions-secrets.write",
+      "service": "github-api",
+      "method": "PUT",
+      "path": "/repos/{param}/{param}/actions/secrets/{param}",
+      "classification": "intentionally-unsimulated",
+      "reason": "Writes sealed-box encrypted repository Actions secrets. Focused tests cover ordered writes and redacted failures; live cassettes would mutate credentials."
+    },
+    {
       "id": "api-catalog.associate-system-environments",
       "service": "api-catalog",
       "method": "POST",
