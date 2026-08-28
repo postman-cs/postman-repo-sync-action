@@ -33,7 +33,7 @@ import {
   secretsResolverEnvironmentKeys,
   type Logger,
   type SecretsResolverProvider
-} from '@postman-cse/automation-core';
+} from '@postman-cs/automation-core';
 import { resolveActionVersion } from './action-version.js';
 import {
   createInternalIntegrationAdapter,
@@ -52,7 +52,7 @@ import {
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
-import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cse/automation-core';
+import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cs/automation-core';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {

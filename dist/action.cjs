@@ -119047,7 +119047,7 @@ function detectRepoContext(input, env = process.env) {
   };
 }
 
-// node_modules/@postman-cse/automation-core/dist/ci-context.js
+// node_modules/@postman-cs/automation-core/dist/ci-context.js
 function norm(value) {
   const trimmed = (value ?? "").trim();
   return trimmed.length > 0 ? trimmed : void 0;
@@ -119198,7 +119198,7 @@ function detectCiProviderContext(env = process.env) {
   return { ciProvider: "unknown", runnerKind: "unknown" };
 }
 
-// node_modules/@postman-cse/automation-core/dist/repo-context.js
+// node_modules/@postman-cs/automation-core/dist/repo-context.js
 function normalize2(value) {
   const trimmed = (value ?? "").trim();
   return trimmed.length > 0 ? trimmed : void 0;
@@ -119287,7 +119287,7 @@ function detectRepoContext2(input, env = process.env) {
   };
 }
 
-// node_modules/@postman-cse/automation-core/dist/telemetry.js
+// node_modules/@postman-cs/automation-core/dist/telemetry.js
 var import_node_crypto = require("node:crypto");
 var import_undici2 = __toESM(require_undici(), 1);
 var SCHEMA_VERSION = 3;
@@ -119427,7 +119427,7 @@ function createTelemetryContext(options) {
   };
 }
 
-// node_modules/@postman-cse/automation-core/dist/logger.js
+// node_modules/@postman-cs/automation-core/dist/logger.js
 var LEVEL_ORDER = {
   debug: 10,
   info: 20,
@@ -119607,7 +119607,7 @@ function createLogger(options) {
   return root;
 }
 
-// node_modules/@postman-cse/automation-core/dist/secrets-resolver.js
+// node_modules/@postman-cs/automation-core/dist/secrets-resolver.js
 var SECRETS_RESOLVER_PROVIDERS = ["none", "aws", "azure", "gcp"];
 var DEFAULT_SECRETS_RESOLVER_PROVIDER = "none";
 function parseSecretsResolverProvider(value, fallback = DEFAULT_SECRETS_RESOLVER_PROVIDER) {
@@ -119650,7 +119650,7 @@ function secretsResolverEnvironmentKeys(provider) {
   }
 }
 
-// node_modules/@postman-cse/automation-core/dist/http/http-error.js
+// node_modules/@postman-cs/automation-core/dist/http/http-error.js
 var REDACTED2 = "[REDACTED]";
 var SENSITIVE_HEADER_NAMES = /* @__PURE__ */ new Set([
   "authorization",
@@ -119809,7 +119809,7 @@ var HttpError = class _HttpError extends Error {
   }
 };
 
-// node_modules/@postman-cse/automation-core/dist/http/retry.js
+// node_modules/@postman-cs/automation-core/dist/http/retry.js
 function sleep(delayMs) {
   return new Promise((resolve3) => {
     setTimeout(resolve3, delayMs);
@@ -119873,7 +119873,7 @@ function isRetryableGatewayFailure(status, body = "") {
   return isTransientHttpStatus(status) || RETRYABLE_GATEWAY_BODY.test(body);
 }
 
-// node_modules/@postman-cse/automation-core/dist/http/gateway-client.js
+// node_modules/@postman-cs/automation-core/dist/http/gateway-client.js
 var DEFAULT_POSTMAN_BIFROST_BASE_URL = "https://bifrost-premium-https-v4.gw.postman.com";
 function isExpiredAuthError(status, body) {
   return status === 401 || body.includes("UNAUTHENTICATED") || body.includes("authenticationError");

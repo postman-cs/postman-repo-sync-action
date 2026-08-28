@@ -6,7 +6,7 @@ import {
   extractRoutesFromSource,
   validateRouteManifest,
   type RouteManifest
-} from '@postman-cse/automation-core/route-manifest';
+} from '@postman-cs/automation-core/route-manifest';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');

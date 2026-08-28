@@ -36,7 +36,7 @@ import { join } from 'node:path';
 
 import { load as loadYaml } from 'js-yaml';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HttpError } from '@postman-cse/automation-core';
+import { HttpError } from '@postman-cs/automation-core';
 
 import type {
   RepoSyncDependencies,
