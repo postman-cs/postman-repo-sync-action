@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import sodium from 'libsodium-wrappers';
 // @ts-expect-error postman-collection does not declare this internal registry.
 import dynamicVariables from 'postman-collection/lib/superstring/dynamic-variables';
 
@@ -1316,35 +1317,106 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   return inputs;
 }
 
-export function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, string> {
-  const allowList = [
-    'PATH',
-    'HOME',
-    'USERPROFILE',
-    'XDG_CONFIG_HOME',
-    'GH_CONFIG_DIR',
-    'TMPDIR',
-    'TMP',
-    'TEMP',
-    'RUNNER_TEMP',
-    'SYSTEMROOT'
-  ];
-  const filtered: Record<string, string> = { GH_TOKEN: token };
-  for (const key of allowList) {
-    const value = env[key];
-    if (value) {
-      filtered[key] = value;
+const GITHUB_API_VERSION = '2022-11-28';
+const GITHUB_REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+const GITHUB_SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function githubApiBaseUrl(env: NodeJS.ProcessEnv): string {
+  return (normalizeInputValue(env.GITHUB_API_URL) || 'https://api.github.com').replace(/\/+$/, '');
+}
+
+function githubHeaders(token: string, contentType = false): Record<string, string> {
+  return {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    ...(contentType ? { 'Content-Type': 'application/json' } : {}),
+    'X-GitHub-Api-Version': GITHUB_API_VERSION
+  };
+}
+
+async function githubResponseBody(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch (error) {
+    throw new Error(`GitHub API response body was unreadable: ${causeText(error)}`, { cause: error });
+  }
+}
+
+function throwGitHubResponseError(response: Response, body: string): never {
+  throw new Error(`GitHub API request failed (HTTP ${response.status})${body ? `: ${body}` : ''}`);
+}
+
+export async function writeGitHubRepositorySecrets(
+  repository: string,
+  token: string,
+  secrets: ReadonlyArray<readonly [name: string, value: string]>,
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: Fetcher = fetch
+): Promise<void> {
+  if (!GITHUB_REPOSITORY.test(repository)) {
+    throw new Error('repository must be exactly owner/repository for GitHub secret persistence');
+  }
+  for (const [name] of secrets) {
+    if (!GITHUB_SECRET_NAME.test(name) || /^GITHUB_/i.test(name)) {
+      throw new Error(`invalid GitHub Actions secret name ${name}`);
     }
   }
-  return filtered;
+
+  const separator = repository.indexOf('/');
+  const owner = repository.slice(0, separator);
+  const repositoryName = repository.slice(separator + 1);
+  const baseUrl = githubApiBaseUrl(env);
+  const publicKeyResponse = await fetcher(
+    `${baseUrl}/repos/${owner}/${repositoryName}/actions/secrets/public-key`,
+    { method: 'GET', headers: githubHeaders(token) }
+  );
+  const publicKeyBody = await githubResponseBody(publicKeyResponse);
+  if (!publicKeyResponse.ok) throwGitHubResponseError(publicKeyResponse, publicKeyBody);
+
+  let publicKey: unknown;
+  try {
+    publicKey = publicKeyBody ? JSON.parse(publicKeyBody) : {};
+  } catch (error) {
+    throw new Error(`GitHub public-key response returned malformed JSON: ${causeText(error)}`, { cause: error });
+  }
+  if (
+    !publicKey ||
+    typeof publicKey !== 'object' ||
+    typeof (publicKey as { key_id?: unknown }).key_id !== 'string' ||
+    typeof (publicKey as { key?: unknown }).key !== 'string'
+  ) {
+    throw new Error('GitHub public-key response did not include key_id and key strings');
+  }
+  const keyId = (publicKey as { key_id: string }).key_id;
+  const key = (publicKey as { key: string }).key;
+
+  await sodium.ready;
+  const keyBytes = sodium.from_base64(key, sodium.base64_variants.ORIGINAL);
+  for (const [name, value] of secrets) {
+    const encrypted = sodium.crypto_box_seal(sodium.from_string(value), keyBytes);
+    const encryptedValue = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
+    const response = await fetcher(
+      `${baseUrl}/repos/${owner}/${repositoryName}/actions/secrets/${name}`,
+      {
+        method: 'PUT',
+        headers: githubHeaders(token, true),
+        body: JSON.stringify({ encrypted_value: encryptedValue, key_id: keyId })
+      }
+    );
+    const body = await githubResponseBody(response);
+    if (!response.ok) throwGitHubResponseError(response, body);
+  }
 }
 
 export async function persistSslSecrets(
   inputs: ResolvedInputs,
   actionCore: Pick<CoreLike, 'info' | 'warning'>,
-  actionExec: ExecLike,
+  _actionExec: ExecLike,
   repository: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: Fetcher = fetch
 ): Promise<void> {
   if (inputs.onboardingScope === 'spec-only') {
     return;
@@ -1380,25 +1452,18 @@ export async function persistSslSecrets(
   }
 
   try {
-    for (const [name, value] of secretsToPersist) {
-      const result = await actionExec.getExecOutput(
-        'gh',
-        ['secret', 'set', name, '--repo', repository],
-        {
-          input: Buffer.from(value),
-          env: buildGhCliEnv(env, token),
-          ignoreReturnCode: true
-        }
-      );
-
-      if (result.exitCode !== 0) {
-        throw new Error(result.stderr || `gh secret set ${name} failed`);
-      }
-    }
+    await writeGitHubRepositorySecrets(repository, token, secretsToPersist, env, fetcher);
     actionCore.info('SSL certificate inputs persisted to repository secrets');
   } catch (error) {
+    const mask = createSecretMasker([token, ...secretsToPersist.map(([, value]) => value)]);
     actionCore.warning(
-      `Unable to persist SSL certificate secrets automatically (missing secrets:write permissions?): ${error instanceof Error ? error.message : String(error)}. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).`
+      formatOrchestrationIssue({
+        operation: 'GitHub Actions SSL secret persistence',
+        entity: `repository ${repository}`,
+        cause: error,
+        remediation: 'grant Actions secrets write permission or set POSTMAN_SSL_CLIENT_CERT_B64 and POSTMAN_SSL_CLIENT_KEY_B64 manually',
+        mask
+      })
     );
   }
 }
@@ -3655,7 +3720,7 @@ async function runRepoSyncInner(
 export async function resolvePostmanApiKeyAndTeamId(
   inputs: ResolvedInputs,
   actionCore: Pick<CoreLike, 'info' | 'setSecret' | 'warning'>,
-  actionExec: ExecLike,
+  _actionExec: ExecLike,
   masker: SecretMasker,
   options: {
     allowApiKeyCreation?: boolean;
@@ -3751,28 +3816,16 @@ export async function resolvePostmanApiKeyAndTeamId(
       const repo = inputs.repository;
       if (repo) {
         try {
-          const ghCommand = await actionExec.getExecOutput('gh', [
-            'secret', 'set', 'POSTMAN_API_KEY', '--repo', repo
-          ], {
-            input: Buffer.from(apiKey),
-            env: buildGhCliEnv(options.env, ghToken),
-            ignoreReturnCode: true
-          });
-          if (ghCommand.exitCode !== 0) {
-            actionCore.warning(
-              formatOrchestrationIssue({
-                operation: 'gh secret set POSTMAN_API_KEY',
-                entity: `repository ${repo}`,
-                cause: ghCommand.stderr || `exit code ${ghCommand.exitCode}`,
-                remediation: persistSecretRemediation,
-                mask: masker
-              })
-            );
-          }
+          await writeGitHubRepositorySecrets(
+            repo,
+            ghToken,
+            [['POSTMAN_API_KEY', apiKey]],
+            options.env
+          );
         } catch (error: unknown) {
           actionCore.warning(
             formatOrchestrationIssue({
-              operation: 'gh secret set POSTMAN_API_KEY',
+              operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
               entity: `repository ${repo}`,
               cause: error,
               remediation: persistSecretRemediation,
@@ -3783,7 +3836,7 @@ export async function resolvePostmanApiKeyAndTeamId(
       } else {
         actionCore.warning(
           formatOrchestrationIssue({
-            operation: 'gh secret set POSTMAN_API_KEY',
+            operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
             entity: 'repository (missing)',
             cause: 'repository context is empty',
             remediation: 'set repository context or persist POSTMAN_API_KEY manually then rerun',
@@ -3794,7 +3847,7 @@ export async function resolvePostmanApiKeyAndTeamId(
     } else if (options.persistGeneratedApiKeySecret ?? true) {
       actionCore.warning(
         formatOrchestrationIssue({
-          operation: 'gh secret set POSTMAN_API_KEY',
+          operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
           entity: inputs.repository
             ? `repository ${inputs.repository}`
             : 'repository (unknown)',

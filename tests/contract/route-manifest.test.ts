@@ -24,6 +24,7 @@ const EXTRACTION_CONFIG = {
     }
   },
   serviceAliases: {
+    baseUrl: 'github-api',
     'probeSessionIdentity:baseUrl': 'iapub',
     'this.workerBaseUrl': 'catalog-admin',
     'this.apiBaseUrl': 'postman-api'
@@ -67,7 +68,7 @@ describe('contract: HTTP route manifest', () => {
     const manifest = loadManifest();
     const result = verify(manifest);
 
-    expect(manifest.routes).toHaveLength(36);
+    expect(manifest.routes).toHaveLength(38);
     expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(result.errors).toEqual([]);
     expect(extractRoutesFromSource({ sourceRoot, ...EXTRACTION_CONFIG }).unattributed).toEqual([]);

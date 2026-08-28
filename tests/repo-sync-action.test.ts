@@ -5706,7 +5706,7 @@ describe('org-mode auto-detection', () => {
     expect(meWarning).not.toContain(leak);
   });
 
-  it('keeps gh secret persistence warnings one-line under CR/LF-bearing stderr with secrets', async () => {
+  it('keeps GitHub secret persistence warnings one-line when the REST write fails', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
@@ -5747,21 +5747,19 @@ describe('org-mode auto-detection', () => {
     expect(result.apiKey).toBe('pmak-generated-from-mock');
     const persistWarning = actionCore.warning.mock.calls
       .map((call) => String(call[0]))
-      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+      .find((line) => line.includes('GitHub Actions secret persistence for POSTMAN_API_KEY failed'));
     expect(persistWarning).toBeDefined();
     expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
-    expect(persistWarning).toContain('permission denied');
-    expect(persistWarning).toContain('forged');
+    expect(persistWarning).toContain('GitHub API request failed (HTTP 404)');
     expect(persistWarning).toContain(
       'grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun'
     );
-    expect(persistWarning).toContain(REDACTED);
     expect(persistWarning).not.toContain(leak);
     expect(persistWarning).not.toContain('\n');
     expect(persistWarning).not.toContain('\r');
   });
 
-  it('warns when gh secret set returns nonzero with repository, masked stderr, and remediation', async () => {
+  it('warns when the GitHub secret REST write returns non-success', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
@@ -5803,15 +5801,15 @@ describe('org-mode auto-detection', () => {
     expect(result.teamId).toBe('10490519');
     const persistWarning = actionCore.warning.mock.calls
       .map((call) => String(call[0]))
-      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+      .find((line) => line.includes('GitHub Actions secret persistence for POSTMAN_API_KEY failed'));
     expect(persistWarning).toBeDefined();
     expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
     expect(persistWarning).toContain('grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun');
-    expect(persistWarning).toContain(REDACTED);
+    expect(persistWarning).toContain('GitHub API request failed (HTTP 404)');
     expect(persistWarning).not.toContain(leak);
   });
 
-  it('warns when gh secret set throws with repository, masked cause, and remediation', async () => {
+  it('warns when GitHub secret REST persistence fails before writing', async () => {
     const actionCore = {
       info: vi.fn(),
       setSecret: vi.fn(),
@@ -5848,11 +5846,11 @@ describe('org-mode auto-detection', () => {
     expect(result.apiKey).toBe('pmak-generated-from-mock');
     const persistWarning = actionCore.warning.mock.calls
       .map((call) => String(call[0]))
-      .find((line) => line.includes('gh secret set POSTMAN_API_KEY failed'));
+      .find((line) => line.includes('GitHub Actions secret persistence for POSTMAN_API_KEY failed'));
     expect(persistWarning).toBeDefined();
     expect(persistWarning).toContain('repository postman-cs/repo-sync-demo');
     expect(persistWarning).toContain('grant Actions secrets write permission or set POSTMAN_API_KEY manually then rerun');
-    expect(persistWarning).toContain(REDACTED);
+    expect(persistWarning).toContain('GitHub API request failed (HTTP 404)');
     expect(persistWarning).not.toContain(leak);
   });
 
@@ -5895,7 +5893,7 @@ describe('org-mode auto-detection', () => {
       .map((call) => String(call[0]))
       .find((line) => line.includes('repository (missing)'));
     expect(missingRepoWarning).toBeDefined();
-    expect(missingRepoWarning).toContain('gh secret set POSTMAN_API_KEY failed');
+    expect(missingRepoWarning).toContain('GitHub Actions secret persistence for POSTMAN_API_KEY failed');
     expect(missingRepoWarning).toContain('repository context is empty');
     expect(missingRepoWarning).toContain(
       'set repository context or persist POSTMAN_API_KEY manually then rerun'
@@ -5941,7 +5939,7 @@ describe('org-mode auto-detection', () => {
       .map((call) => String(call[0]))
       .find((line) => line.includes('no GitHub token provided'));
     expect(noTokenWarning).toBeDefined();
-    expect(noTokenWarning).toContain('gh secret set POSTMAN_API_KEY failed');
+    expect(noTokenWarning).toContain('GitHub Actions secret persistence for POSTMAN_API_KEY failed');
     expect(noTokenWarning).toContain('repository postman-cs/repo-sync-demo');
     expect(noTokenWarning).toContain(
       'provide github-token/gh-fallback-token or set POSTMAN_API_KEY manually then rerun'
