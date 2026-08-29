@@ -52,6 +52,14 @@
       ]
     },
     {
+      "id": "collection.list-workspace-collections",
+      "service": "collection",
+      "method": "GET",
+      "path": "/v3/collections",
+      "classification": "live-only",
+      "reason": "Branch-aware GC uses one authoritative paginated collection inventory; focused route, cursor, malformed-response, ambiguity, and no-export tests cover it."
+    },
+    {
       "id": "collection.patch-collection",
       "service": "collection",
       "method": "PATCH",

@@ -39,7 +39,7 @@ export interface GcPostmanClient {
   listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   getSpecContent(uid: string): Promise<string | undefined>;
   listSpecCollections(uid: string): Promise<Array<{ uid: string; name: string }>>;
-  getCollection(uid: string): Promise<unknown>;
+  listCollections(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
@@ -134,18 +134,46 @@ function isGcCandidateName(name: string): boolean {
   return / @[A-Za-z0-9._-]+/.test(name) || /^\[[A-Z][A-Z0-9]*\] /.test(name);
 }
 
+const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PUBLIC_COLLECTION_MODEL_ID = /^\d+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SAFE_COLLECTION_ID = /^[A-Za-z0-9._~-]+$/;
+
 /**
- * Read the display name from an exact collection export. Specification
- * relation rows intentionally do not project a name, and any name they may
- * acquire later is not authoritative enough to authorize deletion.
+ * Join collection-service inventory rows to mock/monitor/spec relation UIDs.
+ * Production may expose the same model as a bare UUID in one service and an
+ * owner-prefixed public UID in another, so normalize only those two proven
+ * forms. Other safe opaque IDs retain exact, case-sensitive identity.
  */
-function exactCollectionName(payload: unknown): string {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
-  const record = payload as Record<string, unknown>;
-  const info = record.info && typeof record.info === 'object' && !Array.isArray(record.info)
-    ? record.info as Record<string, unknown>
-    : undefined;
-  return String(record.name ?? info?.name ?? '').trim();
+function normalizedCollectionIdentity(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value || value === '.' || value === '..' || !SAFE_COLLECTION_ID.test(value)) return undefined;
+  const publicMatch = PUBLIC_COLLECTION_MODEL_ID.exec(value);
+  if (publicMatch) return publicMatch[1].toLowerCase();
+  if (BARE_COLLECTION_MODEL_ID.test(value)) return value.toLowerCase();
+  return value;
+}
+
+type CollectionInventoryEntry = { uid: string; name: string };
+
+/** Validate the complete snapshot before it can authorize any deletion. */
+function indexCollectionInventory(rows: unknown): Map<string, CollectionInventoryEntry[]> {
+  if (!Array.isArray(rows)) throw new Error('COLLECTION_INVENTORY_INVALID');
+  const index = new Map<string, CollectionInventoryEntry[]>();
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('COLLECTION_INVENTORY_INVALID');
+    }
+    const record = raw as Record<string, unknown>;
+    const identity = normalizedCollectionIdentity(record.uid);
+    const uid = typeof record.uid === 'string' ? record.uid.trim() : '';
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!identity || !uid || !name) throw new Error('COLLECTION_INVENTORY_INVALID');
+    const matches = index.get(identity) ?? [];
+    matches.push({ uid, name });
+    index.set(identity, matches);
+  }
+  return index;
 }
 
 /**
@@ -158,21 +186,24 @@ export async function collectGcCandidates(
   workspaceId: string
 ): Promise<GcCandidate[]> {
   const candidates: GcCandidate[] = [];
-  const exactCollectionNames = new Map<string, string | undefined>();
-  const readGeneratedCollectionName = async (uid: string): Promise<string | undefined> => {
-    if (exactCollectionNames.has(uid)) return exactCollectionNames.get(uid);
-    let name: string | undefined;
-    try {
-      const candidate = exactCollectionName(await postman.getCollection(uid));
-      name = candidate && isGcCandidateName(candidate) ? candidate : undefined;
-    } catch {
-      // A collection that cannot be independently identified is not safe to delete.
-      name = undefined;
-    }
-    exactCollectionNames.set(uid, name);
-    return name;
+  let collectionInventory: Map<string, CollectionInventoryEntry[]> | undefined;
+  try {
+    collectionInventory = indexCollectionInventory(await postman.listCollections(workspaceId));
+  } catch {
+    // Missing/malformed/incomplete inventory can never authorize collection or
+    // parent-spec deletion. Other independently marked asset kinds may still
+    // take part in the sweep.
+    collectionInventory = undefined;
+  }
+  const resolveGeneratedCollection = (uid: string): CollectionInventoryEntry | undefined => {
+    const identity = normalizedCollectionIdentity(uid);
+    if (!identity || !collectionInventory) return undefined;
+    const matches = collectionInventory.get(identity) ?? [];
+    if (matches.length !== 1) return undefined;
+    const match = matches[0];
+    return isGcCandidateName(match.name) ? match : undefined;
   };
-  const discoveredCollectionUids = new Set<string>();
+  const discoveredCollectionIdentities = new Set<string>();
 
   const environments = await postman.listEnvironments(workspaceId);
   for (const env of environments) {
@@ -219,10 +250,11 @@ export async function collectGcCandidates(
     if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    const name = await readGeneratedCollectionName(uid);
-    if (name) {
-      candidates.push({ kind: 'collection', uid, name, marker: collection.marker });
-      discoveredCollectionUids.add(uid);
+    const resolved = resolveGeneratedCollection(uid);
+    const identity = normalizedCollectionIdentity(resolved?.uid);
+    if (resolved && identity && !discoveredCollectionIdentities.has(identity)) {
+      candidates.push({ kind: 'collection', uid: resolved.uid, name: resolved.name, marker: collection.marker });
+      discoveredCollectionIdentities.add(identity);
     }
   }
 
@@ -239,14 +271,22 @@ export async function collectGcCandidates(
       const linkedCandidates: GcCandidate[] = [];
       let relationsResolved = true;
       try {
-        for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (discoveredCollectionUids.has(collection.uid)) continue;
-          const name = await readGeneratedCollectionName(collection.uid);
-          if (!name) {
+        const relations = await postman.listSpecCollections(spec.uid);
+        if (relations.length === 0) relationsResolved = false;
+        for (const collection of relations) {
+          const relationIdentity = normalizedCollectionIdentity(collection.uid);
+          if (!relationIdentity) {
             relationsResolved = false;
             continue;
           }
-          linkedCandidates.push({ kind: 'collection', uid: collection.uid, name, marker });
+          if (discoveredCollectionIdentities.has(relationIdentity)) continue;
+          const resolved = resolveGeneratedCollection(collection.uid);
+          const resolvedIdentity = normalizedCollectionIdentity(resolved?.uid);
+          if (!resolved || !resolvedIdentity || resolvedIdentity !== relationIdentity) {
+            relationsResolved = false;
+            continue;
+          }
+          linkedCandidates.push({ kind: 'collection', uid: resolved.uid, name: resolved.name, marker });
         }
       } catch {
         relationsResolved = false;
@@ -259,9 +299,10 @@ export async function collectGcCandidates(
       }
       candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
       for (const collection of linkedCandidates) {
-        if (discoveredCollectionUids.has(collection.uid)) continue;
+        const identity = normalizedCollectionIdentity(collection.uid);
+        if (!identity || discoveredCollectionIdentities.has(identity)) continue;
         candidates.push(collection);
-        discoveredCollectionUids.add(collection.uid);
+        discoveredCollectionIdentities.add(identity);
       }
     } else {
       candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });

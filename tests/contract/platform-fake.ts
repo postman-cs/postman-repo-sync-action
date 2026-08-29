@@ -78,6 +78,7 @@ export const REPO_SYNC_FAKE_ROUTES: readonly RepoSyncFakeRoute[] = [
   { service: 'sync', method: 'GET', path: '/environment/{param}/sync', query: ['since_id'], requiredQuery: ['since_id'], body: 'none' },
   { service: 'sync', method: 'PUT', path: '/environment/{param}', body: 'record' },
   { service: 'sync', method: 'DELETE', path: '/environment/{param}', body: 'none' },
+  { service: 'collection', method: 'GET', path: '/v3/collections', query: ['cursor', 'workspace'], requiredQuery: ['workspace'], body: 'none' },
   { service: 'collection', method: 'GET', path: '/v3/collections/{param}/export', body: 'none' },
   { service: 'collection', method: 'PATCH', path: '/v3/collections/{param}', body: 'array' },
   { service: 'collection', method: 'DELETE', path: '/v3/collections/{param}', body: 'none' },

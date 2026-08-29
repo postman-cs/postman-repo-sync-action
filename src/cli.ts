@@ -724,7 +724,7 @@ async function runGcCommand(
     { persistGeneratedApiKeySecret: false, env }
   );
   const dependencies = createCliDependencies(inputs, resolved);
-  if (!dependencies.postman.deleteCollection || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
+  if (!dependencies.postman.deleteCollection || !dependencies.postman.listCollections || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
     throw new Error('gc requires the full branch-aware inventory client; this runtime is missing a spec or collection GC capability.');
   }
 
@@ -734,6 +734,7 @@ async function runGcCommand(
     postman: {
       ...dependencies.postman,
       deleteCollection: dependencies.postman.deleteCollection,
+      listCollections: dependencies.postman.listCollections,
       listSpecifications: dependencies.postman.listSpecifications,
       getSpecContent: dependencies.postman.getSpecContent,
       listSpecCollections: dependencies.postman.listSpecCollections,

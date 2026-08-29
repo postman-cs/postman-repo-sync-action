@@ -125642,6 +125642,7 @@ function requireMockVisibility(mock, requested) {
   return mock;
 }
 var MAX_CREATE_FLIGHTS = 256;
+var COLLECTION_LIST_PAGE_LIMIT = 100;
 var createFlights = /* @__PURE__ */ new Map();
 var PostmanGatewayAssetsClient = class {
   gateway;
@@ -125813,8 +125814,80 @@ var PostmanGatewayAssetsClient = class {
       method: "get",
       path: `/specifications/${id}/collections`
     });
-    const data2 = Array.isArray(response?.data) ? response.data : [];
-    return data2.map((entry) => this.asRecord(entry)).filter((entry) => entry !== null).map((entry) => ({ uid: String(entry.collection ?? entry.collectionId ?? entry.id ?? "").trim(), name: String(entry.name ?? "").trim() })).filter((entry) => entry.uid);
+    if (!Array.isArray(response?.data)) throw new Error("SPEC_COLLECTION_LIST_RESPONSE_INVALID");
+    return response.data.map((value) => {
+      const entry = this.asRecord(value);
+      const rawUid = entry?.collection ?? entry?.collectionId ?? entry?.id;
+      if (!entry || typeof rawUid !== "string" || entry.name !== void 0 && typeof entry.name !== "string") {
+        throw new Error("SPEC_COLLECTION_LIST_RESPONSE_INVALID");
+      }
+      const uid = this.requireSafePathSegment(rawUid, "Specification collection UID");
+      return { uid, name: typeof entry.name === "string" ? entry.name.trim() : "" };
+    });
+  }
+  /**
+   * Authoritative workspace collection-name snapshot for GC. Drain the v3
+   * collection service's cursor before returning: a partial inventory must not
+   * authorize parent/spec deletion. This list route replaces per-relation full
+   * exports in GC; `getCollection` remains reserved for repo file materialization.
+   */
+  async listCollections(workspaceId) {
+    const ws = this.requireSafePathSegment(workspaceId, "Workspace UID");
+    const rows = [];
+    const seenCursors = /* @__PURE__ */ new Set();
+    let cursor;
+    for (let page = 0; page < COLLECTION_LIST_PAGE_LIMIT; page += 1) {
+      const response = await this.gateway.requestJson({
+        service: "collection",
+        method: "get",
+        path: `/v3/collections/?workspace=${ws}`,
+        ...cursor ? { query: { cursor } } : {}
+      });
+      if (!Array.isArray(response?.data)) throw new Error("COLLECTION_LIST_RESPONSE_INVALID");
+      for (const value of response.data) {
+        const record = this.asRecord(value);
+        const rawUid = record?.id ?? record?.uid;
+        const rawName = record?.name ?? record?.title;
+        if (typeof rawUid !== "string" || typeof rawName !== "string") {
+          throw new Error("COLLECTION_LIST_RESPONSE_INVALID");
+        }
+        const uid = rawUid.trim();
+        const name = rawName.trim();
+        if (!uid || !name || !/^[A-Za-z0-9._~-]+$/.test(uid) || uid === "." || uid === "..") {
+          throw new Error("COLLECTION_LIST_RESPONSE_INVALID");
+        }
+        rows.push({ uid, name });
+      }
+      const meta = response.meta === void 0 ? null : this.asRecord(response.meta);
+      if (response.meta !== void 0 && response.meta !== null && !meta) {
+        throw new Error("COLLECTION_LIST_CURSOR_INVALID");
+      }
+      const paginationValue = meta?.pagination;
+      const pagination = paginationValue === void 0 ? null : this.asRecord(paginationValue);
+      if (paginationValue !== void 0 && paginationValue !== null && !pagination) {
+        throw new Error("COLLECTION_LIST_CURSOR_INVALID");
+      }
+      const cursorValue = meta?.cursor;
+      const cursorEnvelope = cursorValue === void 0 ? null : this.asRecord(cursorValue);
+      if (cursorValue !== void 0 && cursorValue !== null && !cursorEnvelope) {
+        throw new Error("COLLECTION_LIST_CURSOR_INVALID");
+      }
+      const candidates = [pagination?.nextPage, cursorEnvelope?.next, meta?.nextCursor, response.nextCursor].filter((value) => value !== void 0 && value !== null && value !== "");
+      if (candidates.some((value) => typeof value !== "string")) {
+        throw new Error("COLLECTION_LIST_CURSOR_INVALID");
+      }
+      const nextCursors = [...new Set(candidates.map((value) => String(value).trim()).filter(Boolean))];
+      if (nextCursors.length > 1) throw new Error("COLLECTION_LIST_CURSOR_AMBIGUOUS");
+      const next = nextCursors[0];
+      if (!next) return rows;
+      if (seenCursors.has(next)) throw new Error("COLLECTION_LIST_CURSOR_REPEATED");
+      seenCursors.add(next);
+      if (page === COLLECTION_LIST_PAGE_LIMIT - 1) {
+        throw new Error("COLLECTION_LIST_PAGE_LIMIT_EXCEEDED");
+      }
+      cursor = next;
+    }
+    throw new Error("COLLECTION_LIST_PAGE_LIMIT_EXCEEDED");
   }
   async deleteSpec(specId) {
     const id = this.requireSafePathSegment(specId, "Specification UID");
@@ -130073,6 +130146,7 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     deleteMock: gatewayAssets.deleteMock.bind(gatewayAssets),
     deleteMonitor: gatewayAssets.deleteMonitor.bind(gatewayAssets),
     deleteCollection: gatewayAssets.deleteCollection.bind(gatewayAssets),
+    listCollections: gatewayAssets.listCollections.bind(gatewayAssets),
     listSpecifications: gatewayAssets.listSpecifications.bind(gatewayAssets),
     getSpecContent: gatewayAssets.getSpecContent.bind(gatewayAssets),
     listSpecCollections: gatewayAssets.listSpecCollections.bind(gatewayAssets),
@@ -130389,28 +130463,53 @@ function markerFromSpecContent(content) {
 function isGcCandidateName(name) {
   return / @[A-Za-z0-9._-]+/.test(name) || /^\[[A-Z][A-Z0-9]*\] /.test(name);
 }
-function exactCollectionName(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
-  const record = payload;
-  const info = record.info && typeof record.info === "object" && !Array.isArray(record.info) ? record.info : void 0;
-  return String(record.name ?? info?.name ?? "").trim();
+var BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var PUBLIC_COLLECTION_MODEL_ID = /^\d+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+var SAFE_COLLECTION_ID = /^[A-Za-z0-9._~-]+$/;
+function normalizedCollectionIdentity(raw) {
+  if (typeof raw !== "string") return void 0;
+  const value = raw.trim();
+  if (!value || value === "." || value === ".." || !SAFE_COLLECTION_ID.test(value)) return void 0;
+  const publicMatch = PUBLIC_COLLECTION_MODEL_ID.exec(value);
+  if (publicMatch) return publicMatch[1].toLowerCase();
+  if (BARE_COLLECTION_MODEL_ID.test(value)) return value.toLowerCase();
+  return value;
+}
+function indexCollectionInventory(rows) {
+  if (!Array.isArray(rows)) throw new Error("COLLECTION_INVENTORY_INVALID");
+  const index = /* @__PURE__ */ new Map();
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("COLLECTION_INVENTORY_INVALID");
+    }
+    const record = raw;
+    const identity = normalizedCollectionIdentity(record.uid);
+    const uid = typeof record.uid === "string" ? record.uid.trim() : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!identity || !uid || !name) throw new Error("COLLECTION_INVENTORY_INVALID");
+    const matches = index.get(identity) ?? [];
+    matches.push({ uid, name });
+    index.set(identity, matches);
+  }
+  return index;
 }
 async function collectGcCandidates(postman, workspaceId) {
   const candidates = [];
-  const exactCollectionNames = /* @__PURE__ */ new Map();
-  const readGeneratedCollectionName = async (uid) => {
-    if (exactCollectionNames.has(uid)) return exactCollectionNames.get(uid);
-    let name;
-    try {
-      const candidate = exactCollectionName(await postman.getCollection(uid));
-      name = candidate && isGcCandidateName(candidate) ? candidate : void 0;
-    } catch {
-      name = void 0;
-    }
-    exactCollectionNames.set(uid, name);
-    return name;
+  let collectionInventory;
+  try {
+    collectionInventory = indexCollectionInventory(await postman.listCollections(workspaceId));
+  } catch {
+    collectionInventory = void 0;
+  }
+  const resolveGeneratedCollection = (uid) => {
+    const identity = normalizedCollectionIdentity(uid);
+    if (!identity || !collectionInventory) return void 0;
+    const matches = collectionInventory.get(identity) ?? [];
+    if (matches.length !== 1) return void 0;
+    const match = matches[0];
+    return isGcCandidateName(match.name) ? match : void 0;
   };
-  const discoveredCollectionUids = /* @__PURE__ */ new Set();
+  const discoveredCollectionIdentities = /* @__PURE__ */ new Set();
   const environments = await postman.listEnvironments(workspaceId);
   for (const env of environments) {
     if (!isGcCandidateName(env.name)) continue;
@@ -130448,10 +130547,11 @@ async function collectGcCandidates(postman, workspaceId) {
     if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    const name = await readGeneratedCollectionName(uid);
-    if (name) {
-      candidates.push({ kind: "collection", uid, name, marker: collection.marker });
-      discoveredCollectionUids.add(uid);
+    const resolved = resolveGeneratedCollection(uid);
+    const identity = normalizedCollectionIdentity(resolved?.uid);
+    if (resolved && identity && !discoveredCollectionIdentities.has(identity)) {
+      candidates.push({ kind: "collection", uid: resolved.uid, name: resolved.name, marker: collection.marker });
+      discoveredCollectionIdentities.add(identity);
     }
   }
   const specifications = await postman.listSpecifications(workspaceId);
@@ -130467,14 +130567,22 @@ async function collectGcCandidates(postman, workspaceId) {
       const linkedCandidates = [];
       let relationsResolved = true;
       try {
-        for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (discoveredCollectionUids.has(collection.uid)) continue;
-          const name = await readGeneratedCollectionName(collection.uid);
-          if (!name) {
+        const relations = await postman.listSpecCollections(spec.uid);
+        if (relations.length === 0) relationsResolved = false;
+        for (const collection of relations) {
+          const relationIdentity = normalizedCollectionIdentity(collection.uid);
+          if (!relationIdentity) {
             relationsResolved = false;
             continue;
           }
-          linkedCandidates.push({ kind: "collection", uid: collection.uid, name, marker });
+          if (discoveredCollectionIdentities.has(relationIdentity)) continue;
+          const resolved = resolveGeneratedCollection(collection.uid);
+          const resolvedIdentity = normalizedCollectionIdentity(resolved?.uid);
+          if (!resolved || !resolvedIdentity || resolvedIdentity !== relationIdentity) {
+            relationsResolved = false;
+            continue;
+          }
+          linkedCandidates.push({ kind: "collection", uid: resolved.uid, name: resolved.name, marker });
         }
       } catch {
         relationsResolved = false;
@@ -130484,9 +130592,10 @@ async function collectGcCandidates(postman, workspaceId) {
       }
       candidates.push({ kind: "spec", uid: spec.uid, name: spec.name, marker });
       for (const collection of linkedCandidates) {
-        if (discoveredCollectionUids.has(collection.uid)) continue;
+        const identity = normalizedCollectionIdentity(collection.uid);
+        if (!identity || discoveredCollectionIdentities.has(identity)) continue;
         candidates.push(collection);
-        discoveredCollectionUids.add(collection.uid);
+        discoveredCollectionIdentities.add(identity);
       }
     } else {
       candidates.push({ kind: "spec", uid: spec.uid, name: spec.name, marker });
@@ -131150,7 +131259,7 @@ async function runGcCommand(argv, env, writeStdout) {
     { persistGeneratedApiKeySecret: false, env }
   );
   const dependencies = createCliDependencies(inputs, resolved);
-  if (!dependencies.postman.deleteCollection || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
+  if (!dependencies.postman.deleteCollection || !dependencies.postman.listCollections || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
     throw new Error("gc requires the full branch-aware inventory client; this runtime is missing a spec or collection GC capability.");
   }
   const summary2 = await runGc({
@@ -131159,6 +131268,7 @@ async function runGcCommand(argv, env, writeStdout) {
     postman: {
       ...dependencies.postman,
       deleteCollection: dependencies.postman.deleteCollection,
+      listCollections: dependencies.postman.listCollections,
       listSpecifications: dependencies.postman.listSpecifications,
       getSpecContent: dependencies.postman.getSpecContent,
       listSpecCollections: dependencies.postman.listSpecCollections,

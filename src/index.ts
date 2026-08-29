@@ -244,7 +244,7 @@ export interface RepoSyncDependencies {
     | 'deleteEnvironment'
     | 'deleteMock'
     | 'deleteMonitor'
-  > & Partial<Pick<PostmanGatewayAssetsClient, 'rebindMonitorByName' | 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'rebindMonitorByName' | 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listCollections' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -4077,6 +4077,7 @@ export function createRepoSyncDependencies(
     deleteMock: gatewayAssets.deleteMock.bind(gatewayAssets),
     deleteMonitor: gatewayAssets.deleteMonitor.bind(gatewayAssets),
     deleteCollection: gatewayAssets.deleteCollection.bind(gatewayAssets),
+    listCollections: gatewayAssets.listCollections.bind(gatewayAssets),
     listSpecifications: gatewayAssets.listSpecifications.bind(gatewayAssets),
     getSpecContent: gatewayAssets.getSpecContent.bind(gatewayAssets),
     listSpecCollections: gatewayAssets.listSpecCollections.bind(gatewayAssets),
