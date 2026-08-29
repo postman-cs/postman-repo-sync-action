@@ -148,18 +148,41 @@ describe('auto-release workflow', () => {
     expect(autoReleaseWorkflow).toContain('gh workflow run release.yml --ref "$TAG"');
   });
 
-  it('reconciles the prior incomplete tag before planning another cut', () => {
+  it('plans before reconciling so a new release can supersede stale alias evidence', () => {
     const reconcile = autoReleaseWorkflow.indexOf('name: Reconcile prior release');
     const plan = autoReleaseWorkflow.indexOf('name: Plan release');
     expect(reconcile).toBeGreaterThan(-1);
-    expect(reconcile).toBeLessThan(plan);
+    expect(plan).toBeLessThan(reconcile);
     expect(autoReleaseWorkflow).toContain("git tag --list 'v*'");
     expect(autoReleaseWorkflow).toContain('if ! PACKAGE_VERSION="$(git show');
+    expect(autoReleaseWorkflow).toContain(
+      'RELEASE="$(node -p "require(process.env.PLAN_FILE).release === true")"'
+    );
+    expect(autoReleaseWorkflow).toContain(
+      'elif [ -n "$LATEST" ] && [ "$RELEASE" != true ]; then'
+    );
+    expect(autoReleaseWorkflow).toContain(
+      'only when no newer release-worthy change can supersede it'
+    );
     expect(autoReleaseWorkflow).toContain('gh run list --workflow release.yml --branch "$TAG"');
     expect(autoReleaseWorkflow).toContain("steps.reconcile.outputs.blocked != 'true'");
     const activeRun = autoReleaseWorkflow.indexOf('gh run list --workflow release.yml');
     expect(autoReleaseWorkflow.indexOf('gh workflow run release.yml', activeRun)).toBeGreaterThan(
       activeRun
+    );
+  });
+
+  it('still blocks a new cut until an unpublished immutable tag is recovered', () => {
+    const missingRelease = autoReleaseWorkflow.indexOf(
+      'if [ -n "$LATEST" ] && ! gh release view "$LATEST"'
+    );
+    const staleAlias = autoReleaseWorkflow.indexOf(
+      'elif [ -n "$LATEST" ] && [ "$RELEASE" != true ]; then'
+    );
+    expect(missingRelease).toBeGreaterThan(-1);
+    expect(missingRelease).toBeLessThan(staleAlias);
+    expect(autoReleaseWorkflow).toContain(
+      "if: steps.reconcile.outputs.blocked != 'true' && steps.plan.outputs.release == 'true'"
     );
   });
 
