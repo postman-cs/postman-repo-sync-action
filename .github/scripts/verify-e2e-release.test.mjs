@@ -28,7 +28,7 @@ const RELEASE_SHA = 'a'.repeat(40);
 const PROVIDER_SHA = 'b'.repeat(40);
 const SOURCE_DIGEST = 'c'.repeat(64);
 const PROVIDER_SOURCE_DIGEST = 'd'.repeat(64);
-const PROVIDER_TAG = 'e2e-provider-v1.1.0';
+const PROVIDER_TAG = 'e2e-provider-v1.2.0';
 const RELEASE_TAG = 'v9.9.9';
 const PEER_TAGS = {
   'postman-cs/postman-api-onboarding-action': 'v3.5.8',
