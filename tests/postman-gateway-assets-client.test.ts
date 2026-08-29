@@ -136,6 +136,103 @@ describe('PostmanGatewayAssetsClient', () => {
     });
   });
 
+  it('rejects a malformed specification relation instead of authorizing a partial parent inventory', async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      data: [
+        { collection: 'valid-relation' },
+        { collection: 'unsafe/relation' }
+      ]
+    });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listSpecCollections('spec-1')).rejects.toThrow(/Specification collection UID/);
+  });
+
+  it('drains the authoritative workspace collection inventory without using export routes', async () => {
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ id: PUBLIC_UID, name: 'Payments - Baseline' }],
+        meta: { pagination: { nextPage: 'collections-page-2', pageSize: 100 } }
+      })
+      .mockResolvedValueOnce({
+        data: [{ uid: '10490519-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', title: 'Payments - Smoke' }],
+        meta: { pagination: { nextPage: null, pageSize: 100 } }
+      });
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws-1'
+    });
+
+    await expect(assets.listCollections('ws-1')).resolves.toEqual([
+      { uid: PUBLIC_UID, name: 'Payments - Baseline' },
+      { uid: '10490519-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', name: 'Payments - Smoke' }
+    ]);
+    expect(requestJson).toHaveBeenNthCalledWith(1, {
+      service: 'collection', method: 'get', path: '/v3/collections/?workspace=ws-1'
+    });
+    expect(requestJson).toHaveBeenNthCalledWith(2, {
+      service: 'collection', method: 'get', path: '/v3/collections/?workspace=ws-1',
+      query: { cursor: 'collections-page-2' }
+    });
+    expect(requestJson.mock.calls.every(([request]) => !String(request.path).includes('/export'))).toBe(true);
+  });
+
+  it('accepts the cursor.next collection-list envelope and rejects repeated cursors', async () => {
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ data: [], meta: { cursor: { next: 'next' } } })
+      .mockResolvedValueOnce({ data: [], meta: { cursor: { next: 'next' } } });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listCollections('ws')).rejects.toThrow('COLLECTION_LIST_CURSOR_REPEATED');
+    expect(requestJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('drains a flattened nextCursor envelope without treating page one as complete', async () => {
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({ data: [], nextCursor: 'next' })
+      .mockResolvedValueOnce({ data: [{ id: PUBLIC_UID, name: 'Payments' }] });
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listCollections('ws')).resolves.toEqual([{ uid: PUBLIC_UID, name: 'Payments' }]);
+    expect(requestJson).toHaveBeenNthCalledWith(2, expect.objectContaining({ query: { cursor: 'next' } }));
+  });
+
+  it.each([
+    ['missing data array', {}],
+    ['non-object row', { data: ['bad'] }],
+    ['missing row UID', { data: [{ name: 'Payments' }] }],
+    ['missing row name', { data: [{ id: PUBLIC_UID }] }],
+    ['unsafe row UID', { data: [{ id: 'bad/id', name: 'Payments' }] }],
+    ['malformed pagination envelope', { data: [], meta: { pagination: [] } }],
+    ['malformed next cursor', { data: [], meta: { pagination: { nextPage: 42 } } }],
+    ['conflicting cursor envelopes', { data: [], meta: { pagination: { nextPage: 'a' }, cursor: { next: 'b' } } }]
+  ])('rejects a %s in the collection inventory', async (_label, response) => {
+    const requestJson = vi.fn().mockResolvedValue(response);
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listCollections('ws')).rejects.toThrow(/COLLECTION_LIST_(?:RESPONSE|CURSOR)/);
+  });
+
+  it('fails closed at the collection-list page ceiling', async () => {
+    let page = 0;
+    const requestJson = vi.fn(async () => ({
+      data: [{ id: `col-${page}`, name: `Collection ${page}` }],
+      meta: { pagination: { nextPage: `cursor-${++page}` } }
+    }));
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listCollections('ws')).rejects.toThrow('COLLECTION_LIST_PAGE_LIMIT_EXCEEDED');
+    expect(requestJson).toHaveBeenCalledTimes(100);
+  });
+
+  it('rejects an unsafe workspace UID before collection inventory transport', async () => {
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.listCollections('ws?other=1')).rejects.toThrow(/Workspace UID/);
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it('createMock references the collection + environment by their full public uids (no model-id strip)', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

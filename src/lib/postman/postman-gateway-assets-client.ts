@@ -63,6 +63,7 @@ export function requirePublicMock(mock: MockRecord): MockRecord {
 }
 
 const MAX_CREATE_FLIGHTS = 256;
+const COLLECTION_LIST_PAGE_LIMIT = 100;
 interface CreateFlight {
   fingerprint: string;
   promise: Promise<unknown>;
@@ -109,7 +110,9 @@ export interface PostmanGatewayAssetsClientOptions {
  * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
  * reads/updates use the `sync` service. PMAK is never used for any asset op.
  * Collection export and root-mutation routes require the full owner-prefixed
- * public UID; bare model ids are rejected before transport.
+ * public UID; bare model ids are rejected before transport. GC name resolution
+ * uses one paginated `GET /v3/collections/?workspace=...` inventory instead of
+ * exporting every collection relation.
  *
  * Create operations submit once and reconcile via live discovery on ambiguous
  * responses. Blind transport retries are reserved for safe reads. Per-process
@@ -286,11 +289,88 @@ export class PostmanGatewayAssetsClient {
     const response = await this.gateway.requestJson<JsonRecord>({
       service: 'specification', method: 'get', path: `/specifications/${id}/collections`
     });
-    const data = Array.isArray(response?.data) ? response.data : [];
-    return data.map((entry) => this.asRecord(entry))
-      .filter((entry): entry is JsonRecord => entry !== null)
-      .map((entry) => ({ uid: String(entry.collection ?? entry.collectionId ?? entry.id ?? '').trim(), name: String(entry.name ?? '').trim() }))
-      .filter((entry) => entry.uid);
+    if (!Array.isArray(response?.data)) throw new Error('SPEC_COLLECTION_LIST_RESPONSE_INVALID');
+    return response.data.map((value) => {
+      const entry = this.asRecord(value);
+      const rawUid = entry?.collection ?? entry?.collectionId ?? entry?.id;
+      if (!entry || typeof rawUid !== 'string' || (entry.name !== undefined && typeof entry.name !== 'string')) {
+        throw new Error('SPEC_COLLECTION_LIST_RESPONSE_INVALID');
+      }
+      const uid = this.requireSafePathSegment(rawUid, 'Specification collection UID');
+      return { uid, name: typeof entry.name === 'string' ? entry.name.trim() : '' };
+    });
+  }
+
+  /**
+   * Authoritative workspace collection-name snapshot for GC. Drain the v3
+   * collection service's cursor before returning: a partial inventory must not
+   * authorize parent/spec deletion. This list route replaces per-relation full
+   * exports in GC; `getCollection` remains reserved for repo file materialization.
+   */
+  async listCollections(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
+    const ws = this.requireSafePathSegment(workspaceId, 'Workspace UID');
+    const rows: Array<{ uid: string; name: string }> = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < COLLECTION_LIST_PAGE_LIMIT; page += 1) {
+      const response = await this.gateway.requestJson<JsonRecord>({
+        service: 'collection',
+        method: 'get',
+        path: `/v3/collections/?workspace=${ws}`,
+        ...(cursor ? { query: { cursor } } : {})
+      });
+      if (!Array.isArray(response?.data)) throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+      for (const value of response.data) {
+        const record = this.asRecord(value);
+        const rawUid = record?.id ?? record?.uid;
+        const rawName = record?.name ?? record?.title;
+        if (typeof rawUid !== 'string' || typeof rawName !== 'string') {
+          throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+        }
+        const uid = rawUid.trim();
+        const name = rawName.trim();
+        if (!uid || !name || !/^[A-Za-z0-9._~-]+$/.test(uid) || uid === '.' || uid === '..') {
+          throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+        }
+        rows.push({ uid, name });
+      }
+
+      const meta = response.meta === undefined ? null : this.asRecord(response.meta);
+      if (response.meta !== undefined && response.meta !== null && !meta) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const paginationValue = meta?.pagination;
+      const pagination = paginationValue === undefined ? null : this.asRecord(paginationValue);
+      if (paginationValue !== undefined && paginationValue !== null && !pagination) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const cursorValue = meta?.cursor;
+      const cursorEnvelope = cursorValue === undefined ? null : this.asRecord(cursorValue);
+      if (cursorValue !== undefined && cursorValue !== null && !cursorEnvelope) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      // Collection v3 normally returns meta.pagination.nextPage. Accept the
+      // other already-observed gateway cursor envelopes too, but reject any
+      // disagreement so a partial page can never authorize GC.
+      const candidates = [pagination?.nextPage, cursorEnvelope?.next, meta?.nextCursor, response.nextCursor]
+        .filter((value) => value !== undefined && value !== null && value !== '');
+      if (candidates.some((value) => typeof value !== 'string')) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const nextCursors = [...new Set(candidates.map((value) => String(value).trim()).filter(Boolean))];
+      if (nextCursors.length > 1) throw new Error('COLLECTION_LIST_CURSOR_AMBIGUOUS');
+      const next = nextCursors[0];
+      if (!next) return rows;
+      if (seenCursors.has(next)) throw new Error('COLLECTION_LIST_CURSOR_REPEATED');
+      seenCursors.add(next);
+      if (page === COLLECTION_LIST_PAGE_LIMIT - 1) {
+        throw new Error('COLLECTION_LIST_PAGE_LIMIT_EXCEEDED');
+      }
+      cursor = next;
+    }
+
+    throw new Error('COLLECTION_LIST_PAGE_LIMIT_EXCEEDED');
   }
 
   async deleteSpec(specId: string): Promise<void> {
