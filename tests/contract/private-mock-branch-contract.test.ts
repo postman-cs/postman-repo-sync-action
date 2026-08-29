@@ -101,9 +101,9 @@ describe.each(['canonical', 'preview'] as const)(
       expect(result.error).toBeUndefined();
       expect(result.outputs['mock-visibility']).toBe('private');
 
-      // Every collection GET export event must use an owner-prefixed public UID.
+      // Every fallback collection export must use an owner-prefixed public UID.
       const exportEvents = platform.events.filter((event) =>
-        event.startsWith('proxy:collection GET /v3/collections/')
+        event.startsWith('proxy:collection GET /v3/collections/') && event.endsWith('/export')
       );
       expect(exportEvents.length).toBeGreaterThanOrEqual(3);
       const exportedUids = new Set<string>();
@@ -121,9 +121,21 @@ describe.each(['canonical', 'preview'] as const)(
       expect(exportedUids.has(SMOKE_UID)).toBe(true);
       expect(exportedUids.has(CONTRACT_UID)).toBe(true);
 
-      // PATCH IDs must be full owner-prefixed UIDs, and PATCH must occur before
-      // any later GET export/readback for the same collection. Use indices in
-      // the single global platform.events array to prove chronology.
+      // The stable root snapshot route is distinct from /export and must also
+      // retain the public UID. These no-prebuilt contract runs exercise the
+      // explicit fallback; exact prebuilt runs skip both root GET and export.
+      const rootGetEvents = platform.events.filter((event) =>
+        /^proxy:collection GET \/v3\/collections\/[^/]+$/.test(event)
+      );
+      expect(rootGetEvents).toEqual([
+        `proxy:collection GET /v3/collections/${BASELINE_UID}`,
+        `proxy:collection GET /v3/collections/${SMOKE_UID}`,
+        `proxy:collection GET /v3/collections/${CONTRACT_UID}`
+      ]);
+
+      // PATCH IDs must be full owner-prefixed UIDs. The stable root snapshot
+      // precedes PATCH, and fallback export occurs only after PATCH succeeds.
+      // Use indices in the single global event array to prove chronology.
       const patchEvents = platform.events.filter((event) =>
         event.startsWith('proxy:collection PATCH /v3/collections/')
       );
@@ -132,11 +144,16 @@ describe.each(['canonical', 'preview'] as const)(
       );
       expect(patchedIds).toEqual([BASELINE_UID, SMOKE_UID, CONTRACT_UID]);
       for (const patchedId of patchedIds) {
+        const rootGetGlobalIndex = platform.events.findIndex(
+          (event) => event === `proxy:collection GET /v3/collections/${patchedId}`
+        );
         const patchGlobalIndex = platform.events.findIndex((event) =>
           event.includes(`/v3/collections/${patchedId}`) &&
           event.startsWith('proxy:collection PATCH')
         );
+        expect(rootGetGlobalIndex).toBeGreaterThanOrEqual(0);
         expect(patchGlobalIndex).toBeGreaterThanOrEqual(0);
+        expect(patchGlobalIndex).toBeGreaterThan(rootGetGlobalIndex);
         const laterGetGlobalIndex = platform.events.findIndex((event, idx) =>
           idx > patchGlobalIndex &&
           event.startsWith('proxy:collection GET') &&

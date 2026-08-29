@@ -34,7 +34,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { load as loadYaml } from 'js-yaml';
+import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpError } from '@postman-cs/automation-core';
 
@@ -338,12 +338,13 @@ function artifactTreeDigest(root = '.'): string {
 
 function writeCanonicalV3Tree(
   collectionPath: string,
-  definitionBody = '$kind: collection\nname: Fixture\n'
+  definitionBody = '$kind: collection\nname: Fixture\n',
+  requestBody = '$kind: http-request\nmethod: GET\n'
 ): { artifactDigest: string; files: Array<{ relative: string; bytes: Buffer }> } {
   mkdirSync(join(collectionPath, '.resources'), { recursive: true });
   mkdirSync(join(collectionPath, 'Folder', '.resources'), { recursive: true });
   writeFileSync(join(collectionPath, '.resources', 'definition.yaml'), definitionBody, 'utf8');
-  writeFileSync(join(collectionPath, 'List.request.yaml'), '$kind: http-request\nmethod: GET\n', 'utf8');
+  writeFileSync(join(collectionPath, 'List.request.yaml'), requestBody, 'utf8');
   writeFileSync(join(collectionPath, 'Folder', '.resources', 'definition.yaml'), '$kind: collection\nname: Folder\n', 'utf8');
   writeFileSync(join(collectionPath, 'Folder', 'Created.example.yaml'), '$kind: http-example\n', 'utf8');
   writeFileSync(join(collectionPath, 'Folder', 'Event.message.yaml'), '$kind: websocket-message\n', 'utf8');
@@ -2535,10 +2536,35 @@ describe('repo sync action', () => {
       };
     }
 
-    function buildAllPrebuiltManifest() {
-      const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
-      const smoke = writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
-      const contract = writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+    function requestYamlWithBeforeScript(code: string): string {
+      return dumpYaml(
+        {
+          $kind: 'http-request',
+          method: 'GET',
+          scripts: [{ type: 'beforeRequest', code, language: 'text/javascript' }]
+        },
+        { lineWidth: -1, noRefs: true, sortKeys: false }
+      );
+    }
+
+    function buildAllPrebuiltManifest(
+      requestBodies: Partial<Record<'baseline' | 'smoke' | 'contract', string>> = {}
+    ) {
+      const baseline = writeCanonicalV3Tree(
+        'postman/collections/core-payments',
+        undefined,
+        requestBodies.baseline
+      );
+      const smoke = writeCanonicalV3Tree(
+        'postman/collections/[Smoke] core-payments',
+        undefined,
+        requestBodies.smoke
+      );
+      const contract = writeCanonicalV3Tree(
+        'postman/collections/[Contract] core-payments',
+        undefined,
+        requestBodies.contract
+      );
       return {
         baseline,
         smoke,
@@ -2595,21 +2621,15 @@ describe('repo sync action', () => {
       );
     });
 
-    it('forces every collection through verified cloud export for a private mock', async () => {
-      const { manifest } = buildAllPrebuiltManifest();
+    it('reconciles every exact prebuilt private-mock tree with zero cloud exports', async () => {
+      const { manifest } = buildAllPrebuiltManifest({
+        smoke: requestYamlWithBeforeScript(
+          `${MANAGED_ITEM_AUTH_BLOCKS[2]}\n\nconsole.log('customer-owned');`
+        )
+      });
       const postman = {
         ...createExportPostmanStub(),
-        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn(async (uid: string) => {
-          if (uid === 'col-baseline') return createV3CollectionFixture('core-payments');
-          if (uid === 'col-smoke') {
-            return createV3CollectionFixture('[Smoke] core-payments', {
-              itemLegacyBlockIndex: 2,
-              itemCustomerScript: "console.log('customer-owned');"
-            });
-          }
-          return createV3CollectionFixture('[Contract] core-payments');
-        })
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY])
       };
 
       await runRepoSync(
@@ -2623,13 +2643,10 @@ describe('repo sync action', () => {
         privateMockDeps(postman)
       );
 
-      expect(postman.getCollection).toHaveBeenCalledTimes(3);
-      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
-      expect(postman.getCollection).toHaveBeenCalledWith('col-smoke');
-      expect(postman.getCollection).toHaveBeenCalledWith('col-contract');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+      expect(postman.getCollection).not.toHaveBeenCalled();
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract', []);
 
       const baselineDefinition = readFileSync(
         'postman/collections/core-payments/.resources/definition.yaml',
@@ -2645,7 +2662,7 @@ describe('repo sync action', () => {
       expect(smokeDefinition).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
 
       const smokeRequest = readFileSync(
-        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'postman/collections/[Smoke] core-payments/List.request.yaml',
         'utf8'
       );
       expect(smokeRequest).not.toContain('private-mock-auth-v3');
@@ -2678,8 +2695,7 @@ describe('repo sync action', () => {
       expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalled();
     });
 
-    it('fails before repo mutation when the managed root hook is missing from smoke export', async () => {
-      const { manifest } = buildAllPrebuiltManifest();
+    it('fails closed when the no-prebuilt smoke fallback export lacks the managed root hook', async () => {
       const artifactSnapshotBefore = snapshotRepoArtifactFiles();
       const commitAndPush = vi.fn().mockResolvedValue({
         commitSha: '',
@@ -2703,7 +2719,7 @@ describe('repo sync action', () => {
             generateCiWorkflow: false,
             mockVisibility: 'private',
             mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
-            prebuiltCollectionsJson: manifest
+            prebuiltCollectionsJson: ''
           }),
           privateMockDeps(postman, { commitAndPush })
         )
@@ -2720,8 +2736,7 @@ describe('repo sync action', () => {
       expect(existsSync('.postman/workflows.yaml')).toBe(false);
     });
 
-    it('fails before repo mutation when contract root hook is missing after smoke validates', async () => {
-      const { manifest } = buildAllPrebuiltManifest();
+    it('fails closed when the no-prebuilt contract fallback lacks a hook after smoke validates', async () => {
       const artifactSnapshotBefore = snapshotRepoArtifactFiles();
       const commitAndPush = vi.fn().mockResolvedValue({
         commitSha: '',
@@ -2748,7 +2763,7 @@ describe('repo sync action', () => {
             generateCiWorkflow: false,
             mockVisibility: 'private',
             mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
-            prebuiltCollectionsJson: manifest
+            prebuiltCollectionsJson: ''
           }),
           privateMockDeps(postman, { commitAndPush })
         )
@@ -2810,31 +2825,23 @@ describe('repo sync action', () => {
       expect(message).not.toContain(secret);
 
       assertRepoArtifactSnapshotUnchanged(artifactSnapshotBefore);
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
-      expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalledWith('col-contract');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke', []);
+      expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalledWith('col-contract', []);
       expect(postman.getCollection).not.toHaveBeenCalled();
       expect(commitAndPush).not.toHaveBeenCalled();
       expect(existsSync('.postman/resources.yaml')).toBe(false);
       expect(existsSync('postman/globals/workspace.globals.yaml')).toBe(false);
     });
 
-    it('retains legacy item blocks when cleanup kill switch is off but still exports the root hook', async () => {
+    it('retains local legacy item blocks when cleanup kill switch is off while reconciling the root hook', async () => {
       vi.stubEnv('POSTMAN_PRIVATE_MOCK_LEGACY_EXPORT_CLEANUP', 'off');
-      const { manifest } = buildAllPrebuiltManifest();
+      const { manifest } = buildAllPrebuiltManifest({
+        smoke: requestYamlWithBeforeScript(MANAGED_ITEM_AUTH_BLOCKS[2])
+      });
       const postman = {
         ...createExportPostmanStub(),
-        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn(async (uid: string) => {
-          if (uid === 'col-smoke') {
-            return createV3CollectionFixture('[Smoke] core-payments', {
-              itemLegacyBlockIndex: 2
-            });
-          }
-          return createV3CollectionFixture(
-            uid === 'col-contract' ? '[Contract] core-payments' : 'core-payments'
-          );
-        })
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY])
       };
 
       await runRepoSync(
@@ -2849,7 +2856,7 @@ describe('repo sync action', () => {
       );
 
       const smokeRequest = readFileSync(
-        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'postman/collections/[Smoke] core-payments/List.request.yaml',
         'utf8'
       );
       expect(smokeRequest).toContain('private-mock-auth-v3');
@@ -2857,33 +2864,24 @@ describe('repo sync action', () => {
         'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
         'utf8'
       )).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
-      expect(postman.getCollection).toHaveBeenCalledTimes(3);
-      expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract', []);
+      expect(postman.getCollection).not.toHaveBeenCalled();
       vi.unstubAllEnvs();
     });
 
-    it('leaves a customer-edited near-miss item block untouched in exported YAML', async () => {
+    it('leaves a customer-edited near-miss item block untouched in the local prebuilt YAML', async () => {
       const nearMiss = MANAGED_ITEM_AUTH_BLOCKS[2].replace(
         'private-mock-auth-v3',
         'private-mock-auth-v3-customer-edit'
       );
-      const { manifest } = buildAllPrebuiltManifest();
+      const { manifest } = buildAllPrebuiltManifest({
+        smoke: requestYamlWithBeforeScript(nearMiss)
+      });
       const postman = {
         ...createExportPostmanStub(),
-        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn(async (uid: string) => {
-          if (uid === 'col-smoke') {
-            return createV3CollectionFixture('[Smoke] core-payments', {
-              itemNearMissScript: nearMiss
-            });
-          }
-          return createV3CollectionFixture(
-            uid === 'col-contract' ? '[Contract] core-payments' : 'core-payments'
-          );
-        })
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY])
       };
 
       await runRepoSync(
@@ -2898,30 +2896,25 @@ describe('repo sync action', () => {
       );
 
       const smokeRequest = readFileSync(
-        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'postman/collections/[Smoke] core-payments/List.request.yaml',
         'utf8'
       );
       expect(smokeRequest).toContain('private-mock-auth-v3-customer-edit');
+      expect(postman.getCollection).not.toHaveBeenCalled();
     });
 
-    it('emits byte-identical smoke YAML on a second private-mock sync', async () => {
-      const { manifest } = buildAllPrebuiltManifest();
-      const smokeV3 = createV3CollectionFixture('[Smoke] core-payments', {
-        itemLegacyBlockIndex: 1,
-        itemCustomerScript: "console.log('stable');"
-      });
-      const contractV3 = createV3CollectionFixture('[Contract] core-payments');
-      const baselineV3 = createV3CollectionFixture('core-payments');
-      const postman = {
-        ...createExportPostmanStub(),
-        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
-        getCollection: vi.fn(async (uid: string) =>
-          structuredClone(
-            uid === 'col-baseline' ? baselineV3 : uid === 'col-smoke' ? smokeV3 : contractV3
-          )
+    it('emits byte-identical reconciled YAML from identical fresh prebuilt source trees', async () => {
+      const requestBodies = {
+        smoke: requestYamlWithBeforeScript(
+          `${MANAGED_ITEM_AUTH_BLOCKS[1]}\n\nconsole.log('stable');`
         )
       };
-      const inputs = createInputs({
+      const firstSource = buildAllPrebuiltManifest(requestBodies);
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY])
+      };
+      const inputs = (manifest: string) => createInputs({
         environments: ['prod'],
         generateCiWorkflow: false,
         mockVisibility: 'private',
@@ -2930,17 +2923,19 @@ describe('repo sync action', () => {
       });
       const deps = privateMockDeps(postman);
 
-      await runRepoSync(inputs, deps);
+      await runRepoSync(inputs(firstSource.manifest), deps);
       const firstDigest = await digestTreeOnDisk('postman/collections/[Smoke] core-payments');
 
-      await runRepoSync(inputs, deps);
+      const secondSource = buildAllPrebuiltManifest(requestBodies);
+      await runRepoSync(inputs(secondSource.manifest), deps);
       const secondDigest = await digestTreeOnDisk('postman/collections/[Smoke] core-payments');
 
       expect(firstDigest).toBe(secondDigest);
+      expect(postman.getCollection).not.toHaveBeenCalled();
       expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledTimes(6);
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(4, 'col-baseline');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(5, 'col-smoke');
-      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(6, 'col-contract');
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(4, 'col-baseline', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(5, 'col-smoke', []);
+      expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenNthCalledWith(6, 'col-contract', []);
     });
   });
 

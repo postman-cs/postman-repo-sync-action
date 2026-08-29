@@ -66,6 +66,50 @@ function cloneCollection(collection: JsonRecord): JsonRecord {
   }
 }
 
+function cleanManagedItemAuthScriptsInPlace(item: JsonRecord, stripManagedBlocks: boolean): number {
+  if (!stripManagedBlocks) {
+    return 0;
+  }
+  const scripts = item.scripts;
+  if (!Array.isArray(scripts)) {
+    return 0;
+  }
+
+  let strippedBlocks = 0;
+  const nextScripts: JsonRecord[] = [];
+  for (const script of scripts) {
+    if (!script || typeof script !== 'object' || Array.isArray(script)) {
+      nextScripts.push(script as JsonRecord);
+      continue;
+    }
+    const record = script as JsonRecord;
+    if (String(record.type ?? '') !== 'beforeRequest') {
+      nextScripts.push(record);
+      continue;
+    }
+    const originalCode = String(record.code ?? '');
+    const cleaned = stripManagedItemAuthBlocks(originalCode);
+    if (cleaned === originalCode) {
+      // Preserve customer/near-miss beforeRequest scripts byte-for-byte.
+      nextScripts.push(record);
+      continue;
+    }
+    strippedBlocks += countManagedItemAuthBlocks(originalCode);
+    if (!cleaned) {
+      // Managed-only script: drop the script object entirely.
+      continue;
+    }
+    nextScripts.push({ ...record, code: cleaned });
+  }
+
+  if (nextScripts.length === 0) {
+    delete item.scripts;
+  } else {
+    item.scripts = nextScripts;
+  }
+  return strippedBlocks;
+}
+
 export function isPrivateMockLegacyExportCleanupEnabled(): boolean {
   const value = String(process.env.POSTMAN_PRIVATE_MOCK_LEGACY_EXPORT_CLEANUP ?? '').trim().toLowerCase();
   return value !== 'off';
@@ -74,6 +118,24 @@ export function isPrivateMockLegacyExportCleanupEnabled(): boolean {
 export function verifyPrivateMockRootHook(collection: JsonRecord): boolean {
   const scripts = asArray<JsonRecord>(collection.scripts);
   return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
+}
+
+/**
+ * Clone and clean one split Collection v3 artifact node. Split trees store each
+ * folder/request in its own YAML document, so this is the on-disk equivalent of
+ * visiting one child in {@link applyPrivateMockExportCleanup}. Root collection
+ * scripts are intentionally handled separately by the caller.
+ */
+export function applyPrivateMockArtifactNodeCleanup(
+  node: JsonRecord,
+  options: { stripManagedBlocks?: boolean } = {}
+): { node: JsonRecord; strippedBlocks: number } {
+  const stripManagedBlocks = options.stripManagedBlocks ?? isPrivateMockLegacyExportCleanupEnabled();
+  const cloned = cloneCollection(node);
+  return {
+    node: cloned,
+    strippedBlocks: cleanManagedItemAuthScriptsInPlace(cloned, stripManagedBlocks)
+  };
 }
 
 /**
@@ -89,53 +151,11 @@ export function applyPrivateMockExportCleanup(
   const cloned = cloneCollection(collection);
   let strippedBlocks = 0;
 
-  const visitItem = (item: JsonRecord): void => {
-    if (!stripManagedBlocks) {
-      return;
-    }
-    const scripts = item.scripts;
-    if (!Array.isArray(scripts)) {
-      return;
-    }
-
-    const nextScripts: JsonRecord[] = [];
-    for (const script of scripts) {
-      if (!script || typeof script !== 'object' || Array.isArray(script)) {
-        nextScripts.push(script as JsonRecord);
-        continue;
-      }
-      const record = script as JsonRecord;
-      if (String(record.type ?? '') !== 'beforeRequest') {
-        nextScripts.push(record);
-        continue;
-      }
-      const originalCode = String(record.code ?? '');
-      const cleaned = stripManagedItemAuthBlocks(originalCode);
-      if (cleaned === originalCode) {
-        // Preserve customer/near-miss beforeRequest scripts byte-for-byte.
-        nextScripts.push(record);
-        continue;
-      }
-      strippedBlocks += countManagedItemAuthBlocks(originalCode);
-      if (!cleaned) {
-        // Managed-only script: drop the script object entirely.
-        continue;
-      }
-      nextScripts.push({ ...record, code: cleaned });
-    }
-
-    if (nextScripts.length === 0) {
-      delete item.scripts;
-    } else {
-      item.scripts = nextScripts;
-    }
-  };
-
   const walkItemsIteratively = (rootItems: JsonRecord[]): void => {
     const stack: JsonRecord[] = [...rootItems].reverse();
     while (stack.length > 0) {
       const item = stack.pop()!;
-      visitItem(item);
+      strippedBlocks += cleanManagedItemAuthScriptsInPlace(item, stripManagedBlocks);
       for (const key of ['items', 'children'] as const) {
         const nested = asArray<JsonRecord>(item[key]);
         for (let i = nested.length - 1; i >= 0; i -= 1) {
