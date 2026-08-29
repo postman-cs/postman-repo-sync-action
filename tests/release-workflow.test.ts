@@ -376,6 +376,38 @@ esac
 `
   );
   chmodSync(gitStub, 0o755);
+  if (process.platform === 'win32') {
+    // Git Bash resolves Windows PATHEXT wrappers more reliably than an
+    // extensionless temporary executable. Keep this behaviour identical to
+    // the bash stub so the test never falls through to the checkout's real
+    // `git` and exits early against the live rolling v2 tag.
+    writeFileSync(
+      join(tmpDir, 'git.bat'),
+      `@echo off\r
+if "%~1"=="rev-parse" (\r
+  echo %GITHUB_SHA%\r
+  exit /b 0\r
+)\r
+if "%~1"=="ls-remote" (\r
+  if "%~6"=="" exit /b 2\r
+  echo %GIT_STUB_RELEASE_TAG_OBJECT%\trefs/tags/%GITHUB_REF_NAME%\r
+  echo %GIT_STUB_RELEASE_COMMIT%\trefs/tags/%GITHUB_REF_NAME%^^{}\r
+  exit /b 0\r
+)\r
+if "%~1"=="config" exit /b 0\r
+if "%~1"=="tag" (\r
+  >>"%GIT_STUB_MUTATIONS%" echo %*\r
+  exit /b 0\r
+)\r
+if "%~1"=="push" (\r
+  >>"%GIT_STUB_MUTATIONS%" echo %*\r
+  exit /b 0\r
+)\r
+echo unexpected git call: %* 1>&2\r
+exit /b 90\r
+`
+    );
+  }
   writeFileSync(scriptPath, aliasRunBody);
   try {
     const result = spawnSync('bash', ['--noprofile', '--norc', scriptPath], {
