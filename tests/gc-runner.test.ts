@@ -99,16 +99,73 @@ describe('collectGcCandidates', () => {
   });
 
   it('discovers a preview spec from its embedded durable marker', async () => {
+    const getCollection = vi.fn().mockResolvedValue({
+      name: `[Contract] core-payments @${BRANCH_SUFFIX}`
+    });
     const postman = client({
       listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: `core-payments @${BRANCH_SUFFIX}` }]),
       getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
-      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: `[Contract] core-payments @${BRANCH_SUFFIX}` }])
+      // Production relation rows contain only the bare collection model ID;
+      // they do not project the collection name.
+      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: '' }]),
+      getCollection
     });
     const candidates = await collectGcCandidates(postman, 'ws-1');
     expect(candidates.find((candidate) => candidate.kind === 'spec')).toMatchObject({
       uid: 'spec-preview', marker: { rawBranch: 'feature/payments' }
     });
-    expect(candidates.find((candidate) => candidate.uid === 'col-contract')).toMatchObject({ kind: 'collection' });
+    expect(candidates.find((candidate) => candidate.uid === 'col-contract')).toMatchObject({
+      kind: 'collection',
+      name: `[Contract] core-payments @${BRANCH_SUFFIX}`
+    });
+    expect(getCollection.mock.calls.filter(([uid]) => uid === 'col-contract')).toHaveLength(1);
+    expect(getCollection).toHaveBeenCalledWith('col-contract');
+  });
+
+  it('does not trust a generated-looking relation name when the exact collection is canonical', async () => {
+    const postman = client({
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: `core-payments @${BRANCH_SUFFIX}` }]),
+      getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
+      listSpecCollections: vi.fn().mockResolvedValue([{
+        uid: 'col-canonical',
+        name: `[Contract] core-payments @${BRANCH_SUFFIX}`
+      }]),
+      getCollection: vi.fn().mockResolvedValue({ name: '[Contract] core-payments' })
+    });
+
+    const candidates = await collectGcCandidates(postman, 'ws-1');
+    expect(candidates.some((candidate) => candidate.uid === 'col-canonical')).toBe(false);
+    expect(candidates.some((candidate) => candidate.uid === 'spec-preview')).toBe(false);
+  });
+
+  it('preserves a preview specification when relation discovery fails', async () => {
+    const postman = client({
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: `core-payments @${BRANCH_SUFFIX}` }]),
+      getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
+      listSpecCollections: vi.fn().mockRejectedValue(new Error('relation service unavailable'))
+    });
+
+    const candidates = await collectGcCandidates(postman, 'ws-1');
+    expect(candidates.some((candidate) => candidate.uid === 'spec-preview')).toBe(false);
+  });
+
+  it('reads one exact collection for duplicate agreeing specification relations', async () => {
+    const getCollection = vi.fn().mockResolvedValue({
+      info: { name: `[Contract] core-payments @${BRANCH_SUFFIX}` }
+    });
+    const postman = client({
+      listSpecifications: vi.fn().mockResolvedValue([
+        { uid: 'spec-preview-a', name: `core-payments @${BRANCH_SUFFIX}` },
+        { uid: 'spec-preview-b', name: `core-payments @${BRANCH_SUFFIX}` }
+      ]),
+      getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
+      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-shared', name: '' }]),
+      getCollection
+    });
+
+    const candidates = await collectGcCandidates(postman, 'ws-1');
+    expect(candidates.filter((candidate) => candidate.uid === 'col-shared')).toHaveLength(1);
+    expect(getCollection.mock.calls.filter(([uid]) => uid === 'col-shared')).toHaveLength(1);
   });
 
   it('does not inherit a marker into a collection from a non-generated mock', async () => {

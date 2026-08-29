@@ -112,6 +112,30 @@ describe('PostmanGatewayAssetsClient', () => {
     expect(incomplete.mock.calls.filter(([r]) => String((r as { path: string }).path).includes('/files')).length).toBe(2);
   });
 
+  it('normalizes production-shaped nameless specification collection relations', async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      data: [{
+        collection: '12345678-abcd-ef01-2345-678901234567',
+        state: 'out-of-sync',
+        options: { parameters: {} }
+      }]
+    });
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws'
+    });
+
+    await expect(assets.listSpecCollections('spec-1')).resolves.toEqual([{
+      uid: '12345678-abcd-ef01-2345-678901234567',
+      name: ''
+    }]);
+    expect(requestJson).toHaveBeenCalledWith({
+      service: 'specification',
+      method: 'get',
+      path: '/specifications/spec-1/collections'
+    });
+  });
+
   it('createMock references the collection + environment by their full public uids (no model-id strip)', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
