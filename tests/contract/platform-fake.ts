@@ -533,7 +533,7 @@ export function createPlatform(options: PlatformOptions = {}) {
       return json({
         user: {
           id: userId,
-          fullName: 'Ada Lovelace',
+          fullName: 'test-fixture',
           teamId,
           teamName: org ? 'field-services-v12-demo' : 'jared-demo',
           teamDomain: org ? 'field-services-v12-demo' : 'jared-demo'
