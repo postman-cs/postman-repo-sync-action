@@ -24,12 +24,13 @@ tests/
 
 ## Collection v3 Invariant
 
-- **Source = access-token gateway.** `GET /v3/collections/:id/export` (canonical v3). PMAK only mints access-token — never data calls.
-- **Always write v3, never v2.** Allowed v2->v3. Forbidden: raw v2 write, v3->v2 down-convert. v3 read = v3 write directly. Old `v3-export-to-v2.ts` deleted.
+- **Source = access-token gateway.** One retry-free populated Sync `GET /collection/:uid?populate=true&format=2.1.0&uid=false` returns full v2.1 snapshot; official runtime.models transform converts it to canonical v3 in memory. Collection v3 `/export` is forbidden on artifact-acquisition path. PMAK only mints access-token — never data calls.
+- **Always write v3, never v2.** Allowed v2->v3. Forbidden: raw v2 write or v3->v2 down-convert. Old `v3-export-to-v2.ts` deleted.
 - **converter.ts uses `@postman/runtime.models` + `@postman/v3.export`** — `transform(V2->V3)` + `splitCollection`. Same pipeline as `postman collection migrate`. Entry points:
+  - `convertV2CollectionToV3Collection(payload)` — official in-memory v2.1 -> v3 transform for inspection/cleanup
   - `convertAndSplitAnyCollection(payload, dir)` — auto-detects v2/v3, routes
   - `convertAndSplitCollection(v2, dir)` — v2.1 -> canonical v3
-  - `convertAndSplitV3Collection(v3Export, dir)` — gateway v3 -> canonical v3, written directly
+  - `convertAndSplitV3Collection(v3Collection, dir)` — trusted prebuilt/test v3 -> canonical v3, written directly
 - Output: canonical layout w/ definition file, folder dirs, request YAML, `$kind:` markers. Legacy `collection.yaml`/`type:` rejected by `postman collection lint` (FMT015). `splitCollection` owns long-name truncation + duplicate-sibling naming.
 
 ## Commands
@@ -45,7 +46,7 @@ npm run verify:dist         # build, diff, inspect
 
 ## Key Behaviors
 
-- **Collection v3 export**: `converter.ts` transforms single-JSON collections into baseline dir + `[Smoke] name` + `[Contract] name` dirs w/ nested folder/request YAML.
+- **Collection artifact acquisition**: one populated Sync v2.1 snapshot is identity/schema validated, transformed in memory, then split into baseline dir + `[Smoke] name` + `[Contract] name` dirs w/ nested folder/request YAML.
 - **Env management**: Creates envs per slug in `environments-json`, injects runtime URLs from `env-runtime-urls-json`, associates w/ system envs via Bifrost.
 - **Mock/Monitor**: Creates mock from baseline, smoke monitor from smoke collection. Reuse via `mock-url`, `monitor-id`. Scheduling via `monitor-cron`.
 - **CI workflow**: Writes Postman CLI-based smoke/contract test workflow. `generate-ci-workflow` flag + `ci-workflow-path` control.

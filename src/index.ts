@@ -20,7 +20,8 @@ import dynamicVariables from 'postman-collection/lib/superstring/dynamic-variabl
 import {
   appendArtifactDigestFileStreaming,
   ArtifactDigestStreamError,
-  convertAndSplitAnyCollection
+  convertAndSplitAnyCollection,
+  convertV2CollectionToV3Collection
 } from './postman-v3/converter.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
@@ -2628,13 +2629,14 @@ async function preparePrivateMockCloudCollection(
   collectionId: string,
   postman: RepoSyncDependencies['postman']
 ): Promise<Record<string, unknown>> {
-  const col = await postman.getCollection(collectionId);
-  const { collection } = applyPrivateMockExportCleanup(col as Record<string, unknown>, {
+  const snapshot = await postman.getCollection(collectionId) as Record<string, unknown>;
+  const v3Collection = convertV2CollectionToV3Collection(snapshot);
+  const { collection } = applyPrivateMockExportCleanup(v3Collection, {
     stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
   });
   if (!verifyPrivateMockRootHook(collection)) {
     throw new Error(
-      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from populated ${role} collection snapshot ${collectionId}`
     );
   }
   return collection;
@@ -2704,8 +2706,8 @@ async function acquireCollectionArtifact(options: {
   }
   if (entry) {
     core.info(privateMockAuth
-      ? `Private mock has no locally reconciled exact prebuilt ${role} collection; exporting from cloud`
-      : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
+      ? `Private mock has no locally reconciled exact prebuilt ${role} collection; reading populated cloud snapshot`
+      : `Prebuilt ${role} collection entry present but did not exactly match; reading populated cloud snapshot`);
   }
   const cloud = privateMockAuth
     ? await preparePrivateMockCloudCollection(role, collectionId, postman)
@@ -4279,9 +4281,9 @@ export function createRepoSyncDependencies(
     getEnvironment: gatewayAssets.getEnvironment.bind(gatewayAssets),
     updateEnvironment: gatewayAssets.updateEnvironment.bind(gatewayAssets),
     findEnvironmentByName: gatewayAssets.findEnvironmentByName.bind(gatewayAssets),
-    // Collection read via the v3 export endpoint — returns canonical v3 IR,
-    // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
-    // collection reads.
+    // Collection read via one retry-free populated Sync GET — returns a full
+    // v2.1 snapshot that the official runtime.models transform converts to v3
+    // before repository materialization. PMAK is never used for reads.
     getCollection: gatewayAssets.getCollection.bind(gatewayAssets),
     // Mocks via the `mock` service, collection-based monitors via the `monitors`
     // service (jobTemplates). Both reference the collection by its full public

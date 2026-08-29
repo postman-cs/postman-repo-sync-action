@@ -207,25 +207,11 @@ describe('contract: platform fake routing', () => {
     }
   });
 
-  it('rejects a bare model id on collection root/export/PATCH routes while public-UID routes persist atomically', async () => {
+  it('models populated Sync reads while collection root/PATCH routes require public UIDs', async () => {
     const bareId = '6b9b8a7c-1111-4222-8333-444455556666';
     const publicUid = `132319-${bareId}`;
     const platform = createPlatform({
       existingCollections: [{ id: bareId, ownerId: 132319 }]
-    });
-
-    // Bare GET export is denied.
-    const deniedGet = await proxy(platform, {
-      service: 'collection',
-      method: 'get',
-      path: `/v3/collections/${bareId}/export`
-    });
-    expect(deniedGet.status).toBe(403);
-    await expect(deniedGet.json()).resolves.toEqual({
-      error: {
-        code: 'FORBIDDEN',
-        message: `Access to the requested resource "${bareId}" has been denied`
-      }
     });
 
     const deniedRootGet = await proxy(platform, {
@@ -250,15 +236,23 @@ describe('contract: platform fake routing', () => {
       }
     });
 
-    // Public-UID GET export succeeds.
+    // Public-UID populated Sync GET succeeds and projects a full v2.1 model.
     const allowedGet = await proxy(platform, {
-      service: 'collection',
+      service: 'sync',
       method: 'get',
-      path: `/v3/collections/${publicUid}/export`
+      path: `/collection/${publicUid}`,
+      query: { populate: 'true', format: '2.1.0', uid: 'false' }
     });
     expect(allowedGet.status).toBe(200);
     await expect(allowedGet.json()).resolves.toMatchObject({
-      data: { collection: { info: { name: 'baseline' } } }
+      data: {
+        info: {
+          name: 'baseline',
+          _postman_id: bareId,
+          schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+        },
+        item: []
+      }
     });
 
     const allowedRootGet = await proxy(platform, {

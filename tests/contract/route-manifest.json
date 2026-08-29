@@ -42,10 +42,10 @@
       "reason": "Collection garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
     },
     {
-      "id": "collection.export-collection",
-      "service": "collection",
+      "id": "sync.get-populated-collection",
+      "service": "sync",
       "method": "GET",
-      "path": "/v3/collections/{param}/export",
+      "path": "/collection/{param}",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"

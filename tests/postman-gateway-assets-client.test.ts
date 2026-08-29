@@ -1374,18 +1374,65 @@ describe('PostmanGatewayAssetsClient', () => {
   const COLLECTION_BARE_ID = '12345678-abcd-ef01-2345-678901234567';
   const ESOCKET_500_BODY =
     '{"error":{"name":"serverError","details":"ESOCKETTIMEDOUT","source":"downstream"}}';
+  const populatedCollection = (id = COLLECTION_BARE_ID) => ({
+    info: {
+      name: 'Payments',
+      _postman_id: id,
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+    },
+    item: []
+  });
 
-  it('getCollection sends the full owner-prefixed public UID to /v3/collections/:uid/export', async () => {
-    const requestJson = vi.fn(async () => ({ data: { collection: { info: { name: 'x' } } } }));
+  it('getCollection makes one retry-free populated Sync read for the full public UID', async () => {
+    const requestJson = vi.fn(async (request: { path: string }) => {
+      void request;
+      return { data: populatedCollection() };
+    });
     const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
 
-    await assets.getCollection(PUBLIC_UID);
+    await expect(assets.getCollection(PUBLIC_UID)).resolves.toEqual(populatedCollection());
 
-    expect(requestJson).toHaveBeenCalledWith({
-      service: 'collection',
+    expect(requestJson).toHaveBeenCalledExactlyOnceWith({
+      service: 'sync',
       method: 'get',
-      path: `/v3/collections/${PUBLIC_UID}/export`
+      path: `/collection/${PUBLIC_UID}`,
+      query: { populate: 'true', format: '2.1.0', uid: 'false' },
+      retry: 'none',
+      fallback: 'none'
     });
+    expect(requestJson.mock.calls.some(([request]) => String(request.path).includes('/export'))).toBe(false);
+  });
+
+  it.each([
+    ['missing data', {}],
+    ['non-object data', { data: [] }],
+    ['missing info', { data: { item: [] } }],
+    ['wrong schema', { data: { ...populatedCollection(), info: { ...populatedCollection().info, schema: 'https://example.test/v2' } } }],
+    ['malformed item tree', { data: { ...populatedCollection(), item: [{ name: 'bad', item: 'not-an-array' }] } }],
+    ['foreign identity', { data: populatedCollection('ffffffff-ffff-ffff-ffff-ffffffffffff') }]
+  ])('getCollection rejects %s after one populated Sync read', async (_label, response) => {
+    const requestJson = vi.fn(async () => response);
+    const assets = new PostmanGatewayAssetsClient({ gateway: { requestJson } as never, workspaceId: 'ws' });
+
+    await expect(assets.getCollection(PUBLIC_UID)).rejects.toThrow(/COLLECTION_SNAPSHOT_INVALID/);
+    expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('getCollection surfaces a Sync 500 after exactly one request with no export fallback', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse(JSON.parse(ESOCKET_500_BODY), { status: 500 })
+    );
+    const { assets } = buildClient(fetchImpl, { accessToken: 'tok-current' });
+
+    await expect(assets.getCollection(PUBLIC_UID)).rejects.toMatchObject({ status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(parseEnvelope(fetchImpl.mock.calls[0]!)).toMatchObject({
+      service: 'sync',
+      method: 'get',
+      path: `/collection/${PUBLIC_UID}`,
+      query: { populate: 'true', format: '2.1.0', uid: 'false' }
+    });
+    expect(JSON.stringify(parseEnvelope(fetchImpl.mock.calls[0]!))).not.toContain('/export');
   });
 
   it('getCollection rejects a bare collection model ID before transport', async () => {

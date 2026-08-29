@@ -101,29 +101,30 @@ describe.each(['canonical', 'preview'] as const)(
       expect(result.error).toBeUndefined();
       expect(result.outputs['mock-visibility']).toBe('private');
 
-      // Every fallback collection export must use an owner-prefixed public UID.
-      const exportEvents = platform.events.filter((event) =>
-        event.startsWith('proxy:collection GET /v3/collections/') && event.endsWith('/export')
+      // Every fallback artifact snapshot must use an owner-prefixed public UID
+      // on the retry-free populated Sync route. Collection v3 export is never
+      // called, even when no local prebuilt tree is available.
+      const snapshotEvents = platform.events.filter((event) =>
+        event.startsWith('proxy:sync GET /collection/')
       );
-      expect(exportEvents.length).toBeGreaterThanOrEqual(3);
-      const exportedUids = new Set<string>();
-      for (const event of exportEvents) {
-        const match = /\/v3\/collections\/([^/]+)\/export$/.exec(event);
+      expect(snapshotEvents).toHaveLength(3);
+      const snapshotUids = new Set<string>();
+      for (const event of snapshotEvents) {
+        const match = /\/collection\/([^/]+)$/.exec(event);
         expect(match).not.toBeNull();
         const uid = match![1]!;
         expect(uid).toMatch(/^\d+-[0-9a-f-]+$/);
         expect(uid).not.toBe(BASELINE_MODEL_ID);
         expect(uid).not.toBe(SMOKE_MODEL_ID);
         expect(uid).not.toBe(CONTRACT_MODEL_ID);
-        exportedUids.add(uid);
+        snapshotUids.add(uid);
       }
-      expect(exportedUids.has(BASELINE_UID)).toBe(true);
-      expect(exportedUids.has(SMOKE_UID)).toBe(true);
-      expect(exportedUids.has(CONTRACT_UID)).toBe(true);
+      expect(snapshotUids).toEqual(new Set([BASELINE_UID, SMOKE_UID, CONTRACT_UID]));
+      expect(platform.events.some((event) => event.includes('/export'))).toBe(false);
 
-      // The stable root snapshot route is distinct from /export and must also
-      // retain the public UID. These no-prebuilt contract runs exercise the
-      // explicit fallback; exact prebuilt runs skip both root GET and export.
+      // The stable lightweight root snapshot used for guarded PATCH must also
+      // retain the public UID. These no-prebuilt runs exercise the cloud
+      // snapshot path; exact prebuilt runs skip both root and populated GETs.
       const rootGetEvents = platform.events.filter((event) =>
         /^proxy:collection GET \/v3\/collections\/[^/]+$/.test(event)
       );
@@ -134,7 +135,7 @@ describe.each(['canonical', 'preview'] as const)(
       ]);
 
       // PATCH IDs must be full owner-prefixed UIDs. The stable root snapshot
-      // precedes PATCH, and fallback export occurs only after PATCH succeeds.
+      // precedes PATCH, and the populated Sync snapshot occurs only after PATCH succeeds.
       // Use indices in the single global event array to prove chronology.
       const patchEvents = platform.events.filter((event) =>
         event.startsWith('proxy:collection PATCH /v3/collections/')
@@ -156,8 +157,7 @@ describe.each(['canonical', 'preview'] as const)(
         expect(patchGlobalIndex).toBeGreaterThan(rootGetGlobalIndex);
         const laterGetGlobalIndex = platform.events.findIndex((event, idx) =>
           idx > patchGlobalIndex &&
-          event.startsWith('proxy:collection GET') &&
-          event.includes(`/v3/collections/${patchedId}/export`)
+          event === `proxy:sync GET /collection/${patchedId}`
         );
         expect(laterGetGlobalIndex).toBeGreaterThanOrEqual(0);
         expect(laterGetGlobalIndex).toBeGreaterThan(patchGlobalIndex);

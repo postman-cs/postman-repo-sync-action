@@ -8,7 +8,8 @@
  *
  *   - sync POST /list/environment?workspace=:ws   (env list — POST, not GET)
  *   - sync GET  /environment/:id/sync?since_id=0  (env get-one)
- *   - collection GET /v3/collections/:id/export   (collection read — v3 IR)
+ *   - sync GET /collection/:uid?populate=true&format=2.1.0&uid=false
+ *     (complete collection read — v2.1 snapshot)
  *   - mock GET /mocks?workspace=:ws
  *   - monitorsV2 GET /monitors?workspace=:ws
  *
@@ -155,8 +156,13 @@ async function main(): Promise<void> {
     await probeRead(gateway, 'sync env list (POST /list/environment)', 'sync', 'post', `/list/environment?workspace=${wsId}`);
     await probeRead(gateway, 'sync env get-one (GET /environment/:id/sync)', 'sync', 'get', `/environment/${toModelId(envUid)}/sync?since_id=0`);
     if (collectionUid) {
-      await probeRead(gateway, 'collection v3 export (GET /v3/collections/:id/export)', 'collection', 'get', `/v3/collections/${toModelId(collectionUid)}/export`);
-      await probeRead(gateway, 'collection v2 read (GET /collections/:uid — expect 404)', 'collection', 'get', `/collections/${collectionUid}`);
+      await probeRead(
+        gateway,
+        'populated Sync collection snapshot',
+        'sync',
+        'get',
+        `/collection/${collectionUid}?populate=true&format=2.1.0&uid=false`
+      );
     }
     await probeRead(gateway, 'mock list (GET /mocks)', 'mock', 'get', `/mocks?workspace=${wsId}`);
     await probeRead(gateway, 'monitorsV2 list (GET /monitors)', 'monitorsV2', 'get', `/monitors?workspace=${wsId}`);
@@ -165,9 +171,9 @@ async function main(): Promise<void> {
     const envData = await assets.getEnvironment(envUid);
     console.log(`  [ok] getEnvironment values=${snippet((envData as JsonRecord | null)?.values)}`);
     if (collectionUid) {
-      const v3 = await assets.getCollection(collectionUid);
-      const items = Array.isArray((v3 as JsonRecord | null)?.items) ? (v3 as JsonRecord).items : [];
-      console.log(`  [ok] getCollection v3 IR items=${items.length}`);
+      const v2 = await assets.getCollection(collectionUid);
+      const items = Array.isArray((v2 as JsonRecord | null)?.item) ? (v2 as JsonRecord).item : [];
+      console.log(`  [ok] getCollection populated v2.1 items=${items.length}`);
     }
   } finally {
     console.log('\n[teardown] deleting created workspaces...');

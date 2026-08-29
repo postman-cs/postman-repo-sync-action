@@ -52,9 +52,10 @@ type FakeBodyShape = 'none' | 'record' | 'array';
 
 /**
  * Bare collection model id (no owner prefix). Live-proven 2026-08-03: the
- * collection-service ROOT routes fail closed on bare ids —
- * GET/PATCH /v3/collections/:id and GET /v3/collections/:id/export all return
- * 403 FORBIDDEN unless the full owner-prefixed public UID is sent.
+ * collection-service ROOT routes fail closed on bare ids — GET/PATCH
+ * /v3/collections/:id return 403 FORBIDDEN unless the full owner-prefixed
+ * public UID is sent. Populated Sync reads also receive the public UID so the
+ * fake can verify identity is preserved across the action boundary.
  */
 const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -76,11 +77,11 @@ export const REPO_SYNC_FAKE_ROUTES: readonly RepoSyncFakeRoute[] = [
   { service: 'sync', method: 'POST', path: '/environment/import', query: ['workspace'], requiredQuery: ['workspace'], body: 'record' },
   { service: 'sync', method: 'POST', path: '/list/environment', query: ['cursor', 'workspace'], requiredQuery: ['workspace'], body: 'none' },
   { service: 'sync', method: 'GET', path: '/environment/{param}/sync', query: ['since_id'], requiredQuery: ['since_id'], body: 'none' },
+  { service: 'sync', method: 'GET', path: '/collection/{param}', query: ['populate', 'format', 'uid'], requiredQuery: ['populate', 'format', 'uid'], body: 'none' },
   { service: 'sync', method: 'PUT', path: '/environment/{param}', body: 'record' },
   { service: 'sync', method: 'DELETE', path: '/environment/{param}', body: 'none' },
   { service: 'collection', method: 'GET', path: '/v3/collections', query: ['cursor', 'workspace'], requiredQuery: ['workspace'], body: 'none' },
   { service: 'collection', method: 'GET', path: '/v3/collections/{param}', body: 'none' },
-  { service: 'collection', method: 'GET', path: '/v3/collections/{param}/export', body: 'none' },
   { service: 'collection', method: 'PATCH', path: '/v3/collections/{param}', body: 'array' },
   { service: 'collection', method: 'DELETE', path: '/v3/collections/{param}', body: 'none' },
   { service: 'mock', method: 'GET', path: '/mocks', query: ['cursor', 'workspace'], requiredQuery: ['workspace'], body: 'none' },
@@ -196,6 +197,88 @@ export function isModeledRepoSyncFakeRoute(
 export interface OwnedResourceSeed {
   id: string;
   ownerId?: number;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function scriptsToV2Events(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    const script = record(candidate);
+    if (!script || typeof script.code !== 'string') return [];
+    const rawType = String(script.type ?? '').replace(/^http:/, '');
+    const listen = rawType === 'beforeRequest'
+      ? 'prerequest'
+      : rawType === 'afterResponse'
+        ? 'test'
+        : '';
+    if (!listen) return [];
+    return [{
+      listen,
+      script: {
+        type: typeof script.language === 'string' ? script.language : 'text/javascript',
+        exec: [script.code]
+      }
+    }];
+  });
+}
+
+function v3ItemToV2(value: unknown): Record<string, unknown> {
+  const item = record(value) ?? {};
+  const children = Array.isArray(item.items)
+    ? item.items
+    : Array.isArray(item.children)
+      ? item.children
+      : undefined;
+  if (children) {
+    return {
+      id: item.id,
+      name: String(item.name ?? ''),
+      item: children.map(v3ItemToV2),
+      event: scriptsToV2Events(item.scripts)
+    };
+  }
+  return {
+    id: item.id,
+    name: String(item.name ?? ''),
+    request: {
+      method: String(item.method ?? 'GET'),
+      url: item.url ?? 'https://example.test'
+    },
+    response: [],
+    event: scriptsToV2Events(item.scripts)
+  };
+}
+
+function populatedSyncSnapshot(
+  source: Record<string, unknown>,
+  modelId: string
+): Record<string, unknown> {
+  const v2Info = record(source.info);
+  if (v2Info && Array.isArray(source.item)) {
+    return {
+      ...structuredClone(source),
+      info: {
+        ...v2Info,
+        name: String(v2Info.name ?? source.name ?? 'baseline'),
+        _postman_id: modelId,
+        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+      }
+    };
+  }
+  return {
+    info: {
+      name: String(source.name ?? 'baseline'),
+      _postman_id: modelId,
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+    },
+    item: (Array.isArray(source.items) ? source.items : []).map(v3ItemToV2),
+    event: scriptsToV2Events(source.scripts)
+  };
 }
 
 export interface EnvironmentSeed extends OwnedResourceSeed {
@@ -481,6 +564,33 @@ export function createPlatform(options: PlatformOptions = {}) {
       }
 
       if (svc === 'sync') {
+        if (pmethod === 'get' && /\/collection\/[^/]+$/.test(ppath)) {
+          if (
+            query.populate !== 'true' ||
+            query.format !== '2.1.0' ||
+            query.uid !== 'false'
+          ) {
+            throw new Error('Populated Sync collection read used the wrong projection query');
+          }
+          const candidate = ppath.split('/').pop() || '';
+          const resource = resolveOwned(collections, candidate);
+          // Most focused contract scenarios supply existing collection IDs but
+          // do not care about collection state. Model those inputs as an
+          // already-existing minimal root, matching the old fake's behavior;
+          // stateful collection tests seed an explicit resource instead.
+          const candidateParts = candidate.split('-');
+          const modelId = candidateParts.length >= 6
+            ? candidateParts.slice(1).join('-')
+            : candidate;
+          return json({
+            data: resource
+              ? populatedSyncSnapshot(resource.collection, resource.id)
+              : populatedSyncSnapshot(
+                  { info: { name: 'baseline' }, item: [] },
+                  modelId
+                )
+          });
+        }
         if (pmethod === 'post' && ppath === '/environment/import') {
           const body = proxy.body as Record<string, unknown>;
           const requestedId = String(body.id ?? 'env-prod-uid');
@@ -634,22 +744,6 @@ export function createPlatform(options: PlatformOptions = {}) {
       }
 
       if (svc === 'collection') {
-        if (pmethod === 'get' && /\/export$/.test(ppath)) {
-          const candidate = ppath.replace(/\/export$/, '').split('/').pop() || '';
-          if (BARE_COLLECTION_MODEL_ID.test(candidate)) {
-            return json(
-              {
-                error: {
-                  code: 'FORBIDDEN',
-                  message: `Access to the requested resource "${candidate}" has been denied`
-                }
-              },
-              403
-            );
-          }
-          const resource = resolveOwned(collections, candidate);
-          return json({ data: { collection: resource?.collection ?? { info: { name: 'baseline' }, item: [] } } });
-        }
         if (pmethod === 'get' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
           const candidate = ppath.split('/').pop() || '';
           if (BARE_COLLECTION_MODEL_ID.test(candidate)) {

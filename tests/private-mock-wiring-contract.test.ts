@@ -83,11 +83,11 @@ describe('private-mock export cleanup wiring contract', () => {
     expect(indexSource).toMatch(/acquireCollectionArtifact\(\{[\s\S]*?\bprivateMockAuth\b/);
   });
 
-  it('invokes applyPrivateMockExportCleanup on the cloud export path before YAML conversion', () => {
+  it('transforms populated Sync v2 to v3 before cloud-snapshot cleanup and YAML conversion', () => {
     const exportFn = collectionAcquisitionSource();
     expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toMatch(
-      /async function preparePrivateMockCloudCollection[\s\S]*applyPrivateMockExportCleanup/
+      /async function preparePrivateMockCloudCollection[\s\S]*convertV2CollectionToV3Collection[\s\S]*applyPrivateMockExportCleanup/
     );
   });
 
@@ -108,7 +108,7 @@ describe('private-mock export cleanup wiring contract', () => {
     );
   });
 
-  it('fails before repo mutation when the managed root hook is absent from export IR', () => {
+  it('fails before repo mutation when the managed root hook is absent from the populated snapshot IR', () => {
     const exportFn = collectionAcquisitionSource();
     expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toContain('PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED');
