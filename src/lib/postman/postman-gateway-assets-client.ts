@@ -10,6 +10,7 @@ import {
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
   PRIVATE_MOCK_AUTH_ROOT_TYPE
 } from './private-mock-auth-script.js';
+import { assertV2CollectionModel } from '../../postman-v3/converter.js';
 
 export { PRIVATE_MOCK_AUTH_VARIABLE } from './private-mock-auth-script.js';
 
@@ -105,12 +106,12 @@ export interface PostmanGatewayAssetsClientOptions {
  * collection editor" / "need read access to this collection"). So `collection`
  * is the public uid passed straight through, as a flat string (never `{ id }`).
  *
- * service (invalidServiceError) and the v2 `collection` reads by public uid
- * (RESOURCE_NOT_FOUND) — are NOT wired here. Whole-collection reads use the
- * verified `GET /v3/collections/:id/export` v3 endpoint (`getCollection`), while
+ * service (invalidServiceError) and the public REST collection reads by public
+ * uid (RESOURCE_NOT_FOUND) — are NOT wired here. Whole-collection reads use the
+ * app-canonical populated Sync v2.1 endpoint (`getCollection`), while
  * collection-root script reconciliation uses the lighter app-canonical
  * `GET /v3/collections/:id`; environment reads/updates use the `sync` service.
- * PMAK is never used for any asset op. Collection export and root-mutation
+ * PMAK is never used for any asset op. Collection snapshot and root-mutation
  * routes require the full owner-prefixed public UID; bare model ids are rejected
  * before transport. GC name resolution uses one paginated
  * `GET /v3/collections/?workspace=...` inventory instead of exporting every
@@ -430,8 +431,8 @@ export class PostmanGatewayAssetsClient {
 
   /**
    * Validate and normalize a collection public UID for routes that require the
-   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): collection
-   * GET export, collection-root PATCH/read, and private-mock runtime auth.
+   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): populated
+   * collection snapshot, collection-root PATCH/read, and private-mock runtime auth.
    *
    * - Trims once.
    * - Rejects empty values.
@@ -797,33 +798,63 @@ export class PostmanGatewayAssetsClient {
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
-  // --- collection read (service: collection, v3 export) ---
+  // --- collection read (service: sync, populated v2.1 snapshot) ---
   //
-  // The gateway `collection` service does NOT serve spec-generated uids on the
-  // v2 `/collections/:uid` path (404 RESOURCE_NOT_FOUND, live-probed). It DOES
-  // serve `GET /v3/collections/:id/export`, which returns the canonical v3
-  // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
-  // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
-  // The full owner-prefixed public UID must be sent verbatim; the bare model id
-  // is rejected on root mutation routes (403 FORBIDDEN) and must not be used
-  // here either, so the caller is responsible for passing the public UID.
+  // This is the canonical full collection read used by
+  // api-specification-service before whole-tree Sync updates. Collection v3
+  // `/export` performs an expensive projection and has returned 500s for fresh
+  // roots under provider load. The populated Sync read returns the complete
+  // v2.1 model directly and is transformed in memory through the official
+  // runtime.models V2 -> V3 pipeline before repository materialization.
 
   /**
-   * Fetch a collection's v3 IR through the gateway v3 export endpoint.
-   * Returns the `data.collection` object (canonical v3 shape with `$kind`
-   * discriminators, `items`, `variables`, `references`). Caller writes it to
-   * disk via `convertAndSplitV3Collection`. PMAK is never used for collection
-   * reads.
+   * Fetch one complete v2.1 collection through a single retry-free populated
+   * Sync GET. The response must be a v2.1 model for the requested public UID;
+   * malformed or foreign snapshots fail closed. PMAK is never used.
    */
   async getCollection(uid: string): Promise<unknown> {
     const id = this.requireCollectionPublicUid(uid);
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'collection',
+      service: 'sync',
       method: 'get',
-      path: `/v3/collections/${id}/export`
+      path: `/collection/${encodeURIComponent(id)}`,
+      query: { populate: 'true', format: '2.1.0', uid: 'false' },
+      retry: 'none',
+      fallback: 'none'
     });
-    const data = this.asRecord(response?.data);
-    return data?.collection ?? null;
+    const collection = this.asRecord(response?.data);
+    const info = this.asRecord(collection?.info);
+    const schema = typeof info?.schema === 'string' ? info.schema.trim() : '';
+    if (
+      !collection ||
+      !info ||
+      typeof info.name !== 'string' ||
+      !info.name.trim() ||
+      !/\/collection\/v2\.1\.0\/collection\.json\/?$/i.test(schema) ||
+      !Array.isArray(collection.item)
+    ) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync read did not return a complete v2.1 collection'
+      );
+    }
+    try {
+      assertV2CollectionModel(collection);
+    } catch (error) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync payload failed v2.1 schema validation',
+        { cause: error }
+      );
+    }
+    const observedId = String(info._postman_id ?? collection.id ?? '').trim();
+    if (
+      !observedId ||
+      this.toModelId(observedId).toLowerCase() !== this.toModelId(id).toLowerCase()
+    ) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync read returned a different collection identity'
+      );
+    }
+    return collection;
   }
 
   // --- mocks (service: mock) ---

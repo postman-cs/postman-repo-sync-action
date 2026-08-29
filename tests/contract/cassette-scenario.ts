@@ -111,7 +111,19 @@ export const REPO_SYNC_CASSETTE: RepoSyncCassetteScenario = {
     'environment-sync-enabled': 'false',
     'mock-visibility': 'public'
   },
-  fake: { org: true },
+  fake: {
+    org: true,
+    existingCollections: [
+      {
+        id: '12345678-col-baseline',
+        collection: { info: { name: 'core-payments' }, item: [] }
+      },
+      {
+        id: '12345678-col-smoke',
+        collection: { info: { name: '[Smoke] core-payments' }, item: [] }
+      }
+    ]
+  },
   secrets: [PMAK, ACCESS_TOKEN, 'access-token-minted', 'pmak-generated']
 };
 

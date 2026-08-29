@@ -8,6 +8,9 @@ import { transform, FormatVersion } from '@postman/runtime.models/transforms';
 import { splitCollection } from '@postman/v3.export';
 
 type JsonRecord = Record<string, unknown>;
+type CollectionModel = { parse: (value: unknown) => unknown };
+
+const V2_COLLECTION_MODEL = (V2 as unknown as { Collection: CollectionModel }).Collection;
 
 /**
  * Convert a Postman v2.1 collection into the canonical Collection v3 multi-file
@@ -68,23 +71,43 @@ export async function convertAndSplitCollection(
   v2Collection: JsonRecord,
   outputDir: string
 ): Promise<void> {
-  // `V2.Collection` is the runtime Model<T> descriptor the transform dispatches
-  // on; `parse` normalizes the raw JSON (fills defaults the transform requires).
-  const model = (V2 as unknown as { Collection: { parse: (v: unknown) => unknown } }).Collection;
-  const parsed = model.parse(v2Collection ?? {});
-  const v3 = transform(model as never, FormatVersion.V3, parsed as never) as unknown as JsonRecord;
-
-  for (const item of asArray(v3.items as JsonRecord[] | undefined)) {
-    normalizeGraphqlRequests(item);
-  }
+  const v3 = convertV2CollectionToV3Collection(v2Collection);
 
   await writeSplitCollection(v3 as never, outputDir);
 }
 
 /**
+ * Parse and transform one v2.1 collection into the canonical in-memory v3 IR.
+ * This is also the bridge for consumers that must inspect or sanitize a
+ * populated Sync snapshot before splitting it to disk.
+ */
+export function convertV2CollectionToV3Collection(
+  v2Collection: JsonRecord
+): JsonRecord {
+  // `V2.Collection` is the runtime Model<T> descriptor the transform dispatches
+  // on; `parse` normalizes the raw JSON (fills defaults the transform requires).
+  const parsed = V2_COLLECTION_MODEL.parse(v2Collection ?? {});
+  const v3 = transform(
+    V2_COLLECTION_MODEL as never,
+    FormatVersion.V3,
+    parsed as never
+  ) as unknown as JsonRecord;
+
+  for (const item of asArray(v3.items as JsonRecord[] | undefined)) {
+    normalizeGraphqlRequests(item);
+  }
+  return v3;
+}
+
+/** Validate a populated Sync payload through the official v2 model parser. */
+export function assertV2CollectionModel(value: unknown): void {
+  V2_COLLECTION_MODEL.parse(value ?? {});
+}
+
+/**
  * Normalize a public uid (`<owner>-<uuid>`, 45 chars) on any `id` field of a
- * v3 export node down to the bare model id (`<uuid>`, 36 chars) so the on-disk
- * tree matches the v2->v3 path byte-for-byte. The gateway v3 export emits
+ * v3 input node down to the bare model id (`<uuid>`, 36 chars) so the on-disk
+ * tree matches the v2->v3 path byte-for-byte. Some canonical v3 inputs carry
  * public uids on `id`; `splitCollection` writes them straight to disk, so
  * without this the request/folder yaml would carry the owner prefix.
  */
@@ -102,13 +125,9 @@ function normalizeV3ExportIds(node: JsonRecord): void {
 }
 
 /**
- * Write a v3 collection that is ALREADY in the canonical v3 IR shape (e.g. the
- * access-token gateway's `GET /v3/collections/:id/export` payload, unwrapped
- * from `data.collection`) directly to `outputDir` as the canonical multi-file
- * v3 tree. This skips the v2->v3 transform entirely — the gateway export IS v3,
- * so round-tripping it back through v2 would be the wrong direction. Empirically
- * byte-identical to `convertAndSplitCollection` on the same collection (live
- * re-probed 2026-06-30; see `scripts/live-write-probe.ts`).
+ * Write a collection that is ALREADY in the canonical v3 IR shape directly to
+ * `outputDir` as the canonical multi-file tree. This supports trusted prebuilt
+ * and test inputs and skips the v2->v3 transform entirely.
  *
  * `outputDir` is treated as the collection root, matching
  * `convertAndSplitCollection`.
@@ -129,11 +148,11 @@ export async function convertAndSplitV3Collection(
  * Detect a collection payload's wire version and write the canonical v3 tree
  * either way — the single entry point the sync path should call.
  *
- * The gateway `GET /v3/collections/:id/export` returns v3, but some customers'
- * collections are still authored/served as v2.1 (`{info:{schema}, item:[...]}`).
- * Both converge to canonical v3 on disk: v2 is run through the official v2->v3
- * transform; v3 is written directly. Output is NEVER v2 — there is no v3->v2
- * down-convert anywhere in this module.
+ * The gateway collection acquisition path returns populated Sync v2.1
+ * (`{info:{schema}, item:[...]}`), which is run through the official v2->v3
+ * transform. This entry point retains v3 support for already materialized test
+ * and prebuilt inputs. Output is NEVER v2 — there is no v3->v2 down-convert
+ * anywhere in this module.
  */
 export async function convertAndSplitAnyCollection(
   collection: JsonRecord,
@@ -288,7 +307,7 @@ export async function appendArtifactDigestFileStreaming(
 /**
  * SHA-256 over canonical sorted relative file paths + raw bytes for a Collection
  * v3 tree. Matches bootstrap's local-artifact digest so prebuilt manifests can
- * be reused without a cloud export round-trip.
+ * be reused without a cloud snapshot round-trip.
  */
 export function computeArtifactDigest(
   files: Array<{ relative: string; bytes: Buffer | string }>

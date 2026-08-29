@@ -11,6 +11,7 @@ const SRC_ROOT = join(ACTION_ROOT, 'src');
  * files only. PMAK collection CRUD is never allowlisted.
  */
 const V2_TO_V3_ALLOWLIST: Record<string, string[]> = {
+  'src/lib/postman/postman-gateway-assets-client.ts': ['v2-version-literal'],
   'src/postman-v3/converter.ts': ['runtime-models-v2-import', 'v2-schema-url', 'v2-version-literal']
 };
 

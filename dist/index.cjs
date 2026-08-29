@@ -117745,6 +117745,7 @@ var path6 = __toESM(require("node:path"), 1);
 var V2 = __toESM(require_v2(), 1);
 var import_transforms = __toESM(require_transforms(), 1);
 var import_v3 = __toESM(require_node2(), 1);
+var V2_COLLECTION_MODEL = V2.Collection;
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -117765,13 +117766,23 @@ function normalizeGraphqlRequests(node) {
   }
 }
 async function convertAndSplitCollection(v2Collection, outputDir) {
-  const model = V2.Collection;
-  const parsed = model.parse(v2Collection ?? {});
-  const v3 = (0, import_transforms.transform)(model, import_transforms.FormatVersion.V3, parsed);
+  const v3 = convertV2CollectionToV3Collection(v2Collection);
+  await writeSplitCollection(v3, outputDir);
+}
+function convertV2CollectionToV3Collection(v2Collection) {
+  const parsed = V2_COLLECTION_MODEL.parse(v2Collection ?? {});
+  const v3 = (0, import_transforms.transform)(
+    V2_COLLECTION_MODEL,
+    import_transforms.FormatVersion.V3,
+    parsed
+  );
   for (const item of asArray(v3.items)) {
     normalizeGraphqlRequests(item);
   }
-  await writeSplitCollection(v3, outputDir);
+  return v3;
+}
+function assertV2CollectionModel(value) {
+  V2_COLLECTION_MODEL.parse(value ?? {});
 }
 function normalizeV3ExportIds(node) {
   if (!node || typeof node !== "object") return;
@@ -121329,7 +121340,7 @@ var postmanRepoSyncActionContract = {
       allowedValues: ["full", "spec-only"]
     },
     "prebuilt-collections-json": {
-      description: "Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.",
+      description: "Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without a cloud snapshot read.",
       required: false,
       default: ""
     },
@@ -127863,8 +127874,8 @@ var PostmanGatewayAssetsClient = class {
   }
   /**
    * Validate and normalize a collection public UID for routes that require the
-   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): collection
-   * GET export, collection-root PATCH/read, and private-mock runtime auth.
+   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): populated
+   * collection snapshot, collection-root PATCH/read, and private-mock runtime auth.
    *
    * - Trims once.
    * - Rejects empty values.
@@ -128176,32 +128187,52 @@ var PostmanGatewayAssetsClient = class {
     );
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
-  // --- collection read (service: collection, v3 export) ---
+  // --- collection read (service: sync, populated v2.1 snapshot) ---
   //
-  // The gateway `collection` service does NOT serve spec-generated uids on the
-  // v2 `/collections/:uid` path (404 RESOURCE_NOT_FOUND, live-probed). It DOES
-  // serve `GET /v3/collections/:id/export`, which returns the canonical v3
-  // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
-  // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
-  // The full owner-prefixed public UID must be sent verbatim; the bare model id
-  // is rejected on root mutation routes (403 FORBIDDEN) and must not be used
-  // here either, so the caller is responsible for passing the public UID.
+  // This is the canonical full collection read used by
+  // api-specification-service before whole-tree Sync updates. Collection v3
+  // `/export` performs an expensive projection and has returned 500s for fresh
+  // roots under provider load. The populated Sync read returns the complete
+  // v2.1 model directly and is transformed in memory through the official
+  // runtime.models V2 -> V3 pipeline before repository materialization.
   /**
-   * Fetch a collection's v3 IR through the gateway v3 export endpoint.
-   * Returns the `data.collection` object (canonical v3 shape with `$kind`
-   * discriminators, `items`, `variables`, `references`). Caller writes it to
-   * disk via `convertAndSplitV3Collection`. PMAK is never used for collection
-   * reads.
+   * Fetch one complete v2.1 collection through a single retry-free populated
+   * Sync GET. The response must be a v2.1 model for the requested public UID;
+   * malformed or foreign snapshots fail closed. PMAK is never used.
    */
   async getCollection(uid) {
     const id = this.requireCollectionPublicUid(uid);
     const response = await this.gateway.requestJson({
-      service: "collection",
+      service: "sync",
       method: "get",
-      path: `/v3/collections/${id}/export`
+      path: `/collection/${encodeURIComponent(id)}`,
+      query: { populate: "true", format: "2.1.0", uid: "false" },
+      retry: "none",
+      fallback: "none"
     });
-    const data2 = this.asRecord(response?.data);
-    return data2?.collection ?? null;
+    const collection = this.asRecord(response?.data);
+    const info2 = this.asRecord(collection?.info);
+    const schema = typeof info2?.schema === "string" ? info2.schema.trim() : "";
+    if (!collection || !info2 || typeof info2.name !== "string" || !info2.name.trim() || !/\/collection\/v2\.1\.0\/collection\.json\/?$/i.test(schema) || !Array.isArray(collection.item)) {
+      throw new Error(
+        "COLLECTION_SNAPSHOT_INVALID: populated Sync read did not return a complete v2.1 collection"
+      );
+    }
+    try {
+      assertV2CollectionModel(collection);
+    } catch (error2) {
+      throw new Error(
+        "COLLECTION_SNAPSHOT_INVALID: populated Sync payload failed v2.1 schema validation",
+        { cause: error2 }
+      );
+    }
+    const observedId = String(info2._postman_id ?? collection.id ?? "").trim();
+    if (!observedId || this.toModelId(observedId).toLowerCase() !== this.toModelId(id).toLowerCase()) {
+      throw new Error(
+        "COLLECTION_SNAPSHOT_INVALID: populated Sync read returned a different collection identity"
+      );
+    }
+    return collection;
   }
   // --- mocks (service: mock) ---
   async createMock(workspaceId, name, collectionUid, environmentUid, requestedVisibility = "private") {
@@ -131209,13 +131240,14 @@ function applyPrivateMockPrebuiltPlans(plans) {
   }
 }
 async function preparePrivateMockCloudCollection(role, collectionId, postman) {
-  const col = await postman.getCollection(collectionId);
-  const { collection } = applyPrivateMockExportCleanup(col, {
+  const snapshot = await postman.getCollection(collectionId);
+  const v3Collection = convertV2CollectionToV3Collection(snapshot);
+  const { collection } = applyPrivateMockExportCleanup(v3Collection, {
     stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
   });
   if (!verifyPrivateMockRootHook(collection)) {
     throw new Error(
-      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from populated ${role} collection snapshot ${collectionId}`
     );
   }
   return collection;
@@ -131261,7 +131293,7 @@ async function acquireCollectionArtifact(options) {
     return { reusePrebuilt: true };
   }
   if (entry) {
-    core.info(privateMockAuth ? `Private mock has no locally reconciled exact prebuilt ${role} collection; exporting from cloud` : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
+    core.info(privateMockAuth ? `Private mock has no locally reconciled exact prebuilt ${role} collection; reading populated cloud snapshot` : `Prebuilt ${role} collection entry present but did not exactly match; reading populated cloud snapshot`);
   }
   const cloud = privateMockAuth ? await preparePrivateMockCloudCollection(role, collectionId, postman) : await postman.getCollection(collectionId);
   return { reusePrebuilt: false, cloudCollection: cloud };
@@ -132508,9 +132540,9 @@ function createRepoSyncDependencies(inputs, resolved, factories, options = {}) {
     getEnvironment: gatewayAssets.getEnvironment.bind(gatewayAssets),
     updateEnvironment: gatewayAssets.updateEnvironment.bind(gatewayAssets),
     findEnvironmentByName: gatewayAssets.findEnvironmentByName.bind(gatewayAssets),
-    // Collection read via the v3 export endpoint — returns canonical v3 IR,
-    // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
-    // collection reads.
+    // Collection read via one retry-free populated Sync GET — returns a full
+    // v2.1 snapshot that the official runtime.models transform converts to v3
+    // before repository materialization. PMAK is never used for reads.
     getCollection: gatewayAssets.getCollection.bind(gatewayAssets),
     // Mocks via the `mock` service, collection-based monitors via the `monitors`
     // service (jobTemplates). Both reference the collection by its full public

@@ -50,8 +50,7 @@ import { createSecretMasker, REDACTED } from '../src/lib/secrets.js';
 import {
   MANAGED_ITEM_AUTH_BLOCKS,
   PRIVATE_MOCK_AUTH_ROOT_MARKER,
-  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-  PRIVATE_MOCK_AUTH_ROOT_TYPE
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT
 } from '../src/lib/postman/private-mock-auth-script.js';
 import { runWithFakeTimers } from './contract/harness.js';
 
@@ -212,7 +211,8 @@ function createCollectionFixture(name: string) {
     info: {
       name,
       description: 'Collection description',
-      _postman_id: 'collection-id'
+      _postman_id: 'collection-id',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
     },
     item: [
       {
@@ -253,7 +253,7 @@ function createCollectionFixture(name: string) {
   };
 }
 
-function createV3CollectionFixture(
+function createPopulatedCollectionFixture(
   name: string,
   options: {
     rootHook?: boolean;
@@ -276,29 +276,37 @@ function createV3CollectionFixture(
   const request: Record<string, unknown> = {
     id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     name: 'List Payments',
-    $kind: 'http-request',
-    method: 'GET',
-    url: 'https://api.example.com/payments'
+    request: {
+      method: 'GET',
+      url: 'https://api.example.com/payments'
+    },
+    response: []
   };
   if (codeParts.length > 0) {
-    request.scripts = [{
-      type: 'beforeRequest',
-      code: codeParts.join('\n\n'),
-      language: 'text/javascript'
+    request.event = [{
+      listen: 'prerequest',
+      script: {
+        type: 'text/javascript',
+        exec: [codeParts.join('\n\n')]
+      }
     }];
   }
 
   const collection: Record<string, unknown> = {
-    id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
-    name,
-    $kind: 'collection',
-    items: [request]
+    info: {
+      name,
+      _postman_id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+      schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+    },
+    item: [request]
   };
   if (options.rootHook !== false) {
-    collection.scripts = [{
-      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
-      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-      language: 'text/javascript'
+    collection.event = [{
+      listen: 'prerequest',
+      script: {
+        type: 'text/javascript',
+        exec: PRIVATE_MOCK_AUTH_ROOT_SCRIPT.split('\n')
+      }
     }];
   }
   return collection;
@@ -883,7 +891,7 @@ describe('repo sync action', () => {
       };
     }
 
-    it('keeps cloud export behavior when the prebuilt manifest is absent', async () => {
+    it('reads cloud snapshots when the prebuilt manifest is absent', async () => {
       const postman = createExportPostmanStub();
       await runRepoSync(createInputs({ prebuiltCollectionsJson: '' }), deps(postman));
       expect(postman.getCollection).toHaveBeenCalledTimes(3);
@@ -1251,7 +1259,7 @@ describe('repo sync action', () => {
       const postman = {
         ...createExportPostmanStub(),
         getCollection: vi.fn((id: string) => {
-          if (id !== 'col-smoke') throw new Error(`unexpected collection export: ${id}`);
+          if (id !== 'col-smoke') throw new Error(`unexpected collection snapshot: ${id}`);
           return Promise.resolve(freshSmoke);
         })
       };
@@ -1489,7 +1497,7 @@ describe('repo sync action', () => {
 
         // Manifest parsing + confined tree validation must accept the long path.
         // Role export still uses the canonical project path, so a path mismatch
-        // falls through to cloud export rather than inventing a length rejection.
+        // falls through to a cloud snapshot rather than inventing a length rejection.
         await runRepoSync(
           createInputs({
             environments: ['prod'],
@@ -1659,7 +1667,7 @@ describe('repo sync action', () => {
       expect(postman.getCollection).not.toHaveBeenCalledWith('col-baseline');
     }, 60_000);
 
-    it('rejects prebuilt trees over the 10,000 directory-and-file traversal-entry budget before cloud export', async () => {
+    it('rejects prebuilt trees over the 10,000 directory-and-file traversal-entry budget before a cloud snapshot', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
       for (let index = 0; index < 10_000; index += 1) {
@@ -1756,7 +1764,7 @@ describe('repo sync action', () => {
       expect(heapDelta).toBeLessThan(32 * 1024 * 1024);
     }, 180_000);
 
-    it('rejects prebuilt trees deeper than 128 before cloud export or artifact mutation', async () => {
+    it('rejects prebuilt trees deeper than 128 before a cloud snapshot or artifact mutation', async () => {
       const root = 'postman/collections/core-payments';
       const fixture = writeCanonicalV3Tree(root);
       let current = root;
@@ -1792,7 +1800,7 @@ describe('repo sync action', () => {
       expect(existsSync('.postman/resources.yaml')).toBe(false);
     }, 60_000);
 
-    it('rejects an individual prebuilt file over 32 MiB before cloud export or artifact mutation', async () => {
+    it('rejects an individual prebuilt file over 32 MiB before a cloud snapshot or artifact mutation', async () => {
       const root = 'postman/collections/core-payments';
       writeCanonicalV3Tree(root);
       writeLargeCanonicalRequestYaml(join(root, 'Huge.request.yaml'), 32 * 1024 * 1024 + 1024);
@@ -2621,7 +2629,51 @@ describe('repo sync action', () => {
       );
     });
 
-    it('reconciles every exact prebuilt private-mock tree with zero cloud exports', async () => {
+    it('transforms populated Sync snapshots before private-mock cleanup and root proof', async () => {
+      const postman = {
+        ...createExportPostmanStub(),
+        listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
+        getCollection: vi.fn(async (uid: string) => createPopulatedCollectionFixture(
+          uid === 'col-smoke'
+            ? '[Smoke] core-payments'
+            : uid === 'col-contract'
+              ? '[Contract] core-payments'
+              : 'core-payments',
+          uid === 'col-smoke'
+            ? {
+                itemLegacyBlockIndex: 2,
+                itemCustomerScript: "console.log('customer-owned');"
+              }
+            : {}
+        ))
+      };
+
+      await runRepoSync(
+        createInputs({
+          environments: ['prod'],
+          generateCiWorkflow: false,
+          mockVisibility: 'private',
+          mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
+          prebuiltCollectionsJson: ''
+        }),
+        privateMockDeps(postman)
+      );
+
+      expect(postman.getCollection).toHaveBeenCalledTimes(3);
+      const root = readFileSync(
+        'postman/collections/[Smoke] core-payments/.resources/definition.yaml',
+        'utf8'
+      );
+      const request = readFileSync(
+        'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+        'utf8'
+      );
+      expect(root).toContain(PRIVATE_MOCK_AUTH_ROOT_MARKER);
+      expect(request).not.toContain('private-mock-auth-v3');
+      expect(request).toContain("console.log('customer-owned');");
+    });
+
+    it('reconciles every exact prebuilt private-mock tree with zero cloud snapshots', async () => {
       const { manifest } = buildAllPrebuiltManifest({
         smoke: requestYamlWithBeforeScript(
           `${MANAGED_ITEM_AUTH_BLOCKS[2]}\n\nconsole.log('customer-owned');`
@@ -2695,7 +2747,7 @@ describe('repo sync action', () => {
       expect(postman.configurePrivateMockRuntimeAuth).not.toHaveBeenCalled();
     });
 
-    it('fails closed when the no-prebuilt smoke fallback export lacks the managed root hook', async () => {
+    it('fails closed when the no-prebuilt smoke snapshot lacks the managed root hook', async () => {
       const artifactSnapshotBefore = snapshotRepoArtifactFiles();
       const commitAndPush = vi.fn().mockResolvedValue({
         commitSha: '',
@@ -2707,8 +2759,8 @@ describe('repo sync action', () => {
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
         getCollection: vi.fn(async (uid: string) =>
           uid === 'col-smoke'
-            ? createV3CollectionFixture('[Smoke] core-payments', { rootHook: false })
-            : createV3CollectionFixture('core-payments')
+            ? createPopulatedCollectionFixture('[Smoke] core-payments', { rootHook: false })
+            : createPopulatedCollectionFixture('core-payments')
         )
       };
 
@@ -2736,7 +2788,7 @@ describe('repo sync action', () => {
       expect(existsSync('.postman/workflows.yaml')).toBe(false);
     });
 
-    it('fails closed when the no-prebuilt contract fallback lacks a hook after smoke validates', async () => {
+    it('fails closed when the no-prebuilt contract snapshot lacks a hook after smoke validates', async () => {
       const artifactSnapshotBefore = snapshotRepoArtifactFiles();
       const commitAndPush = vi.fn().mockResolvedValue({
         commitSha: '',
@@ -2748,9 +2800,9 @@ describe('repo sync action', () => {
         listMocks: vi.fn().mockResolvedValue([PRIVATE_MOCK_LIST_ENTRY]),
         getCollection: vi.fn(async (uid: string) => {
           if (uid === 'col-contract') {
-            return createV3CollectionFixture('[Contract] core-payments', { rootHook: false });
+            return createPopulatedCollectionFixture('[Contract] core-payments', { rootHook: false });
           }
-          return createV3CollectionFixture(
+          return createPopulatedCollectionFixture(
             uid === 'col-smoke' ? '[Smoke] core-payments' : 'core-payments'
           );
         })
@@ -2780,7 +2832,7 @@ describe('repo sync action', () => {
       expect(existsSync('.postman/workflows.yaml')).toBe(false);
     });
 
-    it('stops before cloud export or repo mutation when the root auth PATCH fails hard', async () => {
+    it('stops before a cloud snapshot or repo mutation when the root auth PATCH fails hard', async () => {
       const { manifest } = buildAllPrebuiltManifest();
       const artifactSnapshotBefore = snapshotRepoArtifactFiles();
       const commitAndPush = vi.fn().mockResolvedValue({
@@ -4775,13 +4827,13 @@ describe('mock resolution paths', () => {
       createMonitor: vi.fn().mockResolvedValue('mon-1'),
       getCollection: vi.fn().mockImplementation((uid: string) => {
         if (uid === 'col-baseline') {
-          return Promise.resolve(createV3CollectionFixture('core-payments'));
+          return Promise.resolve(createPopulatedCollectionFixture('core-payments'));
         }
         if (uid === 'col-smoke') {
-          return Promise.resolve(createV3CollectionFixture('[Smoke] core-payments'));
+          return Promise.resolve(createPopulatedCollectionFixture('[Smoke] core-payments'));
         }
         if (uid === 'col-contract') {
-          return Promise.resolve(createV3CollectionFixture('[Contract] core-payments'));
+          return Promise.resolve(createPopulatedCollectionFixture('[Contract] core-payments'));
         }
         return Promise.resolve(createCollectionFixture('core-payments'));
       }),
