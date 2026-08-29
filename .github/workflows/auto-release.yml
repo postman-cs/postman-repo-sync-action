@@ -44,11 +44,9 @@ jobs:
         id: reconcile
         env:
           GH_TOKEN: ${{ github.token }}
-          ROLLING_ALIASES: major
         run: |
           set -euo pipefail
           LATEST=""
-          LATEST_VERSION=""
           while IFS= read -r CANDIDATE; do
             if [[ "$CANDIDATE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               EXPECTED="${CANDIDATE#v}"
@@ -62,7 +60,6 @@ jobs:
             fi
             [ "$PACKAGE_VERSION" = "$EXPECTED" ] || continue
             LATEST="$CANDIDATE"
-            LATEST_VERSION="$EXPECTED"
           done < <(git tag --list 'v*' --sort=v:refname)
 
           TAG=""
@@ -70,29 +67,17 @@ jobs:
             TAG="$LATEST"
           elif [ -n "$LATEST" ]; then
             VERSION="${LATEST#v}"
-            IFS='.' read -r MAJOR MINOR _ <<< "$VERSION"
+            IFS='.' read -r MAJOR _ <<< "$VERSION"
             if [ "$MAJOR" != 0 ]; then
               TARGET="$(git rev-parse "${LATEST}^{commit}")"
-              read -r -a ALIAS_KINDS <<< "$ROLLING_ALIASES"
-              for KIND in "${ALIAS_KINDS[@]}"; do
-                case "$KIND" in
-                  major) ALIAS="v$MAJOR" ;;
-                  minor) ALIAS="v$MAJOR.$MINOR" ;;
-                  *) echo "::error::Unsupported rolling alias kind: $KIND"; exit 1 ;;
-                esac
-                if ALIAS_COMMIT="$(git rev-parse --verify "${ALIAS}^{commit}" 2>/dev/null)"; then
-                  [ "$ALIAS_COMMIT" = "$TARGET" ] && continue
-                  CURRENT_VERSION="$(git show "${ALIAS}^{commit}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
-                  if node --input-type=module -e "import { isSemverOlder } from './scripts/release-policy.mjs'; process.exit(isSemverOlder(process.argv[1], process.argv[2]) ? 0 : 1)" "$LATEST_VERSION" "$CURRENT_VERSION"; then
-                    echo "::notice::Keeping newer $ALIAS alias at $CURRENT_VERSION instead of $LATEST_VERSION."
-                    continue
-                  fi
-                fi
-                git config user.name "github-actions[bot]"
-                git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                git tag -fa "$ALIAS" -m "Rolling $ALIAS alias -> $LATEST" "$TARGET"
-                git push origin "$ALIAS" --force
-              done
+              ALIAS="v$MAJOR"
+              ALIAS_COMMIT="$(git rev-parse --verify "${ALIAS}^{commit}" 2>/dev/null || true)"
+              if [ "$ALIAS_COMMIT" != "$TARGET" ]; then
+                # Only release.yml may advance aliases, and only after its
+                # exact-tag E2E verifier succeeds. Redispatch the immutable
+                # tag to recover an interrupted or previously failed release.
+                TAG="$LATEST"
+              fi
             fi
           fi
 

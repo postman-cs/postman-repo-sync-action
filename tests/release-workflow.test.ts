@@ -215,6 +215,23 @@ describe('release workflow publishing contract', () => {
     expect(releaseWorkflow).not.toContain('live-e2e-gate:');
   });
 
+  it('requires exact-tag branch-aware evidence before moving the rolling alias', () => {
+    const verifier = job('verify-release-e2e');
+    expect(verifier).toContain('needs: [classify, verify-package, publish]');
+    expect(verifier).toContain('E2E_GATE_MODE: enforce');
+    expect(verifier).toContain('E2E_GATE_ACTION: postman-repo-sync-action');
+    expect(verifier).toContain('E2E_GATE_SUITE: branch-aware');
+    expect(verifier).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
+    expect(verifier).toContain(
+      'E2E_GATE_SOURCE_DIGEST: ${{ needs.verify-package.outputs.release_tgz_sha256 }}'
+    );
+    expect(verifier).toContain('node .github/scripts/verify-e2e-release.mjs');
+    expect(verifier).toContain('outcome: ${{ steps.verifier.outputs.e2e_outcome }}');
+    expect(releaseWorkflow.indexOf('  verify-release-e2e:')).toBeLessThan(
+      releaseWorkflow.indexOf('  advance-major-alias:')
+    );
+  });
+
   it('keeps a single non-regressing rolling major alias job after publish with bounded fetch', () => {
     const alias = job('advance-major-alias');
     expect(alias).toMatch(/^ {2}advance-major-alias:/m);
@@ -236,14 +253,19 @@ describe('release workflow publishing contract', () => {
     expect(alias).toContain('git tag -fa "$MAJOR"');
     expect(alias).toContain('git push origin "$MAJOR" --force');
     expect(alias).toContain("needs.classify.outputs.release_kind == 'immutable'");
+    expect(alias).toContain('needs: [classify, publish, verify-release-e2e]');
+    expect(alias).toContain("needs.verify-release-e2e.result == 'success'");
+    expect(alias).toContain("needs.verify-release-e2e.outputs.outcome == 'success'");
     expect(releaseWorkflow.match(/^ {2}advance-major-alias:/gm) ?? []).toHaveLength(1);
   });
 
   it('dispatches sibling-release to the composite after immutable publish and alias advance', () => {
     const notify = job('notify-composite');
-    expect(notify).toContain('needs: [classify, publish, advance-major-alias]');
     expect(notify).toContain(
-      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success'"
+      'needs: [classify, publish, verify-release-e2e, advance-major-alias]'
+    );
+    expect(notify).toContain(
+      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' && needs['advance-major-alias'].result == 'success'"
     );
     expect(notify).toMatch(/permissions:\s*\{\}/);
     expect(notify).toContain(

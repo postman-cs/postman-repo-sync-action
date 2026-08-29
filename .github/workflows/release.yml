@@ -35,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      release_tgz_sha256: ${{ steps.artifact-digests.outputs.release_tgz_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -67,6 +69,9 @@ jobs:
           mkdir release-artifacts
           npm pack --pack-destination release-artifacts
           mv release-artifacts/*.tgz release-artifacts/release.tgz
+      - name: Record immutable package digest
+        id: artifact-digests
+        run: echo "release_tgz_sha256=$(sha256sum release-artifacts/release.tgz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
       - name: Build self-contained SEA binary
         run: bash scripts/build-sea.sh
       - name: Smoke test SEA binary with an empty environment
@@ -209,9 +214,36 @@ jobs:
           echo "::warning::$MESSAGE"
           echo "::warning::$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
 
+  verify-release-e2e:
+    needs: [classify, verify-package, publish]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.verifier.outputs.e2e_outcome }}
+      correlation_id: ${{ steps.verifier.outputs.e2e_correlation_id }}
+      workflow_run_id: ${{ steps.verifier.outputs.e2e_workflow_run_id }}
+      run_url: ${{ steps.verifier.outputs.e2e_run_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Require exact-tag org and non-org branch-aware evidence
+        id: verifier
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+          E2E_GATE_MODE: enforce
+          E2E_GATE_ACTION: postman-repo-sync-action
+          E2E_GATE_SUITE: branch-aware
+          E2E_GATE_REF: ${{ github.ref_name }}
+          E2E_GATE_SOURCE_DIGEST: ${{ needs.verify-package.outputs.release_tgz_sha256 }}
+        run: node .github/scripts/verify-e2e-release.mjs
+
   advance-major-alias:
-    needs: [classify, publish]
-    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
+    needs: [classify, publish, verify-release-e2e]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -262,8 +294,8 @@ jobs:
   # GITHUB_TOKEN-created Release runs never emit workflow_run cascades; the
   # composite's daily cron remains the backstop when App secrets are absent.
   notify-composite:
-    needs: [classify, publish, advance-major-alias]
-    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success' }}
+    needs: [classify, publish, verify-release-e2e, advance-major-alias]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' && needs['advance-major-alias'].result == 'success' }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:

@@ -130389,8 +130389,28 @@ function markerFromSpecContent(content) {
 function isGcCandidateName(name) {
   return / @[A-Za-z0-9._-]+/.test(name) || /^\[[A-Z][A-Z0-9]*\] /.test(name);
 }
+function exactCollectionName(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
+  const record = payload;
+  const info = record.info && typeof record.info === "object" && !Array.isArray(record.info) ? record.info : void 0;
+  return String(record.name ?? info?.name ?? "").trim();
+}
 async function collectGcCandidates(postman, workspaceId) {
   const candidates = [];
+  const exactCollectionNames = /* @__PURE__ */ new Map();
+  const readGeneratedCollectionName = async (uid) => {
+    if (exactCollectionNames.has(uid)) return exactCollectionNames.get(uid);
+    let name;
+    try {
+      const candidate = exactCollectionName(await postman.getCollection(uid));
+      name = candidate && isGcCandidateName(candidate) ? candidate : void 0;
+    } catch {
+      name = void 0;
+    }
+    exactCollectionNames.set(uid, name);
+    return name;
+  };
+  const discoveredCollectionUids = /* @__PURE__ */ new Set();
   const environments = await postman.listEnvironments(workspaceId);
   for (const env of environments) {
     if (!isGcCandidateName(env.name)) continue;
@@ -130428,14 +130448,10 @@ async function collectGcCandidates(postman, workspaceId) {
     if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    try {
-      const payload = await postman.getCollection(uid);
-      const info = payload?.info && typeof payload.info === "object" ? payload.info : void 0;
-      const name = String(payload?.name ?? info?.name ?? "").trim();
-      if (name && isGcCandidateName(name)) {
-        candidates.push({ kind: "collection", uid, name, marker: collection.marker });
-      }
-    } catch {
+    const name = await readGeneratedCollectionName(uid);
+    if (name) {
+      candidates.push({ kind: "collection", uid, name, marker: collection.marker });
+      discoveredCollectionUids.add(uid);
     }
   }
   const specifications = await postman.listSpecifications(workspaceId);
@@ -130447,16 +130463,33 @@ async function collectGcCandidates(postman, workspaceId) {
     } catch {
       marker = void 0;
     }
-    candidates.push({ kind: "spec", uid: spec.uid, name: spec.name, marker });
     if (marker) {
+      const linkedCandidates = [];
+      let relationsResolved = true;
       try {
         for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (!ownedCollections.has(collection.uid) && isGcCandidateName(collection.name)) {
-            candidates.push({ kind: "collection", uid: collection.uid, name: collection.name || `${spec.name} collection`, marker });
+          if (discoveredCollectionUids.has(collection.uid)) continue;
+          const name = await readGeneratedCollectionName(collection.uid);
+          if (!name) {
+            relationsResolved = false;
+            continue;
           }
+          linkedCandidates.push({ kind: "collection", uid: collection.uid, name, marker });
         }
       } catch {
+        relationsResolved = false;
       }
+      if (!relationsResolved) {
+        continue;
+      }
+      candidates.push({ kind: "spec", uid: spec.uid, name: spec.name, marker });
+      for (const collection of linkedCandidates) {
+        if (discoveredCollectionUids.has(collection.uid)) continue;
+        candidates.push(collection);
+        discoveredCollectionUids.add(collection.uid);
+      }
+    } else {
+      candidates.push({ kind: "spec", uid: spec.uid, name: spec.name, marker });
     }
   }
   return candidates;

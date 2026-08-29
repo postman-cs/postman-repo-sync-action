@@ -135,6 +135,20 @@ function isGcCandidateName(name: string): boolean {
 }
 
 /**
+ * Read the display name from an exact collection export. Specification
+ * relation rows intentionally do not project a name, and any name they may
+ * acquire later is not authoritative enough to authorize deletion.
+ */
+function exactCollectionName(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
+  const record = payload as Record<string, unknown>;
+  const info = record.info && typeof record.info === 'object' && !Array.isArray(record.info)
+    ? record.info as Record<string, unknown>
+    : undefined;
+  return String(record.name ?? info?.name ?? '').trim();
+}
+
+/**
  * Build candidates from the workspace inventory. Only generated-name shapes
  * enter the candidate list at all — everything else in the workspace is
  * invisible to GC by construction (delete scope is minimal).
@@ -144,6 +158,21 @@ export async function collectGcCandidates(
   workspaceId: string
 ): Promise<GcCandidate[]> {
   const candidates: GcCandidate[] = [];
+  const exactCollectionNames = new Map<string, string | undefined>();
+  const readGeneratedCollectionName = async (uid: string): Promise<string | undefined> => {
+    if (exactCollectionNames.has(uid)) return exactCollectionNames.get(uid);
+    let name: string | undefined;
+    try {
+      const candidate = exactCollectionName(await postman.getCollection(uid));
+      name = candidate && isGcCandidateName(candidate) ? candidate : undefined;
+    } catch {
+      // A collection that cannot be independently identified is not safe to delete.
+      name = undefined;
+    }
+    exactCollectionNames.set(uid, name);
+    return name;
+  };
+  const discoveredCollectionUids = new Set<string>();
 
   const environments = await postman.listEnvironments(workspaceId);
   for (const env of environments) {
@@ -190,17 +219,10 @@ export async function collectGcCandidates(
     if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    try {
-      const payload = await postman.getCollection(uid) as Record<string, unknown> | null;
-      const info = payload?.info && typeof payload.info === 'object'
-        ? payload.info as Record<string, unknown>
-        : undefined;
-      const name = String(payload?.name ?? info?.name ?? '').trim();
-      if (name && isGcCandidateName(name)) {
-        candidates.push({ kind: 'collection', uid, name, marker: collection.marker });
-      }
-    } catch {
-      // A collection that cannot be independently identified is not safe to delete.
+    const name = await readGeneratedCollectionName(uid);
+    if (name) {
+      candidates.push({ kind: 'collection', uid, name, marker: collection.marker });
+      discoveredCollectionUids.add(uid);
     }
   }
 
@@ -213,18 +235,36 @@ export async function collectGcCandidates(
     } catch {
       marker = undefined;
     }
-    candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
     if (marker) {
+      const linkedCandidates: GcCandidate[] = [];
+      let relationsResolved = true;
       try {
         for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (!ownedCollections.has(collection.uid) && isGcCandidateName(collection.name)) {
-            candidates.push({ kind: 'collection', uid: collection.uid, name: collection.name || `${spec.name} collection`, marker });
+          if (discoveredCollectionUids.has(collection.uid)) continue;
+          const name = await readGeneratedCollectionName(collection.uid);
+          if (!name) {
+            relationsResolved = false;
+            continue;
           }
+          linkedCandidates.push({ kind: 'collection', uid: collection.uid, name, marker });
         }
       } catch {
-        // The spec itself remains eligible; a transient list failure must not
-        // broaden deletion scope or prevent a later sweep from retrying.
+        relationsResolved = false;
       }
+      if (!relationsResolved) {
+        // Never delete a parent when its relation set cannot be resolved to
+        // independently identified generated collections. A later sweep can
+        // retry without orphaning a child after a partial inventory read.
+        continue;
+      }
+      candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
+      for (const collection of linkedCandidates) {
+        if (discoveredCollectionUids.has(collection.uid)) continue;
+        candidates.push(collection);
+        discoveredCollectionUids.add(collection.uid);
+      }
+    } else {
+      candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
     }
   }
 

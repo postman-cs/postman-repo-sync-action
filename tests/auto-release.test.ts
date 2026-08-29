@@ -163,17 +163,16 @@ describe('auto-release workflow', () => {
     );
   });
 
-  it('recovers alias failures and resumes after a successful release', () => {
+  it('redispatches release evidence and never advances an alias itself', () => {
     expect(autoReleaseWorkflow).toContain('workflow_run:');
     expect(autoReleaseWorkflow).toContain('workflows: [Release]');
     expect(autoReleaseWorkflow).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(autoReleaseWorkflow).toContain('git rev-parse --verify "${ALIAS}^{commit}"');
-    expect(autoReleaseWorkflow).toContain(
-      'CURRENT_VERSION="$(git show "${ALIAS}^{commit}:package.json"'
-    );
-    expect(autoReleaseWorkflow).toContain('"$LATEST_VERSION" "$CURRENT_VERSION"');
-    expect(autoReleaseWorkflow).toContain('git tag -fa "$ALIAS"');
-    expect(autoReleaseWorkflow).toContain('git push origin "$ALIAS" --force');
+    expect(autoReleaseWorkflow).toContain('Only release.yml may advance aliases');
+    expect(autoReleaseWorkflow).toContain('TAG="$LATEST"');
+    expect(autoReleaseWorkflow).not.toContain('ROLLING_ALIASES');
+    expect(autoReleaseWorkflow).not.toContain('git tag -fa "$ALIAS"');
+    expect(autoReleaseWorkflow).not.toContain('git push origin "$ALIAS" --force');
   });
 
   it('never cancels a cut in flight', () => {
