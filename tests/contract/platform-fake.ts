@@ -53,7 +53,7 @@ type FakeBodyShape = 'none' | 'record' | 'array';
 /**
  * Bare collection model id (no owner prefix). Live-proven 2026-08-03: the
  * collection-service ROOT routes fail closed on bare ids —
- * GET /v3/collections/:id/export and PATCH /v3/collections/:id both return
+ * GET/PATCH /v3/collections/:id and GET /v3/collections/:id/export all return
  * 403 FORBIDDEN unless the full owner-prefixed public UID is sent.
  */
 const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -79,6 +79,7 @@ export const REPO_SYNC_FAKE_ROUTES: readonly RepoSyncFakeRoute[] = [
   { service: 'sync', method: 'PUT', path: '/environment/{param}', body: 'record' },
   { service: 'sync', method: 'DELETE', path: '/environment/{param}', body: 'none' },
   { service: 'collection', method: 'GET', path: '/v3/collections', query: ['cursor', 'workspace'], requiredQuery: ['workspace'], body: 'none' },
+  { service: 'collection', method: 'GET', path: '/v3/collections/{param}', body: 'none' },
   { service: 'collection', method: 'GET', path: '/v3/collections/{param}/export', body: 'none' },
   { service: 'collection', method: 'PATCH', path: '/v3/collections/{param}', body: 'array' },
   { service: 'collection', method: 'DELETE', path: '/v3/collections/{param}', body: 'none' },
@@ -649,6 +650,23 @@ export function createPlatform(options: PlatformOptions = {}) {
           const resource = resolveOwned(collections, candidate);
           return json({ data: { collection: resource?.collection ?? { info: { name: 'baseline' }, item: [] } } });
         }
+        if (pmethod === 'get' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
+          const candidate = ppath.split('/').pop() || '';
+          if (BARE_COLLECTION_MODEL_ID.test(candidate)) {
+            return json(
+              {
+                error: {
+                  code: 'FORBIDDEN',
+                  message: `Access to the requested resource "${candidate}" has been denied`
+                }
+              },
+              403
+            );
+          }
+          const resource = resolveOwned(collections, candidate);
+          if (!resource) return json({ error: 'missing' }, 404);
+          return json({ data: { ...resource.collection, id: candidate } });
+        }
         if (pmethod === 'patch' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
           const candidate = ppath.split('/').pop() || '';
           if (BARE_COLLECTION_MODEL_ID.test(candidate)) {
@@ -665,17 +683,36 @@ export function createPlatform(options: PlatformOptions = {}) {
           const resource = resolveOwned(collections, candidate);
           if (!resource) return json({ error: 'missing' }, 404);
           const patches = Array.isArray(proxy.body) ? proxy.body : [];
-          const scriptsPatch = patches.find((entry) => {
+          let nextScripts = Array.isArray(resource.collection.scripts)
+            ? [...(resource.collection.scripts as unknown[])]
+            : [];
+          let supported = true;
+          for (const entry of patches) {
             const operation = entry as Record<string, unknown>;
-            return operation.op === 'add' && operation.path === '/scripts';
-          }) as Record<string, unknown> | undefined;
-          if (scriptsPatch) {
-            resource.collection = {
-              ...resource.collection,
-              scripts: Array.isArray(scriptsPatch.value) ? scriptsPatch.value : []
-            };
+            if (operation.op === 'test' && operation.path === '/scripts') {
+              if (JSON.stringify(operation.value) !== JSON.stringify(nextScripts)) {
+                return json({ error: { code: 'REJECTED_PATCH' } }, 409);
+              }
+            } else if (operation.op === 'add' && operation.path === '/scripts/-') {
+              if (!operation.value || typeof operation.value !== 'object' || Array.isArray(operation.value)) {
+                supported = false;
+                break;
+              }
+              nextScripts = [...nextScripts, operation.value];
+            } else if (operation.op === 'add' && operation.path === '/scripts') {
+              if (!Array.isArray(operation.value)) {
+                supported = false;
+                break;
+              }
+              nextScripts = [...operation.value];
+            } else {
+              supported = false;
+              break;
+            }
           }
-          return json({ data: { id: candidate } });
+          if (!supported) return json({ error: { code: 'REJECTED_PATCH' } }, 400);
+          resource.collection = { ...resource.collection, scripts: nextScripts };
+          return json({ data: { ...resource.collection, id: candidate } });
         }
         if (pmethod === 'delete' && /\/v3\/collections\/[^/]+$/.test(ppath)) {
           return deleteOwned('collection', collections, ppath.split('/').pop() || '');

@@ -4,6 +4,7 @@ import {
   sleep as defaultSleep,
   type AccessTokenGatewayClient
 } from '@postman-cs/automation-core';
+import { isDeepStrictEqual } from 'node:util';
 import {
   isManagedPrivateMockAuthRootHook,
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
@@ -104,15 +105,16 @@ export interface PostmanGatewayAssetsClientOptions {
  * collection editor" / "need read access to this collection"). So `collection`
  * is the public uid passed straight through, as a flat string (never `{ id }`).
  *
- * Routes the probe proved unavailable through this bifrost — the `environment`
  * service (invalidServiceError) and the v2 `collection` reads by public uid
- * (RESOURCE_NOT_FOUND) — are NOT wired here. Collection reads use the verified
- * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
- * reads/updates use the `sync` service. PMAK is never used for any asset op.
- * Collection export and root-mutation routes require the full owner-prefixed
- * public UID; bare model ids are rejected before transport. GC name resolution
- * uses one paginated `GET /v3/collections/?workspace=...` inventory instead of
- * exporting every collection relation.
+ * (RESOURCE_NOT_FOUND) — are NOT wired here. Whole-collection reads use the
+ * verified `GET /v3/collections/:id/export` v3 endpoint (`getCollection`), while
+ * collection-root script reconciliation uses the lighter app-canonical
+ * `GET /v3/collections/:id`; environment reads/updates use the `sync` service.
+ * PMAK is never used for any asset op. Collection export and root-mutation
+ * routes require the full owner-prefixed public UID; bare model ids are rejected
+ * before transport. GC name resolution uses one paginated
+ * `GET /v3/collections/?workspace=...` inventory instead of exporting every
+ * collection relation.
  *
  * Create operations submit once and reconcile via live discovery on ambiguous
  * responses. Blind transport retries are reserved for safe reads. Per-process
@@ -902,54 +904,108 @@ export class PostmanGatewayAssetsClient {
     return this.isRetryableIdempotentWriteOutcome(error);
   }
 
-  private normalizeCollectionScripts(scripts: unknown): JsonRecord[] {
-    if (!Array.isArray(scripts)) return [];
-    return scripts
-      .map((entry) => this.asRecord(entry))
-      .filter((entry): entry is JsonRecord => entry !== null);
+  private isRootPatchSnapshotConflict(error: unknown): boolean {
+    return error instanceof HttpError && [400, 409, 412].includes(error.status);
+  }
+
+  private normalizeCollectionScripts(scripts: unknown, operation: string): JsonRecord[] {
+    if (scripts === undefined || scripts === null) return [];
+    if (!Array.isArray(scripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-array scripts field.`
+      );
+    }
+    const normalized = scripts.map((entry) => this.asRecord(entry));
+    if (normalized.some((entry) => entry === null)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-object script entry.`
+      );
+    }
+    return normalized as JsonRecord[];
   }
 
   private rootScriptsIncludeManagedAuthHook(scripts: JsonRecord[]): boolean {
     return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
   }
 
-  private buildPrivateMockRootScripts(existingScripts: JsonRecord[]): JsonRecord[] {
-    const managedScript: JsonRecord = {
-      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
-      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-      language: 'text/javascript'
-    };
-    return [...existingScripts, managedScript];
+  private expectedPrivateMockRootScripts(existingScripts: JsonRecord[]): JsonRecord[] {
+    return [
+      ...existingScripts,
+      {
+        type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+        code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+        language: 'text/javascript'
+      }
+    ];
+  }
+
+  private assertAtMostOneManagedRootHook(scripts: JsonRecord[], operation: string): void {
+    const count = scripts.filter((script) => isManagedPrivateMockAuthRootHook(script)).length;
+    if (count > 1) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_DUPLICATE: ${operation} contains ${count} exact managed hooks.`
+      );
+    }
   }
 
   private async readCollectionRootScripts(collectionUid: string): Promise<JsonRecord[]> {
     const id = this.requireCollectionPublicUid(collectionUid);
-    const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'collection',
-      method: 'get',
-      path: `/v3/collections/${id}/export`
-    });
+    const response = await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'collection',
+        method: 'get',
+        path: `/v3/collections/${id}`
+      },
+      // Root reconciliation is evidence, not a transient-success mechanism.
+      // One response must prove the current state; never hide a 5xx by retrying.
+      { retryTransient: false }
+    );
     const data = this.asRecord(response?.data);
-    const collection = this.asRecord(data?.collection);
-    if (!collection) {
+    if (!data) {
       throw new Error(
-        `PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection ${id} export did not return data.collection; refusing to configure private-mock root auth from an unexpected envelope.`
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: Collection ${id} root read did not return data; refusing to configure private-mock root auth from an unexpected envelope.`
       );
     }
-    return this.normalizeCollectionScripts(collection.scripts);
+    return this.normalizeCollectionScripts(data.scripts, `Collection ${id} root read`);
   }
 
-  private async patchCollectionRootScripts(collectionUid: string, scripts: JsonRecord[]): Promise<void> {
+  private async patchCollectionRootScripts(
+    collectionUid: string,
+    existingScripts: JsonRecord[]
+  ): Promise<JsonRecord[]> {
     const id = this.requireCollectionPublicUid(collectionUid);
-    await this.gateway.requestJson<JsonRecord>(
+    const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
+    const managedScript = expectedScripts.at(-1)!;
+    const response = await this.gateway.requestJson<JsonRecord>(
       {
         service: 'collection',
         method: 'patch',
         path: `/v3/collections/${id}`,
-        body: [{ op: 'add', path: '/scripts', value: scripts }]
+        // Bootstrap creates these HTTP collections through Sync. Its current
+        // collection-service wire projection materializes absent/null scripts
+        // as `[]` before applying RFC 6902, so this pair is one atomic
+        // compare-and-append. If that contract ever changes, `test` fails and
+        // the append cannot overwrite or manufacture a scripts field.
+        body: [
+          { op: 'test', path: '/scripts', value: existingScripts },
+          { op: 'add', path: '/scripts/-', value: managedScript }
+        ]
       },
       { retryTransient: false }
     );
+    const data = this.asRecord(response?.data);
+    if (!data) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_INVALID: Collection ${id} root patch did not return data.`
+      );
+    }
+    const scripts = this.normalizeCollectionScripts(data.scripts, `Collection ${id} root patch`);
+    if (!isDeepStrictEqual(scripts, expectedScripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_UNVERIFIED: Collection ${id} root patch response did not exactly preserve the prior scripts and append one managed hook.`
+      );
+    }
+    return scripts;
   }
 
   /**
@@ -957,33 +1013,71 @@ export class PostmanGatewayAssetsClient {
    * supplied only by the runner as a transient variable; this method persists
    * the variable name and header wiring, never the credential.
    */
-  async configurePrivateMockRuntimeAuth(collectionUid: string): Promise<number> {
+  async configurePrivateMockRuntimeAuth(
+    collectionUid: string,
+    trustedRootScripts?: unknown
+  ): Promise<number> {
     const cid = this.requireCollectionPublicUid(collectionUid);
 
-    const installFromFreshRoot = async (existingScripts: JsonRecord[]): Promise<number> => {
+    const installFromRootSnapshot = async (existingScripts: JsonRecord[]): Promise<number> => {
+      this.assertAtMostOneManagedRootHook(existingScripts, `Collection ${cid} root snapshot`);
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
         return 0;
       }
-      const nextScripts = this.buildPrivateMockRootScripts(existingScripts);
+      const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
       try {
-        await this.patchCollectionRootScripts(cid, nextScripts);
+        await this.patchCollectionRootScripts(cid, existingScripts);
         return 1;
       } catch (error) {
+        if (this.isRootPatchSnapshotConflict(error)) {
+          const currentScripts = await this.readCollectionRootScripts(cid);
+          if (isDeepStrictEqual(currentScripts, expectedScripts)) {
+            return 0;
+          }
+          throw error;
+        }
         if (!this.isAmbiguousTransportError(error)) {
           throw error;
         }
         const freshScripts = await this.readCollectionRootScripts(cid);
-        if (this.rootScriptsIncludeManagedAuthHook(freshScripts)) {
+        if (isDeepStrictEqual(freshScripts, expectedScripts)) {
           return 1;
         }
-        const recomputed = this.buildPrivateMockRootScripts(freshScripts);
-        await this.patchCollectionRootScripts(cid, recomputed);
-        return 1;
+        if (!isDeepStrictEqual(freshScripts, existingScripts)) {
+          throw new Error(
+            `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed while reconciling an ambiguous patch.`,
+            { cause: error }
+          );
+        }
+        try {
+          await this.patchCollectionRootScripts(cid, existingScripts);
+          return 1;
+        } catch (resendError) {
+          if (!this.isAmbiguousTransportError(resendError)) {
+            throw resendError;
+          }
+          // The one allowed resend may itself commit before its response is
+          // lost. Perform one final stable read (still no retry/wait) and accept
+          // only the exact compare-and-append result.
+          const finalScripts = await this.readCollectionRootScripts(cid);
+          if (isDeepStrictEqual(finalScripts, expectedScripts)) {
+            return 1;
+          }
+          if (!isDeepStrictEqual(finalScripts, existingScripts)) {
+            throw new Error(
+              `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed after the ambiguous patch resend.`,
+              { cause: resendError }
+            );
+          }
+          throw resendError;
+        }
       }
     };
 
-    const scripts = await this.readCollectionRootScripts(cid);
-    return installFromFreshRoot(scripts);
+    const scripts = trustedRootScripts === undefined
+      ? await this.readCollectionRootScripts(cid)
+      : this.normalizeCollectionScripts(trustedRootScripts, `Trusted collection ${cid} root`);
+    return installFromRootSnapshot(scripts);
   }
 
   async listMocks(): Promise<MockRecord[]> {

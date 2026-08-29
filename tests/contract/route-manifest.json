@@ -52,6 +52,14 @@
       ]
     },
     {
+      "id": "collection.get-collection-root",
+      "service": "collection",
+      "method": "GET",
+      "path": "/v3/collections/{param}",
+      "classification": "live-only",
+      "reason": "Private-mock reconciliation uses one stable root snapshot/readback with transport retries disabled; focused client and branch-platform tests cover exact scripts and public-UID routing."
+    },
+    {
       "id": "collection.list-workspace-collections",
       "service": "collection",
       "method": "GET",

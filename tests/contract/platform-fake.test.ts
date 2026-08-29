@@ -207,7 +207,7 @@ describe('contract: platform fake routing', () => {
     }
   });
 
-  it('rejects a bare model id on collection ROOT GET export and PATCH with the live 403 wire shape, while public-UID routes succeed and persist', async () => {
+  it('rejects a bare model id on collection root/export/PATCH routes while public-UID routes persist atomically', async () => {
     const bareId = '6b9b8a7c-1111-4222-8333-444455556666';
     const publicUid = `132319-${bareId}`;
     const platform = createPlatform({
@@ -227,6 +227,13 @@ describe('contract: platform fake routing', () => {
         message: `Access to the requested resource "${bareId}" has been denied`
       }
     });
+
+    const deniedRootGet = await proxy(platform, {
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${bareId}`
+    });
+    expect(deniedRootGet.status).toBe(403);
 
     // Bare PATCH is denied.
     const deniedPatch = await proxy(platform, {
@@ -254,27 +261,38 @@ describe('contract: platform fake routing', () => {
       data: { collection: { info: { name: 'baseline' } } }
     });
 
+    const allowedRootGet = await proxy(platform, {
+      service: 'collection',
+      method: 'get',
+      path: `/v3/collections/${publicUid}`
+    });
+    expect(allowedRootGet.status).toBe(200);
+    await expect(allowedRootGet.json()).resolves.toMatchObject({ data: { id: publicUid } });
+
     // Public-UID PATCH succeeds and persists scripts.
     const scripts = [{ type: 'http:beforeRequest', code: 'console.log("hook")', language: 'text/javascript' }];
     const allowedPatch = await proxy(platform, {
       service: 'collection',
       method: 'patch',
       path: `/v3/collections/${publicUid}`,
-      body: [{ op: 'add', path: '/scripts', value: scripts }]
+      body: [
+        { op: 'test', path: '/scripts', value: [] },
+        { op: 'add', path: '/scripts/-', value: scripts[0] }
+      ]
     });
     expect(allowedPatch.status).toBe(200);
-    await expect(allowedPatch.json()).resolves.toEqual({
-      data: { id: publicUid }
+    await expect(allowedPatch.json()).resolves.toMatchObject({
+      data: { id: publicUid, scripts }
     });
 
-    // Subsequent public GET readback contains the persisted scripts.
+    // Subsequent public root GET readback contains the persisted scripts.
     const readback = await proxy(platform, {
       service: 'collection',
       method: 'get',
-      path: `/v3/collections/${publicUid}/export`
+      path: `/v3/collections/${publicUid}`
     });
-    const body = (await readback.json()) as { data: { collection: { scripts: unknown } } };
-    expect(body.data.collection.scripts).toEqual(scripts);
+    const body = (await readback.json()) as { data: { scripts: unknown } };
+    expect(body.data.scripts).toEqual(scripts);
   });
 
   it('returns 403 instead of deleting a collection owned by another user', async () => {

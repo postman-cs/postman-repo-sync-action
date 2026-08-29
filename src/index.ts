@@ -64,10 +64,16 @@ import {
   PRIVATE_MOCK_AUTH_VARIABLE
 } from './lib/postman/postman-gateway-assets-client.js';
 import {
+  applyPrivateMockArtifactNodeCleanup,
   applyPrivateMockExportCleanup,
   isPrivateMockLegacyExportCleanupEnabled,
   verifyPrivateMockRootHook
 } from './lib/postman/private-mock-export-cleanup.js';
+import {
+  isManagedPrivateMockAuthRootHook,
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from './lib/postman/private-mock-auth-script.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { defaultPostmanAppVersionProvider } from './lib/postman/app-version.js';
 import {
@@ -1983,6 +1989,8 @@ type PreparedPrebuiltCollectionEntry = {
   entry: PrebuiltCollectionEntry;
   confinedPath: string;
   artifactDigest?: string;
+  /** Set only after every cloud root patch succeeds and controlled local edits are applied. */
+  privateMockArtifactReady?: boolean;
 };
 
 type PrebuiltTreeFileMeta = {
@@ -1991,6 +1999,19 @@ type PrebuiltTreeFileMeta = {
   dev: number;
   ino: number | bigint;
   size: number;
+};
+
+type PrivateMockArtifactFileUpdate = {
+  absolute: string;
+  relative: string;
+  original: Buffer;
+  next: Buffer;
+};
+
+type PrivateMockPrebuiltPlan = {
+  prepared: PreparedPrebuiltCollectionEntry;
+  rootScripts: Record<string, unknown>[];
+  updates: PrivateMockArtifactFileUpdate[];
 };
 
 const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
@@ -2339,7 +2360,8 @@ function validateCanonicalV3CollectionFile(relative: string, bytes: Buffer): voi
 }
 
 async function digestAndValidatePrebuiltCollectionTree(
-  files: PrebuiltTreeFileMeta[]
+  files: PrebuiltTreeFileMeta[],
+  onFile?: (file: PrebuiltTreeFileMeta, bytes: Buffer) => void
 ): Promise<string> {
   if (!files.some((file) => file.relative === '.resources/definition.yaml')) {
     failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
@@ -2370,6 +2392,7 @@ async function digestAndValidatePrebuiltCollectionTree(
     }
 
     validateCanonicalV3CollectionFile(file.relative, bytes);
+    onFile?.(file, bytes);
   }
 
   return hash.digest('hex');
@@ -2439,6 +2462,167 @@ function tryReusePrebuiltCollection(options: {
   return prepared.artifactDigest === entry.artifactDigest;
 }
 
+function normalizeTrustedPrivateMockRootScripts(
+  value: unknown,
+  role: PrebuiltCollectionRole
+): Record<string, unknown>[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((entry) => !isPlainObject(entry))) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection root scripts must be an array of mappings`
+    );
+  }
+  return value.map((entry) => ({ ...(entry as Record<string, unknown>) }));
+}
+
+function serializePrivateMockArtifactNode(node: Record<string, unknown>): Buffer {
+  return Buffer.from(dumpYaml(node, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false
+  }));
+}
+
+async function planPrivateMockPrebuiltArtifact(options: {
+  role: PrebuiltCollectionRole;
+  collectionId: string;
+  expectedPath: string;
+  artifactDir: string;
+  prepared?: PreparedPrebuiltCollectionEntry;
+}): Promise<PrivateMockPrebuiltPlan | undefined> {
+  const { role, collectionId, expectedPath, artifactDir, prepared } = options;
+  if (!prepared || !tryReusePrebuiltCollection({
+    prepared,
+    expectedPath,
+    expectedCloudId: collectionId
+  })) {
+    return undefined;
+  }
+
+  const files = listPrebuiltCollectionTreeFiles(prepared.confinedPath, artifactDir);
+  const updates: PrivateMockArtifactFileUpdate[] = [];
+  let rootScripts: Record<string, unknown>[] | undefined;
+  const stripManagedBlocks = isPrivateMockLegacyExportCleanupEnabled();
+  const currentDigest = await digestAndValidatePrebuiltCollectionTree(files, (file, original) => {
+    let parsed: unknown;
+    try {
+      parsed = loadYaml(original.toString('utf8'));
+    } catch (error) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection changed to malformed YAML at ${file.relative} (${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+    if (!isPlainObject(parsed)) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection file ${file.relative} must contain a YAML mapping`
+      );
+    }
+
+    let nextNode: Record<string, unknown> | undefined;
+    if (file.relative === '.resources/definition.yaml') {
+      rootScripts = normalizeTrustedPrivateMockRootScripts(parsed.scripts, role);
+      if (!rootScripts.some((script) => isManagedPrivateMockAuthRootHook(script))) {
+        nextNode = {
+          ...parsed,
+          scripts: [
+            ...rootScripts,
+            {
+              type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+              code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+              language: 'text/javascript'
+            }
+          ]
+        };
+      }
+    } else {
+      const cleaned = applyPrivateMockArtifactNodeCleanup(parsed, { stripManagedBlocks });
+      if (cleaned.strippedBlocks > 0) {
+        nextNode = cleaned.node;
+      }
+    }
+
+    if (nextNode) {
+      const next = serializePrivateMockArtifactNode(nextNode);
+      if (!next.equals(original)) {
+        updates.push({
+          absolute: file.absolute,
+          relative: file.relative,
+          original: Buffer.from(original),
+          next
+        });
+      }
+    }
+  });
+
+  if (currentDigest !== prepared.entry.artifactDigest) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection changed after initial validation; expected artifactDigest ${prepared.entry.artifactDigest}, observed ${currentDigest}`
+    );
+  }
+  if (!rootScripts) {
+    failPrebuiltCollections(`prebuilt ${role} collection root definition disappeared`);
+  }
+  return { prepared, rootScripts, updates };
+}
+
+function applyPrivateMockPrebuiltPlans(plans: PrivateMockPrebuiltPlan[]): void {
+  const updates = plans.flatMap((plan) => plan.updates);
+  const seen = new Set<string>();
+  for (const update of updates) {
+    if (seen.has(update.absolute)) {
+      failPrebuiltCollections(
+        `private-mock artifact plan addressed ${update.relative} more than once`
+      );
+    }
+    seen.add(update.absolute);
+    let current: Buffer;
+    try {
+      const stat = lstatSync(update.absolute);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed or became unsupported at ${update.relative}`
+        );
+      }
+      current = readFileSync(update.absolute);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('CONTRACT_PREBUILT_COLLECTIONS_INVALID:')) {
+        throw error;
+      }
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed or became unreadable at ${update.relative}`
+      );
+    }
+    if (!current.equals(update.original)) {
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed before private-mock reconciliation at ${update.relative}`
+      );
+    }
+  }
+
+  const written: PrivateMockArtifactFileUpdate[] = [];
+  try {
+    for (const update of updates) {
+      writeFileSync(update.absolute, update.next);
+      written.push(update);
+    }
+  } catch (error) {
+    for (const update of written.reverse()) {
+      try {
+        writeFileSync(update.absolute, update.original);
+      } catch {
+        // Preserve the original write error; the next run revalidates every byte.
+      }
+    }
+    throw error;
+  }
+
+  for (const plan of plans) {
+    plan.prepared.privateMockArtifactReady = true;
+  }
+}
+
 async function preparePrivateMockCloudCollection(
   role: PrebuiltCollectionRole,
   collectionId: string,
@@ -2503,22 +2687,27 @@ async function acquireCollectionArtifact(options: {
 }): Promise<CollectionArtifactAcquisition> {
   const { role, collectionId, dirName, collectionsDir, prebuiltByRole, postman, core, privateMockAuth = false } = options;
   const expectedPath = `${collectionsDir}/${dirName}`;
-  const forceCloudExport = privateMockAuth;
   const entry = prebuiltByRole.get(role);
-  if (entry && !forceCloudExport && tryReusePrebuiltCollection({
+  const exactPrebuilt = Boolean(entry && tryReusePrebuiltCollection({
     prepared: entry,
     expectedPath,
     expectedCloudId: collectionId
-  })) {
-    core.info(`Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`);
+  }));
+  const reusePrebuilt = exactPrebuilt && (!privateMockAuth || entry?.privateMockArtifactReady === true);
+  if (reusePrebuilt) {
+    core.info(
+      privateMockAuth
+        ? `Reusing locally reconciled private-mock ${role} collection tree at ${expectedPath} (source artifactDigest match)`
+        : `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
+    );
     return { reusePrebuilt: true };
   }
   if (entry) {
-    core.info(forceCloudExport
-      ? `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
+    core.info(privateMockAuth
+      ? `Private mock has no locally reconciled exact prebuilt ${role} collection; exporting from cloud`
       : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
   }
-  const cloud = forceCloudExport
+  const cloud = privateMockAuth
     ? await preparePrivateMockCloudCollection(role, collectionId, postman)
     : await postman.getCollection(collectionId) as Record<string, unknown>;
   return { reusePrebuilt: false, cloudCollection: cloud };
@@ -3368,19 +3557,53 @@ async function runRepoSyncInner(
             'PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection.'
           );
         }
+        const collectionTargets = [
+          { role: 'baseline' as const, collectionUid: inputs.baselineCollectionId, kind: 'Baseline' as const },
+          { role: 'smoke' as const, collectionUid: inputs.smokeCollectionId, kind: 'Smoke' as const },
+          { role: 'contract' as const, collectionUid: inputs.contractCollectionId, kind: 'Contract' as const }
+        ].filter((target) => Boolean(target.collectionUid));
+        const prebuiltPlans = new Map<PrebuiltCollectionRole, PrivateMockPrebuiltPlan>();
+        for (const target of collectionTargets) {
+          const plan = await planPrivateMockPrebuiltArtifact({
+            role: target.role,
+            collectionId: target.collectionUid,
+            expectedPath: `${inputs.artifactDir}/collections/${getCollectionDirectoryName(target.kind, assetProjectName)}`,
+            artifactDir: inputs.artifactDir,
+            prepared: preparedPrebuiltCollections.get(target.role)
+          });
+          if (plan) {
+            prebuiltPlans.set(target.role, plan);
+          }
+        }
+
         const configured: string[] = [];
         const configuredUids = new Set<string>();
-        for (const { role, collectionUid } of [
-          { role: 'baseline' as const, collectionUid: inputs.baselineCollectionId },
-          { role: 'smoke' as const, collectionUid: inputs.smokeCollectionId },
-          { role: 'contract' as const, collectionUid: inputs.contractCollectionId }
-        ]) {
-          if (!collectionUid || configuredUids.has(collectionUid)) {
+        for (const { role, collectionUid } of collectionTargets) {
+          if (configuredUids.has(collectionUid)) {
             continue;
           }
           configuredUids.add(collectionUid);
           try {
-            await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            const plansForUid = collectionTargets
+              .filter((target) => target.collectionUid === collectionUid)
+              .map((target) => prebuiltPlans.get(target.role))
+              .filter((plan): plan is PrivateMockPrebuiltPlan => Boolean(plan));
+            const trustedRootScripts = plansForUid[0]?.rootScripts;
+            if (trustedRootScripts && plansForUid.some(
+              (plan) => JSON.stringify(plan.rootScripts) !== JSON.stringify(trustedRootScripts)
+            )) {
+              failPrebuiltCollections(
+                `roles sharing collection ${collectionUid} disagree on trusted root scripts`
+              );
+            }
+            if (trustedRootScripts) {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(
+                collectionUid,
+                trustedRootScripts
+              );
+            } else {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            }
             configured.push(collectionUid);
           } catch (error) {
             throw new Error(
@@ -3389,6 +3612,10 @@ async function runRepoSyncInner(
             );
           }
         }
+        // Keep repository bytes untouched until every cloud collection is
+        // configured. A later PATCH failure therefore cannot leave a partial
+        // local private-mock artifact that might be committed on retry.
+        applyPrivateMockPrebuiltPlans([...prebuiltPlans.values()]);
         if (configured.length > 0) {
           (dependencies.core.notice ?? dependencies.core.info)(
             `Private mock: installed a request hook on ${configured.length} collection(s) that sends the ` +

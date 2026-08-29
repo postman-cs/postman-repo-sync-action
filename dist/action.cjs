@@ -121638,6 +121638,9 @@ var PostmanAssetsClient = class {
   }
 };
 
+// src/lib/postman/postman-gateway-assets-client.ts
+var import_node_util = require("node:util");
+
 // node_modules/acorn/dist/acorn.mjs
 var astralIdentifierCodes = [509, 0, 227, 0, 150, 4, 294, 9, 1368, 2, 2, 1, 6, 3, 41, 2, 5, 0, 166, 1, 574, 3, 9, 9, 7, 9, 32, 4, 318, 1, 78, 5, 71, 10, 50, 3, 123, 2, 54, 14, 32, 10, 3, 1, 11, 3, 46, 10, 8, 0, 46, 9, 7, 2, 37, 13, 2, 9, 6, 1, 45, 0, 13, 2, 49, 13, 9, 3, 2, 11, 83, 11, 7, 0, 3, 0, 158, 11, 6, 9, 7, 3, 56, 1, 2, 6, 3, 1, 3, 2, 10, 0, 11, 1, 3, 6, 4, 4, 68, 8, 2, 0, 3, 0, 2, 3, 2, 4, 2, 0, 15, 1, 83, 17, 10, 9, 5, 0, 82, 19, 13, 9, 214, 6, 3, 8, 28, 1, 83, 16, 16, 9, 82, 12, 9, 9, 7, 19, 58, 14, 5, 9, 243, 14, 166, 9, 71, 5, 2, 1, 3, 3, 2, 0, 2, 1, 13, 9, 120, 6, 3, 6, 4, 0, 29, 9, 41, 6, 2, 3, 9, 0, 10, 10, 47, 15, 199, 7, 137, 9, 54, 7, 2, 7, 17, 9, 57, 21, 2, 13, 123, 5, 4, 0, 2, 1, 2, 6, 2, 0, 9, 9, 49, 4, 2, 1, 2, 4, 9, 9, 55, 9, 266, 3, 10, 1, 2, 0, 49, 6, 4, 4, 14, 10, 5350, 0, 7, 14, 11465, 27, 2343, 9, 87, 9, 39, 4, 60, 6, 26, 9, 535, 9, 470, 0, 2, 54, 8, 3, 82, 0, 12, 1, 19628, 1, 4178, 9, 519, 45, 3, 22, 543, 4, 4, 5, 9, 7, 3, 6, 31, 3, 149, 2, 1418, 49, 513, 54, 5, 49, 9, 0, 15, 0, 23, 4, 2, 14, 1361, 6, 2, 16, 3, 6, 2, 1, 2, 4, 101, 0, 161, 6, 10, 9, 357, 0, 62, 13, 499, 13, 245, 1, 2, 9, 233, 0, 3, 0, 8, 1, 6, 0, 475, 6, 110, 6, 6, 9, 4759, 9, 787719, 239];
 var astralIdentifierStartCodes = [0, 11, 2, 25, 2, 18, 2, 1, 2, 14, 3, 13, 35, 122, 70, 52, 268, 28, 4, 48, 48, 31, 14, 29, 6, 37, 11, 29, 3, 35, 5, 7, 2, 4, 43, 157, 19, 35, 5, 35, 5, 39, 9, 51, 13, 10, 2, 14, 2, 6, 2, 1, 2, 10, 2, 14, 2, 6, 2, 1, 4, 51, 13, 310, 10, 21, 11, 7, 25, 5, 2, 41, 2, 8, 70, 5, 3, 0, 2, 43, 2, 1, 4, 0, 3, 22, 11, 22, 10, 30, 66, 18, 2, 1, 11, 21, 11, 25, 7, 25, 39, 55, 7, 1, 65, 0, 16, 3, 2, 2, 2, 28, 43, 28, 4, 28, 36, 7, 2, 27, 28, 53, 11, 21, 11, 18, 14, 17, 111, 72, 56, 50, 14, 50, 14, 35, 39, 27, 10, 22, 251, 41, 7, 1, 17, 5, 57, 28, 11, 0, 9, 21, 43, 17, 47, 20, 28, 22, 13, 52, 58, 1, 3, 0, 14, 44, 33, 24, 27, 35, 30, 0, 3, 0, 9, 34, 4, 0, 13, 47, 15, 3, 22, 0, 2, 0, 36, 17, 2, 24, 20, 1, 64, 6, 2, 0, 2, 3, 2, 14, 2, 9, 8, 46, 39, 7, 3, 1, 3, 21, 2, 6, 2, 1, 2, 4, 4, 0, 19, 0, 13, 4, 31, 9, 2, 0, 3, 0, 2, 37, 2, 0, 26, 0, 2, 0, 45, 52, 19, 3, 21, 2, 31, 47, 21, 1, 2, 0, 185, 46, 42, 3, 37, 47, 21, 0, 60, 42, 14, 0, 72, 26, 38, 6, 186, 43, 117, 63, 32, 7, 3, 0, 3, 7, 2, 1, 2, 23, 16, 0, 2, 0, 95, 7, 3, 38, 17, 0, 2, 0, 29, 0, 11, 39, 8, 0, 22, 0, 12, 45, 20, 0, 19, 72, 200, 32, 32, 8, 2, 36, 18, 0, 50, 29, 113, 6, 2, 1, 2, 37, 22, 0, 26, 5, 2, 1, 2, 31, 15, 0, 24, 43, 261, 18, 16, 0, 2, 12, 2, 33, 125, 0, 80, 921, 103, 110, 18, 195, 2637, 96, 16, 1071, 18, 5, 26, 3994, 6, 582, 6842, 29, 1763, 568, 8, 30, 18, 78, 18, 29, 19, 47, 17, 3, 32, 20, 6, 18, 433, 44, 212, 63, 33, 24, 3, 24, 45, 74, 6, 0, 67, 12, 65, 1, 2, 0, 15, 4, 10, 7381, 42, 31, 98, 114, 8702, 3, 2, 6, 2, 1, 2, 290, 16, 0, 30, 2, 3, 0, 15, 3, 9, 395, 2309, 106, 6, 12, 4, 8, 8, 9, 5991, 84, 2, 70, 2, 1, 3, 0, 3, 1, 3, 3, 2, 11, 2, 0, 2, 6, 2, 64, 2, 3, 3, 7, 2, 6, 2, 27, 2, 3, 2, 4, 2, 0, 4, 6, 2, 339, 3, 24, 2, 24, 2, 30, 2, 24, 2, 30, 2, 24, 2, 30, 2, 24, 2, 30, 2, 24, 2, 7, 1845, 30, 7, 5, 262, 61, 147, 44, 11, 6, 17, 0, 322, 29, 19, 43, 485, 27, 229, 29, 3, 0, 208, 30, 2, 2, 2, 1, 2, 6, 3, 4, 10, 1, 225, 6, 2, 3, 2, 1, 2, 14, 2, 196, 60, 67, 8, 0, 1205, 3, 2, 26, 2, 1, 2, 0, 3, 0, 2, 9, 2, 3, 2, 0, 2, 0, 7, 0, 5, 0, 2, 0, 2, 0, 2, 2, 2, 1, 2, 0, 3, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 1, 2, 0, 3, 3, 2, 6, 2, 3, 2, 3, 2, 0, 2, 9, 2, 16, 6, 2, 2, 4, 2, 16, 4421, 42719, 33, 4381, 3, 5773, 3, 7472, 16, 621, 2467, 541, 1507, 4938, 6, 8489];
@@ -128240,79 +128243,160 @@ var PostmanGatewayAssetsClient = class {
   isAmbiguousTransportError(error2) {
     return this.isRetryableIdempotentWriteOutcome(error2);
   }
-  normalizeCollectionScripts(scripts) {
-    if (!Array.isArray(scripts)) return [];
-    return scripts.map((entry) => this.asRecord(entry)).filter((entry) => entry !== null);
+  isRootPatchSnapshotConflict(error2) {
+    return error2 instanceof HttpError && [400, 409, 412].includes(error2.status);
+  }
+  normalizeCollectionScripts(scripts, operation) {
+    if (scripts === void 0 || scripts === null) return [];
+    if (!Array.isArray(scripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-array scripts field.`
+      );
+    }
+    const normalized = scripts.map((entry) => this.asRecord(entry));
+    if (normalized.some((entry) => entry === null)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-object script entry.`
+      );
+    }
+    return normalized;
   }
   rootScriptsIncludeManagedAuthHook(scripts) {
     return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
   }
-  buildPrivateMockRootScripts(existingScripts) {
-    const managedScript = {
-      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
-      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-      language: "text/javascript"
-    };
-    return [...existingScripts, managedScript];
+  expectedPrivateMockRootScripts(existingScripts) {
+    return [
+      ...existingScripts,
+      {
+        type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+        code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+        language: "text/javascript"
+      }
+    ];
+  }
+  assertAtMostOneManagedRootHook(scripts, operation) {
+    const count = scripts.filter((script) => isManagedPrivateMockAuthRootHook(script)).length;
+    if (count > 1) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_DUPLICATE: ${operation} contains ${count} exact managed hooks.`
+      );
+    }
   }
   async readCollectionRootScripts(collectionUid) {
     const id = this.requireCollectionPublicUid(collectionUid);
-    const response = await this.gateway.requestJson({
-      service: "collection",
-      method: "get",
-      path: `/v3/collections/${id}/export`
-    });
+    const response = await this.gateway.requestJson(
+      {
+        service: "collection",
+        method: "get",
+        path: `/v3/collections/${id}`
+      },
+      // Root reconciliation is evidence, not a transient-success mechanism.
+      // One response must prove the current state; never hide a 5xx by retrying.
+      { retryTransient: false }
+    );
     const data2 = this.asRecord(response?.data);
-    const collection = this.asRecord(data2?.collection);
-    if (!collection) {
+    if (!data2) {
       throw new Error(
-        `PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection ${id} export did not return data.collection; refusing to configure private-mock root auth from an unexpected envelope.`
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: Collection ${id} root read did not return data; refusing to configure private-mock root auth from an unexpected envelope.`
       );
     }
-    return this.normalizeCollectionScripts(collection.scripts);
+    return this.normalizeCollectionScripts(data2.scripts, `Collection ${id} root read`);
   }
-  async patchCollectionRootScripts(collectionUid, scripts) {
+  async patchCollectionRootScripts(collectionUid, existingScripts) {
     const id = this.requireCollectionPublicUid(collectionUid);
-    await this.gateway.requestJson(
+    const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
+    const managedScript = expectedScripts.at(-1);
+    const response = await this.gateway.requestJson(
       {
         service: "collection",
         method: "patch",
         path: `/v3/collections/${id}`,
-        body: [{ op: "add", path: "/scripts", value: scripts }]
+        // Bootstrap creates these HTTP collections through Sync. Its current
+        // collection-service wire projection materializes absent/null scripts
+        // as `[]` before applying RFC 6902, so this pair is one atomic
+        // compare-and-append. If that contract ever changes, `test` fails and
+        // the append cannot overwrite or manufacture a scripts field.
+        body: [
+          { op: "test", path: "/scripts", value: existingScripts },
+          { op: "add", path: "/scripts/-", value: managedScript }
+        ]
       },
       { retryTransient: false }
     );
+    const data2 = this.asRecord(response?.data);
+    if (!data2) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_INVALID: Collection ${id} root patch did not return data.`
+      );
+    }
+    const scripts = this.normalizeCollectionScripts(data2.scripts, `Collection ${id} root patch`);
+    if (!(0, import_node_util.isDeepStrictEqual)(scripts, expectedScripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_UNVERIFIED: Collection ${id} root patch response did not exactly preserve the prior scripts and append one managed hook.`
+      );
+    }
+    return scripts;
   }
   /**
    * Add a secret-free runtime hook at the collection root. The PMAK value is
    * supplied only by the runner as a transient variable; this method persists
    * the variable name and header wiring, never the credential.
    */
-  async configurePrivateMockRuntimeAuth(collectionUid) {
+  async configurePrivateMockRuntimeAuth(collectionUid, trustedRootScripts) {
     const cid = this.requireCollectionPublicUid(collectionUid);
-    const installFromFreshRoot = async (existingScripts) => {
+    const installFromRootSnapshot = async (existingScripts) => {
+      this.assertAtMostOneManagedRootHook(existingScripts, `Collection ${cid} root snapshot`);
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
         return 0;
       }
-      const nextScripts = this.buildPrivateMockRootScripts(existingScripts);
+      const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
       try {
-        await this.patchCollectionRootScripts(cid, nextScripts);
+        await this.patchCollectionRootScripts(cid, existingScripts);
         return 1;
       } catch (error2) {
+        if (this.isRootPatchSnapshotConflict(error2)) {
+          const currentScripts = await this.readCollectionRootScripts(cid);
+          if ((0, import_node_util.isDeepStrictEqual)(currentScripts, expectedScripts)) {
+            return 0;
+          }
+          throw error2;
+        }
         if (!this.isAmbiguousTransportError(error2)) {
           throw error2;
         }
         const freshScripts = await this.readCollectionRootScripts(cid);
-        if (this.rootScriptsIncludeManagedAuthHook(freshScripts)) {
+        if ((0, import_node_util.isDeepStrictEqual)(freshScripts, expectedScripts)) {
           return 1;
         }
-        const recomputed = this.buildPrivateMockRootScripts(freshScripts);
-        await this.patchCollectionRootScripts(cid, recomputed);
-        return 1;
+        if (!(0, import_node_util.isDeepStrictEqual)(freshScripts, existingScripts)) {
+          throw new Error(
+            `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed while reconciling an ambiguous patch.`,
+            { cause: error2 }
+          );
+        }
+        try {
+          await this.patchCollectionRootScripts(cid, existingScripts);
+          return 1;
+        } catch (resendError) {
+          if (!this.isAmbiguousTransportError(resendError)) {
+            throw resendError;
+          }
+          const finalScripts = await this.readCollectionRootScripts(cid);
+          if ((0, import_node_util.isDeepStrictEqual)(finalScripts, expectedScripts)) {
+            return 1;
+          }
+          if (!(0, import_node_util.isDeepStrictEqual)(finalScripts, existingScripts)) {
+            throw new Error(
+              `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed after the ambiguous patch resend.`,
+              { cause: resendError }
+            );
+          }
+          throw resendError;
+        }
       }
     };
-    const scripts = await this.readCollectionRootScripts(cid);
-    return installFromFreshRoot(scripts);
+    const scripts = trustedRootScripts === void 0 ? await this.readCollectionRootScripts(cid) : this.normalizeCollectionScripts(trustedRootScripts, `Trusted collection ${cid} root`);
+    return installFromRootSnapshot(scripts);
   }
   async listMocks() {
     const response = await this.gateway.requestJson({
@@ -128650,6 +128734,45 @@ function cloneCollection(collection) {
     return cloneCollectionNodeIterative(collection);
   }
 }
+function cleanManagedItemAuthScriptsInPlace(item, stripManagedBlocks) {
+  if (!stripManagedBlocks) {
+    return 0;
+  }
+  const scripts = item.scripts;
+  if (!Array.isArray(scripts)) {
+    return 0;
+  }
+  let strippedBlocks = 0;
+  const nextScripts = [];
+  for (const script of scripts) {
+    if (!script || typeof script !== "object" || Array.isArray(script)) {
+      nextScripts.push(script);
+      continue;
+    }
+    const record = script;
+    if (String(record.type ?? "") !== "beforeRequest") {
+      nextScripts.push(record);
+      continue;
+    }
+    const originalCode = String(record.code ?? "");
+    const cleaned = stripManagedItemAuthBlocks(originalCode);
+    if (cleaned === originalCode) {
+      nextScripts.push(record);
+      continue;
+    }
+    strippedBlocks += countManagedItemAuthBlocks(originalCode);
+    if (!cleaned) {
+      continue;
+    }
+    nextScripts.push({ ...record, code: cleaned });
+  }
+  if (nextScripts.length === 0) {
+    delete item.scripts;
+  } else {
+    item.scripts = nextScripts;
+  }
+  return strippedBlocks;
+}
 function isPrivateMockLegacyExportCleanupEnabled() {
   const value = String(process.env.POSTMAN_PRIVATE_MOCK_LEGACY_EXPORT_CLEANUP ?? "").trim().toLowerCase();
   return value !== "off";
@@ -128658,52 +128781,23 @@ function verifyPrivateMockRootHook(collection) {
   const scripts = asArray2(collection.scripts);
   return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
 }
+function applyPrivateMockArtifactNodeCleanup(node, options = {}) {
+  const stripManagedBlocks = options.stripManagedBlocks ?? isPrivateMockLegacyExportCleanupEnabled();
+  const cloned = cloneCollection(node);
+  return {
+    node: cloned,
+    strippedBlocks: cleanManagedItemAuthScriptsInPlace(cloned, stripManagedBlocks)
+  };
+}
 function applyPrivateMockExportCleanup(collection, options = {}) {
   const stripManagedBlocks = options.stripManagedBlocks ?? isPrivateMockLegacyExportCleanupEnabled();
   const cloned = cloneCollection(collection);
   let strippedBlocks = 0;
-  const visitItem = (item) => {
-    if (!stripManagedBlocks) {
-      return;
-    }
-    const scripts = item.scripts;
-    if (!Array.isArray(scripts)) {
-      return;
-    }
-    const nextScripts = [];
-    for (const script of scripts) {
-      if (!script || typeof script !== "object" || Array.isArray(script)) {
-        nextScripts.push(script);
-        continue;
-      }
-      const record = script;
-      if (String(record.type ?? "") !== "beforeRequest") {
-        nextScripts.push(record);
-        continue;
-      }
-      const originalCode = String(record.code ?? "");
-      const cleaned = stripManagedItemAuthBlocks(originalCode);
-      if (cleaned === originalCode) {
-        nextScripts.push(record);
-        continue;
-      }
-      strippedBlocks += countManagedItemAuthBlocks(originalCode);
-      if (!cleaned) {
-        continue;
-      }
-      nextScripts.push({ ...record, code: cleaned });
-    }
-    if (nextScripts.length === 0) {
-      delete item.scripts;
-    } else {
-      item.scripts = nextScripts;
-    }
-  };
   const walkItemsIteratively = (rootItems) => {
     const stack = [...rootItems].reverse();
     while (stack.length > 0) {
       const item = stack.pop();
-      visitItem(item);
+      strippedBlocks += cleanManagedItemAuthScriptsInPlace(item, stripManagedBlocks);
       for (const key of ["items", "children"]) {
         const nested = asArray2(item[key]);
         for (let i3 = nested.length - 1; i3 >= 0; i3 -= 1) {
@@ -130871,7 +130965,7 @@ function validateCanonicalV3CollectionFile(relative4, bytes) {
     );
   }
 }
-async function digestAndValidatePrebuiltCollectionTree(files) {
+async function digestAndValidatePrebuiltCollectionTree(files, onFile) {
   if (!files.some((file) => file.relative === ".resources/definition.yaml")) {
     failPrebuiltCollections("prebuilt collection tree is missing .resources/definition.yaml");
   }
@@ -130899,6 +130993,7 @@ async function digestAndValidatePrebuiltCollectionTree(files) {
       );
     }
     validateCanonicalV3CollectionFile(file.relative, bytes);
+    onFile?.(file, bytes);
   }
   return hash.digest("hex");
 }
@@ -130946,6 +131041,147 @@ function tryReusePrebuiltCollection(options) {
   }
   return prepared.artifactDigest === entry.artifactDigest;
 }
+function normalizeTrustedPrivateMockRootScripts(value, role) {
+  if (value === void 0 || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((entry) => !isPlainObject2(entry))) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection root scripts must be an array of mappings`
+    );
+  }
+  return value.map((entry) => ({ ...entry }));
+}
+function serializePrivateMockArtifactNode(node) {
+  return Buffer.from(dump(node, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false
+  }));
+}
+async function planPrivateMockPrebuiltArtifact(options) {
+  const { role, collectionId, expectedPath, artifactDir, prepared } = options;
+  if (!prepared || !tryReusePrebuiltCollection({
+    prepared,
+    expectedPath,
+    expectedCloudId: collectionId
+  })) {
+    return void 0;
+  }
+  const files = listPrebuiltCollectionTreeFiles(prepared.confinedPath, artifactDir);
+  const updates = [];
+  let rootScripts;
+  const stripManagedBlocks = isPrivateMockLegacyExportCleanupEnabled();
+  const currentDigest = await digestAndValidatePrebuiltCollectionTree(files, (file, original) => {
+    let parsed;
+    try {
+      parsed = load(original.toString("utf8"));
+    } catch (error2) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection changed to malformed YAML at ${file.relative} (${error2 instanceof Error ? error2.message : String(error2)})`
+      );
+    }
+    if (!isPlainObject2(parsed)) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection file ${file.relative} must contain a YAML mapping`
+      );
+    }
+    let nextNode;
+    if (file.relative === ".resources/definition.yaml") {
+      rootScripts = normalizeTrustedPrivateMockRootScripts(parsed.scripts, role);
+      if (!rootScripts.some((script) => isManagedPrivateMockAuthRootHook(script))) {
+        nextNode = {
+          ...parsed,
+          scripts: [
+            ...rootScripts,
+            {
+              type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+              code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+              language: "text/javascript"
+            }
+          ]
+        };
+      }
+    } else {
+      const cleaned = applyPrivateMockArtifactNodeCleanup(parsed, { stripManagedBlocks });
+      if (cleaned.strippedBlocks > 0) {
+        nextNode = cleaned.node;
+      }
+    }
+    if (nextNode) {
+      const next = serializePrivateMockArtifactNode(nextNode);
+      if (!next.equals(original)) {
+        updates.push({
+          absolute: file.absolute,
+          relative: file.relative,
+          original: Buffer.from(original),
+          next
+        });
+      }
+    }
+  });
+  if (currentDigest !== prepared.entry.artifactDigest) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection changed after initial validation; expected artifactDigest ${prepared.entry.artifactDigest}, observed ${currentDigest}`
+    );
+  }
+  if (!rootScripts) {
+    failPrebuiltCollections(`prebuilt ${role} collection root definition disappeared`);
+  }
+  return { prepared, rootScripts, updates };
+}
+function applyPrivateMockPrebuiltPlans(plans) {
+  const updates = plans.flatMap((plan) => plan.updates);
+  const seen = /* @__PURE__ */ new Set();
+  for (const update of updates) {
+    if (seen.has(update.absolute)) {
+      failPrebuiltCollections(
+        `private-mock artifact plan addressed ${update.relative} more than once`
+      );
+    }
+    seen.add(update.absolute);
+    let current2;
+    try {
+      const stat2 = (0, import_node_fs6.lstatSync)(update.absolute);
+      if (stat2.isSymbolicLink() || !stat2.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed or became unsupported at ${update.relative}`
+        );
+      }
+      current2 = (0, import_node_fs6.readFileSync)(update.absolute);
+    } catch (error2) {
+      if (error2 instanceof Error && error2.message.startsWith("CONTRACT_PREBUILT_COLLECTIONS_INVALID:")) {
+        throw error2;
+      }
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed or became unreadable at ${update.relative}`
+      );
+    }
+    if (!current2.equals(update.original)) {
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed before private-mock reconciliation at ${update.relative}`
+      );
+    }
+  }
+  const written = [];
+  try {
+    for (const update of updates) {
+      (0, import_node_fs6.writeFileSync)(update.absolute, update.next);
+      written.push(update);
+    }
+  } catch (error2) {
+    for (const update of written.reverse()) {
+      try {
+        (0, import_node_fs6.writeFileSync)(update.absolute, update.original);
+      } catch {
+      }
+    }
+    throw error2;
+  }
+  for (const plan of plans) {
+    plan.prepared.privateMockArtifactReady = true;
+  }
+}
 async function preparePrivateMockCloudCollection(role, collectionId, postman) {
   const col = await postman.getCollection(collectionId);
   const { collection } = applyPrivateMockExportCleanup(col, {
@@ -130985,20 +131221,23 @@ async function runBoundedInOrder(items, width, worker) {
 async function acquireCollectionArtifact(options) {
   const { role, collectionId, dirName, collectionsDir, prebuiltByRole, postman, core, privateMockAuth = false } = options;
   const expectedPath = `${collectionsDir}/${dirName}`;
-  const forceCloudExport = privateMockAuth;
   const entry = prebuiltByRole.get(role);
-  if (entry && !forceCloudExport && tryReusePrebuiltCollection({
+  const exactPrebuilt = Boolean(entry && tryReusePrebuiltCollection({
     prepared: entry,
     expectedPath,
     expectedCloudId: collectionId
-  })) {
-    core.info(`Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`);
+  }));
+  const reusePrebuilt = exactPrebuilt && (!privateMockAuth || entry?.privateMockArtifactReady === true);
+  if (reusePrebuilt) {
+    core.info(
+      privateMockAuth ? `Reusing locally reconciled private-mock ${role} collection tree at ${expectedPath} (source artifactDigest match)` : `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
+    );
     return { reusePrebuilt: true };
   }
   if (entry) {
-    core.info(forceCloudExport ? `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud` : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
+    core.info(privateMockAuth ? `Private mock has no locally reconciled exact prebuilt ${role} collection; exporting from cloud` : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
   }
-  const cloud = forceCloudExport ? await preparePrivateMockCloudCollection(role, collectionId, postman) : await postman.getCollection(collectionId);
+  const cloud = privateMockAuth ? await preparePrivateMockCloudCollection(role, collectionId, postman) : await postman.getCollection(collectionId);
   return { reusePrebuilt: false, cloudCollection: cloud };
 }
 async function exportCollectionArtifact(options) {
@@ -131673,19 +131912,49 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
             "PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection."
           );
         }
+        const collectionTargets = [
+          { role: "baseline", collectionUid: inputs.baselineCollectionId, kind: "Baseline" },
+          { role: "smoke", collectionUid: inputs.smokeCollectionId, kind: "Smoke" },
+          { role: "contract", collectionUid: inputs.contractCollectionId, kind: "Contract" }
+        ].filter((target) => Boolean(target.collectionUid));
+        const prebuiltPlans = /* @__PURE__ */ new Map();
+        for (const target of collectionTargets) {
+          const plan = await planPrivateMockPrebuiltArtifact({
+            role: target.role,
+            collectionId: target.collectionUid,
+            expectedPath: `${inputs.artifactDir}/collections/${getCollectionDirectoryName(target.kind, assetProjectName)}`,
+            artifactDir: inputs.artifactDir,
+            prepared: preparedPrebuiltCollections.get(target.role)
+          });
+          if (plan) {
+            prebuiltPlans.set(target.role, plan);
+          }
+        }
         const configured = [];
         const configuredUids = /* @__PURE__ */ new Set();
-        for (const { role, collectionUid } of [
-          { role: "baseline", collectionUid: inputs.baselineCollectionId },
-          { role: "smoke", collectionUid: inputs.smokeCollectionId },
-          { role: "contract", collectionUid: inputs.contractCollectionId }
-        ]) {
-          if (!collectionUid || configuredUids.has(collectionUid)) {
+        for (const { role, collectionUid } of collectionTargets) {
+          if (configuredUids.has(collectionUid)) {
             continue;
           }
           configuredUids.add(collectionUid);
           try {
-            await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            const plansForUid = collectionTargets.filter((target) => target.collectionUid === collectionUid).map((target) => prebuiltPlans.get(target.role)).filter((plan) => Boolean(plan));
+            const trustedRootScripts = plansForUid[0]?.rootScripts;
+            if (trustedRootScripts && plansForUid.some(
+              (plan) => JSON.stringify(plan.rootScripts) !== JSON.stringify(trustedRootScripts)
+            )) {
+              failPrebuiltCollections(
+                `roles sharing collection ${collectionUid} disagree on trusted root scripts`
+              );
+            }
+            if (trustedRootScripts) {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(
+                collectionUid,
+                trustedRootScripts
+              );
+            } else {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            }
             configured.push(collectionUid);
           } catch (error2) {
             throw new Error(
@@ -131694,6 +131963,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
             );
           }
         }
+        applyPrivateMockPrebuiltPlans([...prebuiltPlans.values()]);
         if (configured.length > 0) {
           (dependencies.core.notice ?? dependencies.core.info)(
             `Private mock: installed a request hook on ${configured.length} collection(s) that sends the ${PRIVATE_MOCK_AUTH_VARIABLE2} variable as x-api-key, and only to *.mock.pstmn.io hosts. The generated CI workflow supplies it from the POSTMAN_API_KEY secret. For manual runs in the Postman app, set that variable to a key with access to the mock. No key is stored in the collection, environment, outputs, or repository.`
