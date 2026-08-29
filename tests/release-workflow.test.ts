@@ -214,12 +214,12 @@ describe('release workflow publishing contract', () => {
     expect(verifier).toContain(
       'E2E_GATE_SOURCE_DIGEST: ${{ needs.verify-package.outputs.release_tgz_sha256 }}'
     );
-    expect(verifier).toContain('E2E_GATE_PROVIDER_TAG: e2e-provider-v1.1.0');
+    expect(verifier).toContain('E2E_GATE_PROVIDER_TAG: e2e-provider-v1.2.0');
     expect(verifier).toContain(
-      'E2E_GATE_PROVIDER_COMMIT: 8948f3b521fd24c99ef7742ca8e5cc046d806133'
+      'E2E_GATE_PROVIDER_COMMIT: 53c5d10093b7dafb165d3caafbe3f1d70dec687d'
     );
     expect(verifier).toContain(
-      'E2E_GATE_PROVIDER_SOURCE_DIGEST: f344801e3437a17a1de648e3eef3d706385432036710817457e56c1050e32d37'
+      'E2E_GATE_PROVIDER_SOURCE_DIGEST: 8c7ee211fccd2869f3901fcbc5ed154d6dea8e3d0d7d2e5312f6c0b57b4f6b78'
     );
     expect(verifier).not.toContain('__FILL_PROVIDER_');
     expect(verifier).toContain(
@@ -279,9 +279,9 @@ describe('release workflow publishing contract', () => {
       'VERIFIED_E2E_PROVIDER_TAG: ${{ needs.verify-release-e2e.outputs.provider_tag }}'
     );
     expect(alias).toContain('[[ "$VERIFIED_E2E_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]');
-    expect(alias).toContain("[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.1.0' ]");
+    expect(alias).toContain("[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.2.0' ]");
     expect(alias).toContain(
-      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '8948f3b521fd24c99ef7742ca8e5cc046d806133' ]"
+      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '53c5d10093b7dafb165d3caafbe3f1d70dec687d' ]"
     );
     expect(alias).toContain(
       'git ls-remote --exit-code --tags origin "$RELEASE_TAG_REF" "${RELEASE_TAG_REF}^{}"'
@@ -289,8 +289,8 @@ describe('release workflow publishing contract', () => {
     expect(alias).toContain('[ "$REMOTE_RELEASE_COMMIT" = "$GITHUB_SHA" ]');
     for (const validation of [
       '[[ "$VERIFIED_E2E_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]',
-      "[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.1.0' ]",
-      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '8948f3b521fd24c99ef7742ca8e5cc046d806133' ]",
+      "[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.2.0' ]",
+      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '53c5d10093b7dafb165d3caafbe3f1d70dec687d' ]",
       '[ "$REMOTE_RELEASE_COMMIT" = "$GITHUB_SHA" ]'
     ]) {
       expect(alias.indexOf(validation)).toBeLessThan(alias.indexOf('git tag -fa "$MAJOR"'));
@@ -389,8 +389,8 @@ esac
         GIT_STUB_RELEASE_COMMIT: 'a'.repeat(40),
         GIT_STUB_RELEASE_TAG_OBJECT: '1'.repeat(40),
         VERIFIED_E2E_MANIFEST_SHA256: 'c'.repeat(64),
-        VERIFIED_E2E_PROVIDER_COMMIT: '8948f3b521fd24c99ef7742ca8e5cc046d806133',
-        VERIFIED_E2E_PROVIDER_TAG: 'e2e-provider-v1.1.0',
+        VERIFIED_E2E_PROVIDER_COMMIT: '53c5d10093b7dafb165d3caafbe3f1d70dec687d',
+        VERIFIED_E2E_PROVIDER_TAG: 'e2e-provider-v1.2.0',
         ...overrides
       },
       timeout: 10_000
