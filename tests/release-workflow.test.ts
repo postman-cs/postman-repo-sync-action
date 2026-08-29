@@ -352,13 +352,9 @@ interface AliasShellResult {
 
 function executeAliasShell(overrides: Record<string, string> = {}): AliasShellResult {
   const tmpDir = mkdtempSync(join(tmpdir(), 'release-alias-'));
-  const mutationLog = join(tmpDir, 'mutations.log');
-  const gitStub = join(tmpDir, 'git');
   const scriptPath = join(tmpDir, 'alias.sh');
-  writeFileSync(
-    gitStub,
-    `#!/usr/bin/env bash
-set -eu
+  const mutationPrefix = '__ALIAS_GIT_MUTATION__:';
+  const gitShim = `git() {
 case "\${1:-}" in
   rev-parse) printf '%s\\n' "$GITHUB_SHA" ;;
   ls-remote)
@@ -366,49 +362,20 @@ case "\${1:-}" in
       printf '%s\\trefs/tags/%s\\n' "$GIT_STUB_RELEASE_TAG_OBJECT" "$GITHUB_REF_NAME"
       printf '%s\\trefs/tags/%s^{}\\n' "$GIT_STUB_RELEASE_COMMIT" "$GITHUB_REF_NAME"
     elif [[ " $* " == *" --exit-code "* ]]; then
-      exit 2
+      return 2
     fi
     ;;
   config) ;;
-  tag|push) printf '%s\\n' "$*" >> "$GIT_STUB_MUTATIONS" ;;
-  *) printf 'unexpected git call: %s\\n' "$*" >&2; exit 90 ;;
+  tag|push) printf '${mutationPrefix}%s\\n' "$*" ;;
+  *) printf 'unexpected git call: %s\\n' "$*" >&2; return 90 ;;
 esac
-`
-  );
-  chmodSync(gitStub, 0o755);
-  if (process.platform === 'win32') {
-    // Git Bash resolves Windows PATHEXT wrappers more reliably than an
-    // extensionless temporary executable. Keep this behaviour identical to
-    // the bash stub so the test never falls through to the checkout's real
-    // `git` and exits early against the live rolling v2 tag.
-    writeFileSync(
-      join(tmpDir, 'git.bat'),
-      `@echo off\r
-if "%~1"=="rev-parse" (\r
-  echo %GITHUB_SHA%\r
-  exit /b 0\r
-)\r
-if "%~1"=="ls-remote" (\r
-  if "%~6"=="" exit /b 2\r
-  echo %GIT_STUB_RELEASE_TAG_OBJECT%\trefs/tags/%GITHUB_REF_NAME%\r
-  echo %GIT_STUB_RELEASE_COMMIT%\trefs/tags/%GITHUB_REF_NAME%^^{}\r
-  exit /b 0\r
-)\r
-if "%~1"=="config" exit /b 0\r
-if "%~1"=="tag" (\r
-  >>"%GIT_STUB_MUTATIONS%" echo %*\r
-  exit /b 0\r
-)\r
-if "%~1"=="push" (\r
-  >>"%GIT_STUB_MUTATIONS%" echo %*\r
-  exit /b 0\r
-)\r
-echo unexpected git call: %* 1>&2\r
-exit /b 90\r
-`
-    );
-  }
-  writeFileSync(scriptPath, aliasRunBody);
+}
+`;
+  // A shell function is deterministic on Unix and Git Bash alike. In
+  // particular, Git Bash prepends its own /mingw64/bin/git ahead of Windows
+  // PATH entries, so executable and .bat stubs can silently hit the real
+  // remote alias instead of exercising the release step.
+  writeFileSync(scriptPath, `${gitShim}\n${aliasRunBody}`);
   try {
     const result = spawnSync('bash', ['--noprofile', '--norc', scriptPath], {
       cwd: process.cwd(),
@@ -417,10 +384,8 @@ exit /b 90\r
         ...process.env,
         BASH_ENV: '',
         ENV: '',
-        PATH: `${tmpDir}${delimiter}${process.env.PATH ?? ''}`,
         GITHUB_REF_NAME: 'v9.9.9',
         GITHUB_SHA: 'a'.repeat(40),
-        GIT_STUB_MUTATIONS: mutationLog,
         GIT_STUB_RELEASE_COMMIT: 'a'.repeat(40),
         GIT_STUB_RELEASE_TAG_OBJECT: '1'.repeat(40),
         VERIFIED_E2E_MANIFEST_SHA256: 'c'.repeat(64),
@@ -430,9 +395,10 @@ exit /b 90\r
       },
       timeout: 10_000
     });
-    const mutations = existsSync(mutationLog)
-      ? readFileSync(mutationLog, 'utf8').trim().split('\n').filter(Boolean)
-      : [];
+    const mutations = (result.stdout ?? '')
+      .split('\n')
+      .filter((line) => line.startsWith(mutationPrefix))
+      .map((line) => line.slice(mutationPrefix.length).trim());
     return {
       status: result.status ?? -1,
       output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
