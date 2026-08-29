@@ -19,7 +19,7 @@
  * with `retirementReason: 'mapping-removed'` survive until `deleteAfter`.
  */
 
-import { parseAssetMarker, type AssetMarker } from './branch-decision.js';
+import { buildBranchSlug, parseAssetMarker, type AssetMarker } from './branch-decision.js';
 
 export type GcAssetKind = 'environment' | 'mock' | 'monitor' | 'collection' | 'spec';
 
@@ -44,6 +44,8 @@ export interface GcContext {
   branchExists: (rawBranch: string) => BranchExistence;
   /** Whether the branch still matches configured channels; undefined when no channel config was supplied. */
   channelMapped?: (rawBranch: string) => boolean | undefined;
+  /** Current generated channel prefix for a branch, when it remains mapped. */
+  channelCode?: (rawBranch: string) => string | undefined;
   /** Manual scope: only this branch (cli.cjs gc --branch <name>). */
   onlyBranch?: string;
   /** Manual scope: every preview regardless of branch state (cli.cjs gc --all-previews). */
@@ -117,6 +119,23 @@ export function decideRetention(candidate: GcCandidate, context: GcContext): GcD
   if (marker.repo !== context.repo) {
     // Valid stranger from another repo — not an orphan (R18c).
     return { action: 'stranger', reason: `marker repo ${marker.repo} does not match ${context.repo}` };
+  }
+
+  const expectedSuffix = buildBranchSlug(marker.rawBranch).suffix;
+  const previewNameMatches = marker.role !== 'preview' || new RegExp(
+    ` @${expectedSuffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`
+  ).test(candidate.name);
+  const channelCode = marker.channelCode ?? context.channelCode?.(marker.rawBranch);
+  const channelNameMatches = marker.role !== 'channel' || (
+    typeof channelCode === 'string' &&
+    /^[A-Z][A-Z0-9_-]{0,15}$/.test(channelCode) &&
+    candidate.name.startsWith(`[${channelCode}] `)
+  );
+  if (!previewNameMatches || !channelNameMatches) {
+    return {
+      action: 'orphan-audit',
+      reason: 'marker branch identity does not match the generated asset name'
+    };
   }
 
   // Name-reuse safety (rule 4): never delete a newer generation than the

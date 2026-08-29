@@ -144,17 +144,19 @@ export class PostmanGatewayAssetsClient {
 
   /** Native Spec Hub tags attach to the latest changelog group. */
   async tagSpecVersion(specId: string, name: string): Promise<{ id: string; name: string }> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const trimmed = name.trim().slice(0, 255);
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'post', path: `/specifications/${specId}/tags`, body: { name: trimmed }
+      service: 'specification', method: 'post', path: `/specifications/${id}/tags`, body: { name: trimmed }
     });
     const record = this.dataOf(response) ?? {};
     return { id: String(record.id ?? '').trim(), name: String(record.name ?? trimmed).trim() };
   }
 
   async listSpecVersionTags(specId: string): Promise<Array<{ id: string; name: string }>> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/tags`, query: { limit: '50' }
+      service: 'specification', method: 'get', path: `/specifications/${id}/tags`, query: { limit: '50' }
     });
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
@@ -174,7 +176,7 @@ export class PostmanGatewayAssetsClient {
    * Ordinary 4xx are not retried.
    */
   async deleteCollection(collectionUid: string): Promise<void> {
-    const bareId = String(collectionUid).split('-').slice(-5).join('-') || collectionUid;
+    const bareId = this.toModelId(collectionUid);
     try {
       await retry(
         () =>
@@ -200,7 +202,8 @@ export class PostmanGatewayAssetsClient {
 
   async listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications?containerType=workspace&containerId=${workspaceId}`
+      service: 'specification', method: 'get', path: '/specifications',
+      query: { containerType: 'workspace', containerId: this.requireSafePathSegment(workspaceId, 'Workspace UID') }
     });
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
@@ -222,16 +225,17 @@ export class PostmanGatewayAssetsClient {
   }
 
   private async getSpecContentLegacy(specId: string): Promise<string | undefined> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const files = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/files`
+      service: 'specification', method: 'get', path: `/specifications/${id}/files`
     });
     const entries = Array.isArray(files?.data) ? files.data : [];
     const root = entries.map((entry) => this.asRecord(entry)).find((entry) => entry?.type === 'ROOT')
       ?? entries.map((entry) => this.asRecord(entry)).find((entry) => entry !== null);
-    const fileId = String(root?.id ?? '').trim();
+    const fileId = root?.id ? this.requireSafePathSegment(String(root.id), 'Specification file UID') : '';
     if (!fileId) return undefined;
     const file = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/files/${fileId}`, query: { fields: 'content' }
+      service: 'specification', method: 'get', path: `/specifications/${id}/files/${fileId}`, query: { fields: 'content' }
     });
     const record = this.dataOf(file);
     return typeof record?.content === 'string' ? record.content : undefined;
@@ -239,12 +243,13 @@ export class PostmanGatewayAssetsClient {
 
   /** Minimal `/tree` reader: validate the entire returned inventory before selecting ROOT. */
   private async getSpecContentFromTree(specId: string): Promise<string | undefined> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const rows: JsonRecord[] = [];
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 100; page += 1) {
       const response = await this.gateway.requestJson<JsonRecord>({
-        service: 'specification', method: 'get', path: `/specifications/${specId}/tree`,
+        service: 'specification', method: 'get', path: `/specifications/${id}/tree`,
         query: { fields: 'id,name,type,path,parentId,fileType,content', limit: 100, ...(cursor ? { cursor } : {}) }
       });
       if (!Array.isArray(response?.data)) return undefined;
@@ -277,8 +282,9 @@ export class PostmanGatewayAssetsClient {
   }
 
   async listSpecCollections(specId: string): Promise<Array<{ uid: string; name: string }>> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/collections`
+      service: 'specification', method: 'get', path: `/specifications/${id}/collections`
     });
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
@@ -288,8 +294,9 @@ export class PostmanGatewayAssetsClient {
   }
 
   async deleteSpec(specId: string): Promise<void> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'delete', path: `/specifications/${specId}`
+      service: 'specification', method: 'delete', path: `/specifications/${id}`
     });
   }
 
@@ -388,6 +395,15 @@ export class PostmanGatewayAssetsClient {
     return trimmed;
   }
 
+  /** Positive single-segment contract for every identifier interpolated into a gateway path. */
+  private requireSafePathSegment(value: string, label: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed || !/^[A-Za-z0-9._~-]+$/.test(trimmed) || trimmed === '.' || trimmed === '..') {
+      throw new Error(`${label} must be a non-empty safe path segment.`);
+    }
+    return trimmed;
+  }
+
   /**
    * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
    * model id (`<uuid>`, 5 groups), mirroring `decomposeUID`. Used ONLY for the
@@ -398,7 +414,7 @@ export class PostmanGatewayAssetsClient {
    * other shapes pass through unchanged so the helper is idempotent.
    */
   private toModelId(uid: string): string {
-    const trimmed = String(uid ?? '').trim();
+    const trimmed = this.requireSafePathSegment(uid, 'Postman UID');
     const parts = trimmed.split('-');
     return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
   }
@@ -1085,11 +1101,13 @@ export class PostmanGatewayAssetsClient {
   }
 
   async monitorExists(uid: string): Promise<boolean> {
+    const id = this.requireSafePathSegment(uid, 'Monitor UID');
     try {
       await this.gateway.requestJson<JsonRecord>({
         service: 'monitors',
         method: 'get',
-        path: `/jobTemplates/${uid}?_etc=true`
+        path: `/jobTemplates/${id}`,
+        query: { _etc: 'true' }
       });
       return true;
     } catch (error) {
@@ -1248,11 +1266,12 @@ export class PostmanGatewayAssetsClient {
   }
 
   async runMonitor(uid: string): Promise<void> {
+    const id = this.requireSafePathSegment(uid, 'Monitor UID');
     await this.gateway.requestJson<JsonRecord>(
       {
         service: 'monitors',
         method: 'post',
-        path: `/jobTemplates/${uid}/jobs`
+        path: `/jobTemplates/${id}/jobs`
       },
       { retryTransient: false }
     );

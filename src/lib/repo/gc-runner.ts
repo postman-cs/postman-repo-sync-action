@@ -39,6 +39,7 @@ export interface GcPostmanClient {
   listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   getSpecContent(uid: string): Promise<string | undefined>;
   listSpecCollections(uid: string): Promise<Array<{ uid: string; name: string }>>;
+  getCollection(uid: string): Promise<unknown>;
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
@@ -179,17 +180,28 @@ export async function collectGcCandidates(
   // Mocks and monitors refer to the generated baseline/smoke collections. They
   // do not expose a durable description field, so inherit the proven marker
   // from their branch-scoped environment and collect each owned collection once.
-  const ownedCollections = new Map<string, { name: string; marker?: AssetMarker }>();
-  for (const mock of mocks) {
+  const ownedCollections = new Map<string, { marker: AssetMarker }>();
+  for (const mock of mocks.filter((entry) => isGcCandidateName(entry.name))) {
     const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === mock.environment)?.marker;
-    if (marker && mock.collection) ownedCollections.set(mock.collection, { name: `${mock.name} collection`, marker });
+    if (marker && mock.collection) ownedCollections.set(mock.collection, { marker });
   }
-  for (const monitor of monitors) {
+  for (const monitor of monitors.filter((entry) => isGcCandidateName(entry.name))) {
     const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === monitor.environmentUid)?.marker;
-    if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { name: `${monitor.name} collection`, marker });
+    if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    candidates.push({ kind: 'collection', uid, name: collection.name, marker: collection.marker });
+    try {
+      const payload = await postman.getCollection(uid) as Record<string, unknown> | null;
+      const info = payload?.info && typeof payload.info === 'object'
+        ? payload.info as Record<string, unknown>
+        : undefined;
+      const name = String(payload?.name ?? info?.name ?? '').trim();
+      if (name && isGcCandidateName(name)) {
+        candidates.push({ kind: 'collection', uid, name, marker: collection.marker });
+      }
+    } catch {
+      // A collection that cannot be independently identified is not safe to delete.
+    }
   }
 
   const specifications = await postman.listSpecifications(workspaceId);
@@ -205,7 +217,7 @@ export async function collectGcCandidates(
     if (marker) {
       try {
         for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (!ownedCollections.has(collection.uid)) {
+          if (!ownedCollections.has(collection.uid) && isGcCandidateName(collection.name)) {
             candidates.push({ kind: 'collection', uid: collection.uid, name: collection.name || `${spec.name} collection`, marker });
           }
         }
@@ -222,6 +234,8 @@ export async function collectGcCandidates(
 export async function runGc(options: GcRunOptions): Promise<GcSummary> {
   const now = options.now ?? new Date();
   const log = options.log ?? (() => undefined);
+
+  const candidates = await collectGcCandidates(options.postman, options.workspaceId);
 
   const remoteBranches = options.onlyBranch || options.allPreviews
     ? undefined // manual scopes never probe: the operator's word is the trigger
@@ -243,8 +257,13 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
           : rawBranch === rule.pattern
       )
     : undefined;
-
-  const candidates = await collectGcCandidates(options.postman, options.workspaceId);
+  const channelCode = channelRules
+    ? (rawBranch: string): string | undefined => channelRules.find((rule) =>
+        rule.pattern.endsWith('*')
+          ? rawBranch.startsWith(rule.pattern.slice(0, -1))
+          : rawBranch === rule.pattern
+      )?.code
+    : undefined;
 
   // The environment is the durable marker surface for a channel set. Once it
   // carries retirement state, use that state for every same-branch asset so
@@ -265,8 +284,10 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
       now,
       branchExists,
       channelMapped,
+      channelCode,
       onlyBranch: options.onlyBranch,
-      allPreviews: options.allPreviews
+      allPreviews: options.allPreviews,
+      triggerGeneration: now
     },
     candidates,
     deleters: {

@@ -200,7 +200,7 @@ export const postmanRepoSyncActionContract: {
       required: false
     },
     'repo-url': {
-      description: 'Explicit repository URL. Defaults to the workflow repository URL.',
+      description: 'Explicit repository URL. Defaults to the workflow repository URL. For commit-and-push it must identify the checked-out origin.',
       required: false
     },
     'integration-backend': {
@@ -288,7 +288,7 @@ export const postmanRepoSyncActionContract: {
     },
     'branch-strategy': {
       description:
-        'Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets.',
+        'Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets.',
       required: false,
       default: 'legacy',
       allowedValues: ['legacy', 'preview', 'publish-gate']
@@ -409,7 +409,7 @@ export const postmanRepoSyncActionContract: {
       description: 'Commit SHA produced by repo-write-mode, if any.'
     },
     'sync-status': {
-      description: 'Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy.'
+      description: 'Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run.'
     },
     'branch-decision': {
       description: 'Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION).'

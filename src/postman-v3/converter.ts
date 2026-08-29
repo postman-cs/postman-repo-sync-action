@@ -366,7 +366,20 @@ async function writeSplitCollection(v3: never, outputDir: string): Promise<void>
     }
     rel = rel.replace(/^\/+/, '');
     if (!rel) continue;
-    const dest = path.join(outputDir, rel);
+    const relSegments = rel.split(/[\\/]+/u);
+    if (
+      path.isAbsolute(rel) ||
+      path.win32.isAbsolute(rel) ||
+      relSegments.some((segment) => segment === '..' || segment === '')
+    ) {
+      throw new Error('CONTRACT_SPLIT_COLLECTION_PATH_INVALID');
+    }
+    const outputRoot = path.resolve(outputDir);
+    const dest = path.resolve(outputRoot, ...relSegments);
+    const relativeDest = path.relative(outputRoot, dest);
+    if (relativeDest.startsWith('..') || path.isAbsolute(relativeDest)) {
+      throw new Error('CONTRACT_SPLIT_COLLECTION_PATH_INVALID');
+    }
     await fs.mkdir(path.dirname(dest), { recursive: true });
     await fs.writeFile(dest, file.content, 'utf8');
     written.add(rel.split(path.sep).join('/'));

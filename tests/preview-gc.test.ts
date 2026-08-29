@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderAssetMarker, type AssetMarker } from '../src/lib/repo/branch-decision.js';
+import { buildBranchSlug, renderAssetMarker, type AssetMarker } from '../src/lib/repo/branch-decision.js';
 import {
   clearChannelRetirement,
   decideRetention,
@@ -14,12 +14,13 @@ import {
 
 const NOW = new Date('2026-07-14T12:00:00Z');
 const REPO = 'https://github.com/acme/payments';
+const BRANCH_SUFFIX = buildBranchSlug('feature/payments').suffix;
 
 function marker(overrides: Partial<AssetMarker> = {}): AssetMarker {
   return {
     repo: REPO,
     rawBranch: 'feature/payments',
-    sanitizedBranch: 'feature-payments',
+    sanitizedBranch: BRANCH_SUFFIX,
     role: 'preview',
     headSha: 'deadbeef',
     createdAt: '2026-07-01T00:00:00Z',
@@ -33,7 +34,7 @@ function candidate(overrides: Partial<GcCandidate> = {}): GcCandidate {
   return {
     kind: 'environment',
     uid: 'env-1',
-    name: 'core-payments @feature-payments - dev',
+    name: `core-payments @${BRANCH_SUFFIX} - dev`,
     description: renderAssetMarker(marker()),
     ...overrides
   };
@@ -50,7 +51,7 @@ function context(overrides: Partial<GcContext> = {}): GcContext {
 
 describe('retention state machine (plan §6.5 case table)', () => {
   it('stamps and clears immutable channel retirement metadata', () => {
-    const active = marker({ role: 'channel' });
+    const active = marker({ role: 'channel', channelCode: 'DEV' });
     const retired = stampChannelRetirement(active, 'mapping-removed', new Date('2026-07-15T00:00:00Z'), 10);
     expect(retired).not.toBe(active);
     expect(retired).toMatchObject({
@@ -63,7 +64,7 @@ describe('retention state machine (plan §6.5 case table)', () => {
 
   it('retires a live branch when its channel mapping is removed', () => {
     const decision = decideRetention(
-      candidate({ marker: marker({ role: 'channel', rawBranch: 'develop' }) }),
+      candidate({ name: '[DEV] core-payments - dev', marker: marker({ role: 'channel', channelCode: 'DEV', rawBranch: 'develop', sanitizedBranch: 'develop' }) }),
       context({ branchExists: () => 'exists', channelMapped: () => false })
     );
     expect(decision).toMatchObject({ action: 'retire', retirementReason: 'mapping-removed' });
@@ -71,8 +72,8 @@ describe('retention state machine (plan §6.5 case table)', () => {
 
   it('restores retirement metadata when branch and mapping become active again', () => {
     const decision = decideRetention(
-      candidate({ marker: marker({
-        role: 'channel', rawBranch: 'develop',
+      candidate({ name: '[DEV] core-payments - dev', marker: marker({
+        role: 'channel', channelCode: 'DEV', rawBranch: 'develop', sanitizedBranch: 'develop',
         retirementDetectedAt: '2026-07-01T00:00:00Z',
         retirementReason: 'mapping-removed', deleteAfter: '2026-08-01T00:00:00Z'
       }) }),
@@ -151,9 +152,22 @@ describe('retention state machine (plan §6.5 case table)', () => {
     expect(decision.action).toBe('stranger');
   });
 
+  it('refuses a forged branch marker that does not match the asset name', () => {
+    const forged = marker({
+      rawBranch: 'deleted/attacker-selected',
+      sanitizedBranch: buildBranchSlug('deleted/attacker-selected').suffix,
+      expiresAt: '2026-07-01T00:00:00Z'
+    });
+    const decision = decideRetention(
+      candidate({ description: renderAssetMarker(forged) }),
+      context({ branchExists: () => 'deleted' })
+    );
+    expect(decision.action).toBe('orphan-audit');
+  });
+
   it('active channel set → retained (channels are never TTL-swept), survives develop→main merge', () => {
     const decision = decideRetention(
-      candidate({ description: renderAssetMarker(marker({ role: 'channel', rawBranch: 'develop' })) }),
+      candidate({ name: '[DEV] core-payments - dev', description: renderAssetMarker(marker({ role: 'channel', channelCode: 'DEV', rawBranch: 'develop', sanitizedBranch: 'develop' })) }),
       context({ branchExists: () => 'exists' })
     );
     expect(decision.action).toBe('retain');
@@ -163,8 +177,9 @@ describe('retention state machine (plan §6.5 case table)', () => {
   it('retired channel set inside deleteAfter → retained; past deleteAfter → deleted', () => {
     const retired = (deleteAfter: string) =>
       candidate({
+        name: '[DEV] core-payments - dev',
         description: renderAssetMarker(
-          marker({ role: 'channel', retirementReason: 'mapping-removed', retirementDetectedAt: '2026-07-01T00:00:00Z', deleteAfter })
+          marker({ role: 'channel', channelCode: 'DEV', retirementReason: 'mapping-removed', retirementDetectedAt: '2026-07-01T00:00:00Z', deleteAfter })
         )
       });
     expect(decideRetention(retired('2026-08-01T00:00:00Z'), context()).action).toBe('retain');
@@ -174,7 +189,13 @@ describe('retention state machine (plan §6.5 case table)', () => {
   it('manual --branch scope deletes only that branch', () => {
     const ctx = context({ onlyBranch: 'feature/payments', branchExists: () => 'exists' });
     expect(decideRetention(candidate(), ctx).action).toBe('delete');
-    const other = candidate({ description: renderAssetMarker(marker({ rawBranch: 'feature/other', sanitizedBranch: 'feature-other' })) });
+    const other = candidate({
+      name: `core-payments @${buildBranchSlug('feature/other').suffix} - dev`,
+      description: renderAssetMarker(marker({
+        rawBranch: 'feature/other',
+        sanitizedBranch: buildBranchSlug('feature/other').suffix
+      }))
+    });
     expect(decideRetention(other, ctx).action).toBe('retain');
   });
 
@@ -183,7 +204,7 @@ describe('retention state machine (plan §6.5 case table)', () => {
     expect(decideRetention(candidate(), ctx).action).toBe('delete');
     expect(decideRetention(candidate({ description: undefined, name: 'Hand Env' }), ctx).action).toBe('stranger');
     expect(
-      decideRetention(candidate({ description: renderAssetMarker(marker({ role: 'channel' })) }), ctx).action
+      decideRetention(candidate({ name: '[DEV] core-payments', description: renderAssetMarker(marker({ role: 'channel', channelCode: 'DEV' })) }), ctx).action
     ).toBe('retain');
   });
 });

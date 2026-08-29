@@ -10,12 +10,12 @@
  *              release/* -> RC); prefix-named parallel asset sets
  *   preview    any other branch under branch-strategy: preview; suffix-named,
  *              TTL-governed asset sets
- *   gated      tag/unknown refs, every fork PR under any non-legacy strategy
+ *   gated      tag/unknown refs, every fork PR under every strategy
  *              (the fork gate precedes the canonical and channel checks, so a
  *              fork head can never claim a write-eligible tier), and any other
  *              branch under branch-strategy: publish-gate;
  *              credential-free static validation only, zero writes
- *   legacy     branch-blind pre-v2 behavior (default under v1)
+ *   legacy     branch-blind pre-v2 behavior for non-fork runs (default under v1)
  *
  * Identity-ref resolution table (provider x trigger):
  *
@@ -319,6 +319,17 @@ export function resolveBranchDecision(options: ResolveDecisionOptions): BranchDe
   const identity = canonicalizeBranchIdentity(options.identity);
   const channels = options.channels ?? [];
 
+  // A fork head is never allowed to select a ref in the base repository,
+  // including under the compatibility strategy. This check intentionally
+  // precedes the legacy short-circuit.
+  if (identity.isForkPr) {
+    return {
+      tier: 'gated', strategy, identity,
+      canonicalBranch: clean(options.canonicalBranch) ?? identity.defaultBranch,
+      reason: 'fork PR: never write-eligible, including under branch-strategy legacy'
+    };
+  }
+
   if (strategy === 'legacy') {
     return {
       tier: 'legacy', strategy, identity,
@@ -339,13 +350,6 @@ export function resolveBranchDecision(options: ResolveDecisionOptions): BranchDe
     return {
       tier: 'gated', strategy, identity, canonicalBranch,
       reason: `ref kind ${identity.refKind}: never canonical/preview-eligible; no-op with annotation`
-    };
-  }
-
-  if (identity.isForkPr) {
-    return {
-      tier: 'gated', strategy, identity, canonicalBranch,
-      reason: 'fork PR: never write-eligible (canonical/channel/preview require a same-repo head), gated instead'
     };
   }
 
@@ -429,7 +433,7 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
   const identity = candidate.identity;
   const canonicalBranch = clean(candidate.canonicalBranch);
   const coherent = candidate.strategy === 'legacy'
-    ? candidate.tier === 'legacy'
+    ? candidate.tier === 'legacy' || (candidate.tier === 'gated' && identity?.isForkPr === true)
     : candidate.tier !== 'legacy' && (candidate.tier !== 'preview' || candidate.strategy === 'preview');
   const hasCanonicalBranch = Boolean(canonicalBranch);
   const hasEligibleBranchIdentity = validIdentity &&
@@ -466,11 +470,12 @@ export function parseBranchDecision(raw: string | undefined): BranchDecision | u
     !validIdentity ||
     !validChannel ||
     !coherent ||
-    (!hasCanonicalBranch && candidate.strategy !== 'legacy') ||
+    (!hasCanonicalBranch && candidate.strategy !== 'legacy' && !(candidate.tier === 'gated' && identity?.isForkPr === true)) ||
     !channelMatchesTier ||
     !canonicalTierValid ||
     !channelTierValid ||
     !previewTierValid ||
+    (identity?.isForkPr === true && candidate.tier !== 'gated') ||
     (candidate.strategy !== 'legacy' && forcedGated && candidate.tier !== 'gated') ||
     (candidate.strategy !== 'legacy' && hasEligibleBranchIdentity && identity?.headBranch === canonicalBranch && candidate.tier !== 'canonical') ||
     !gatedTierValid
@@ -489,7 +494,17 @@ export function resolveEffectiveBranchDecision(
   env: NodeJS.ProcessEnv = process.env
 ): BranchDecision {
   const inherited = parseBranchDecision(env[BRANCH_DECISION_ENV]);
-  if (inherited) return inherited;
+  if (inherited) {
+    if (inherited.identity.isForkPr && inherited.tier !== 'gated') {
+      return resolveBranchDecision({
+        strategy: inherited.strategy,
+        identity: inherited.identity,
+        canonicalBranch: inherited.canonicalBranch,
+        channels: options.channels
+      });
+    }
+    return inherited;
+  }
   return resolveBranchDecision(options);
 }
 
@@ -544,6 +559,8 @@ export interface AssetMarker {
   headRepoId?: string;
   prNumber?: number;
   role: 'preview' | 'channel';
+  /** Stable generated-name prefix for channel assets (for example DEV or RC). */
+  channelCode?: string;
   headSha?: string;
   createdAt: string;
   lastSyncedAt: string;
@@ -576,7 +593,16 @@ export function parseAssetMarker(description: string | undefined): AssetMarker |
       if (depth === 0) {
         try {
           const parsed = JSON.parse(description.slice(jsonStart, i + 1)) as AssetMarker;
-          if (parsed && typeof parsed === 'object' && parsed.repo && parsed.role) return parsed;
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            typeof parsed.repo === 'string' && parsed.repo.length > 0 &&
+            typeof parsed.rawBranch === 'string' && parsed.rawBranch.length > 0 &&
+            typeof parsed.sanitizedBranch === 'string' && parsed.sanitizedBranch.length > 0 &&
+            (parsed.role === 'preview' || parsed.role === 'channel') &&
+            typeof parsed.createdAt === 'string' &&
+            typeof parsed.lastSyncedAt === 'string'
+          ) return parsed;
         } catch {
           return undefined;
         }

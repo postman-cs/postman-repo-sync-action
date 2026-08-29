@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { type AssetMarker } from '../src/lib/repo/branch-decision.js';
+import { buildBranchSlug, type AssetMarker } from '../src/lib/repo/branch-decision.js';
 import {
   collectGcCandidates,
   inventoryRemoteBranches,
@@ -9,12 +9,13 @@ import {
 } from '../src/lib/repo/gc-runner.js';
 
 const REPO = 'https://github.com/acme/payments';
+const BRANCH_SUFFIX = buildBranchSlug('feature/payments').suffix;
 
 function marker(overrides: Partial<AssetMarker> = {}): AssetMarker {
   return {
     repo: REPO,
     rawBranch: 'feature/payments',
-    sanitizedBranch: 'feature-payments',
+    sanitizedBranch: BRANCH_SUFFIX,
     role: 'preview',
     headSha: 'deadbeef',
     createdAt: '2026-07-01T00:00:00Z',
@@ -38,21 +39,22 @@ function envelopeWithMarker(m: AssetMarker): unknown {
 function client(overrides: Partial<GcPostmanClient> = {}): GcPostmanClient {
   return {
     listEnvironments: vi.fn().mockResolvedValue([
-      { name: 'core-payments @feature-payments - dev', uid: 'env-preview' },
+      { name: `core-payments @${BRANCH_SUFFIX} - dev`, uid: 'env-preview' },
       { name: 'core-payments - dev', uid: 'env-canonical' }
     ]),
     getEnvironment: vi.fn().mockResolvedValue(envelopeWithMarker(marker())),
     updateEnvironment: vi.fn().mockResolvedValue(undefined),
     listMocks: vi.fn().mockResolvedValue([
-      { uid: 'mock-preview', name: 'core-payments @feature-payments Mock', collection: 'col-1', mockUrl: 'https://m', environment: 'env-preview' },
+      { uid: 'mock-preview', name: `core-payments @${BRANCH_SUFFIX} Mock`, collection: 'col-1', mockUrl: 'https://m', environment: 'env-preview' },
       { uid: 'mock-canonical', name: 'core-payments Mock', collection: 'col-2', mockUrl: 'https://m2', environment: 'env-canonical' }
     ]),
     listMonitors: vi.fn().mockResolvedValue([
-      { uid: 'mon-preview', name: 'core-payments @feature-payments - Smoke Monitor', active: true, collectionUid: 'col-1', environmentUid: 'env-preview' }
+      { uid: 'mon-preview', name: `core-payments @${BRANCH_SUFFIX} - Smoke Monitor`, active: true, collectionUid: 'col-1', environmentUid: 'env-preview' }
     ]),
     listSpecifications: vi.fn().mockResolvedValue([]),
     getSpecContent: vi.fn().mockResolvedValue(undefined),
     listSpecCollections: vi.fn().mockResolvedValue([]),
+    getCollection: vi.fn().mockResolvedValue({ name: `[Smoke] core-payments @${BRANCH_SUFFIX}` }),
     deleteEnvironment: vi.fn().mockResolvedValue(undefined),
     deleteMock: vi.fn().mockResolvedValue(undefined),
     deleteMonitor: vi.fn().mockResolvedValue(undefined),
@@ -98,9 +100,9 @@ describe('collectGcCandidates', () => {
 
   it('discovers a preview spec from its embedded durable marker', async () => {
     const postman = client({
-      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: 'core-payments @feature-payments' }]),
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: `core-payments @${BRANCH_SUFFIX}` }]),
       getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
-      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: '[Contract] core-payments @feature-payments' }])
+      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: `[Contract] core-payments @${BRANCH_SUFFIX}` }])
     });
     const candidates = await collectGcCandidates(postman, 'ws-1');
     expect(candidates.find((candidate) => candidate.kind === 'spec')).toMatchObject({
@@ -108,14 +110,26 @@ describe('collectGcCandidates', () => {
     });
     expect(candidates.find((candidate) => candidate.uid === 'col-contract')).toMatchObject({ kind: 'collection' });
   });
+
+  it('does not inherit a marker into a collection from a non-generated mock', async () => {
+    const postman = client({
+      listMocks: vi.fn().mockResolvedValue([
+        { uid: 'mock-attacker', name: 'attacker mock', collection: 'col-victim', mockUrl: 'https://m', environment: 'env-preview' }
+      ]),
+      listMonitors: vi.fn().mockResolvedValue([])
+    });
+    const candidates = await collectGcCandidates(postman, 'ws-1');
+    expect(candidates.some((candidate) => candidate.uid === 'col-victim')).toBe(false);
+    expect(postman.getCollection).not.toHaveBeenCalledWith('col-victim');
+  });
 });
 
 describe('runGc', () => {
   it('branch deleted: removes the whole preview set, leaves canonical assets alone', async () => {
     const postman = client({
-      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: 'core-payments @feature-payments' }]),
+      listSpecifications: vi.fn().mockResolvedValue([{ uid: 'spec-preview', name: `core-payments @${BRANCH_SUFFIX}` }]),
       getSpecContent: vi.fn().mockResolvedValue(`openapi: 3.0.3\nx-postman-onboarding: ${JSON.stringify(marker())}\n`),
-      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: '[Contract] core-payments @feature-payments' }])
+      listSpecCollections: vi.fn().mockResolvedValue([{ uid: 'col-contract', name: `[Contract] core-payments @${BRANCH_SUFFIX}` }])
     });
     const exec = {
       getExecOutput: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'abc\trefs/heads/main\n', stderr: '' })
@@ -146,7 +160,7 @@ describe('runGc', () => {
   });
 
   it('retires a deleted channel first, then deletes it after deleteAfter', async () => {
-    const channel = marker({ role: 'channel', rawBranch: 'develop', sanitizedBranch: 'develop', expiresAt: undefined });
+    const channel = marker({ role: 'channel', channelCode: 'DEV', rawBranch: 'develop', sanitizedBranch: 'develop', expiresAt: undefined });
     const postman = client({
       listEnvironments: vi.fn().mockResolvedValue([{ name: '[DEV] core-payments - dev', uid: 'env-channel' }]),
       getEnvironment: vi.fn().mockResolvedValue(envelopeWithMarker(channel)),

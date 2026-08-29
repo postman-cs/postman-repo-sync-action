@@ -130,13 +130,14 @@ function buildCiWorkflowLines(
   '          fi',
   '      - name: Run Smoke Tests',
   '        env:',
+  "          CI_ENVIRONMENT: ${{ vars.CI_ENVIRONMENT || 'Production' }}",
   '          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}',
   ...(privateMockAuth ? ['          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}'] : []),
   '        run: |',
   '          CMD=(postman collection run "$POSTMAN_SMOKE_COLLECTION_UID"',
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
-  "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
+  '            --env-var "CI_ENVIRONMENT=$CI_ENVIRONMENT")',
   ...(privateMockAuth
     ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
     : []),
@@ -153,13 +154,14 @@ function buildCiWorkflowLines(
   '          "${CMD[@]}"',
   '      - name: Run Contract Tests',
   '        env:',
+  "          CI_ENVIRONMENT: ${{ vars.CI_ENVIRONMENT || 'Production' }}",
   '          POSTMAN_SSL_CLIENT_PASSPHRASE: ${{ secrets.POSTMAN_SSL_CLIENT_PASSPHRASE }}',
   ...(privateMockAuth ? ['          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}'] : []),
   '        run: |',
   '          CMD=(postman collection run "$POSTMAN_CONTRACT_COLLECTION_UID"',
   '            -e "$POSTMAN_ENVIRONMENT_UID"',
   '            --report-events',
-  "            --env-var \"CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || 'Production' }}\")",
+  '            --env-var "CI_ENVIRONMENT=$CI_ENVIRONMENT")',
   ...(privateMockAuth
     ? ['            CMD+=(--env-var "' + PRIVATE_MOCK_AUTH_VARIABLE + '=$POSTMAN_API_KEY")']
     : []),

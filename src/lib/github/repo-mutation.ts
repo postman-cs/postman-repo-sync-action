@@ -60,7 +60,33 @@ function normalizeBranchRef(value: string | undefined): string {
   if (branch.startsWith('refs/')) {
     return '';
   }
-  return branch;
+  return isValidBranchName(branch) ? branch : '';
+}
+
+/** Git's check-ref-format --branch rules, enforced before a ref reaches fetch/push. */
+function isValidBranchName(branch: string): boolean {
+  if (
+    !branch ||
+    branch === '@' ||
+    branch.startsWith('-') ||
+    branch.startsWith('/') ||
+    branch.endsWith('/') ||
+    branch.endsWith('.') ||
+    branch.includes('..') ||
+    branch.includes('//') ||
+    branch.includes('@{') ||
+    hasControlCharacter(branch) ||
+    /[\s~^:?*[\\]/.test(branch)
+  ) {
+    return false;
+  }
+  return branch.split('/').every((segment) =>
+    segment.length > 0 &&
+    segment !== '.' &&
+    segment !== '..' &&
+    !segment.startsWith('.') &&
+    !segment.endsWith('.lock')
+  );
 }
 
 export function buildPushTokenOrder(
@@ -119,6 +145,29 @@ function withGitSuffix(pathname: string): string {
 
 function formatUrl(url: URL, pathname = url.pathname): string {
   return `${url.protocol}//${url.host}${pathname}${url.search}`;
+}
+
+function remoteIdentity(rawUrl: string): string {
+  const url = parseHttpsRemote(rawUrl);
+  return `${url.protocol}//${url.host.toLowerCase()}${withoutGitSuffix(url.pathname)}`;
+}
+
+function assertExplicitRemoteMatchesOrigin(repoUrl: string | undefined, originUrl: string): void {
+  if (!repoUrl) return;
+  if (repoUrl.trim() === originUrl.trim()) return;
+  let explicitIdentity: string;
+  let originIdentity: string;
+  try {
+    explicitIdentity = remoteIdentity(repoUrl);
+    originIdentity = remoteIdentity(originUrl);
+  } catch {
+    throw new Error('repo-url and the checked-out origin must be valid repository URLs before credentials can be used');
+  }
+  if (explicitIdentity !== originIdentity) {
+    throw new Error(
+      'repo-url does not match the checked-out origin; refusing to send repository credentials to a different remote'
+    );
+  }
 }
 
 export function buildAuthenticatedRemoteUrl(
@@ -408,6 +457,10 @@ export class RepoMutationService {
 
     const originalRemote = (await this.execute('git', ['remote', 'get-url', 'origin']))
       .stdout.trim();
+    if (!originalRemote) {
+      throw new Error('No origin remote is configured; refusing to construct a credentialed remote from repo-url');
+    }
+    assertExplicitRemoteMatchesOrigin(this.repoUrl, originalRemote);
 
     let pushed = false;
     let lastError = '';
@@ -453,7 +506,7 @@ export class RepoMutationService {
               this.provider,
               this.repository,
               token,
-              this.repoUrl || originalRemote
+              originalRemote
             )
           ]);
           remoteChanged = true;

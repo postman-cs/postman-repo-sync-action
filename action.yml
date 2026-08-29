@@ -86,7 +86,7 @@ inputs:
     description: Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.
     required: false
   repo-url:
-    description: 'Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted.'
+    description: 'Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. For commit-and-push it must identify the checked-out origin.'
     required: false
   integration-backend:
     description: Advanced/internal. Integration backend for managed workspace linking and environment sync; leave unset to use the default.
@@ -149,7 +149,7 @@ inputs:
     required: false
     default: warn
   branch-strategy:
-    description: "Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets."
+    description: "Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets."
     required: false
     default: legacy
   canonical-branch:
@@ -233,7 +233,7 @@ outputs:
   commit-sha:
     description: Commit SHA produced by repo-write-mode, if any.
   sync-status:
-    description: "Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy."
+    description: "Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run."
   branch-decision:
     description: Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION).
   spec-version-tag:

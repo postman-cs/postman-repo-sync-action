@@ -181,7 +181,7 @@ with:
 | `environments-json` | JSON array of environment slugs to create or update. | no | `["prod"]` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
 | `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
-| `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
+| `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. For commit-and-push it must identify the checked-out origin. | no |  |
 | `workspace-link-enabled` | Enable workspace linking. | no | `true` |
 | `environment-sync-enabled` | Enable association of Postman environments to system environments. | no | `true` |
 | `system-env-map-json` | JSON map of environment slug to system environment id. | no | `{}` |
@@ -197,7 +197,7 @@ with:
 | `team-id` | Postman team ID resolved by postman-resolve-service-token-action. Primary team scope for all downstream actions; included as x-entity-team-id in org-mode Bifrost calls. Falls back to POSTMAN_TEAM_ID when omitted. Set explicitly for org-mode teams. | no | `""` |
 | `secrets-resolver` | Cloud secret store the generated environments seed credential slots for: none (default, no secret-store variables are added), aws (AWS Secrets Manager), azure (Azure Key Vault), or gcp (Google Secret Manager). Must match the secrets-resolver value passed to the bootstrap and smoke-flow actions. | no | `none` |
 | `credential-preflight` | Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token. | no | `warn` |
-| `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
+| `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
 | `canonical-branch` | Explicit canonical branch (the sole writer of canonical assets and tracked state). Defaults to the provider-resolved default branch; required on providers without a default-branch variable (Bitbucket, Azure DevOps) when branch-strategy is not legacy. | no |  |
 | `channels` | Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets. | no |  |
 | `preview-ttl` | Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks). | no | `30` |
@@ -232,7 +232,7 @@ with:
 | `monitor-id` | Created or reused smoke monitor ID. |
 | `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
 | `commit-sha` | Commit SHA produced by repo-write-mode, if any. |
-| `sync-status` | Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy. |
+| `sync-status` | Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run. |
 | `branch-decision` | Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION). |
 | `spec-version-tag` | Native Spec Hub version tag created after successful canonical repo-sync finalization. |
 | `spec-version-url` | Read-only URL for the tagged Spec Hub snapshot. |
@@ -317,7 +317,7 @@ When CI workflow generation is enabled, the committed GitHub Actions workflow ru
 
 A matching Azure DevOps Pipelines template is generated for Azure DevOps repositories. With `ci-runner-os: windows`, each Smoke and Contract CLI invocation forwards `RESPONSE_TIME_THRESHOLD` with `--env-var`; the Azure variable is used when set and otherwise defaults to `10000` milliseconds. GitHub Actions/Linux generation keeps its seeded `2000` millisecond threshold. The assertions those collections execute are generated upstream: the per-check reference is in [postman-bootstrap-action's Generated Assertions](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/generated-assertions.md), and the curated Smoke journey scripts are in [postman-smoke-flow-action's Generated Test Scripts](https://github.com/postman-cs/postman-smoke-flow-action/blob/main/docs/generated-tests.md).
 
-For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch.
+For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch, but fork pull requests are always gated before credentials or repository writes are attempted. An explicit `repo-url` must identify the checked-out `origin`; the action will not redirect a push credential to a different host or repository.
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
 

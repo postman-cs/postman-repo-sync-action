@@ -117,13 +117,13 @@ describe('resolveBranchDecision properties (WS8)', () => {
     );
   });
 
-  it('legacy strategy always resolves to the legacy tier and never throws', () => {
+  it('legacy strategy gates forks and otherwise resolves to the legacy tier', () => {
     fc.assert(
       fc.property(optionsArb, (options) => {
         const outcome = resolveOrError({ ...options, strategy: 'legacy' });
         expect(outcome.kind).toBe('decision');
         if (outcome.kind === 'decision') {
-          expect(outcome.value.tier).toBe('legacy');
+          expect(outcome.value.tier).toBe(options.identity.isForkPr ? 'gated' : 'legacy');
         }
       }),
       { numRuns: NUM_RUNS }
@@ -138,7 +138,7 @@ describe('resolveBranchDecision properties (WS8)', () => {
           identity: { ...options.identity, isForkPr: true }
         };
         const outcome = resolveOrError(forked);
-        if (outcome.kind === 'decision' && forked.strategy !== 'legacy') {
+        if (outcome.kind === 'decision') {
           expect(['gated']).toContain(outcome.value.tier);
         }
       }),
