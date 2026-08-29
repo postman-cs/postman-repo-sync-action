@@ -125,9 +125,9 @@ function unrealizableReason(tuple: Tuple): string | null {
  * Independent oracle, transcribed from the tier contract documented at the top
  * of `branch-decision.ts`:
  *
- *   legacy   branch-blind pre-v2 behavior, unconditional under strategy legacy
+ *   legacy   branch-blind pre-v2 behavior for non-fork runs
  *   gated    tag/unknown refs and missing head branches are never write-eligible;
- *            every fork PR under any non-legacy strategy; also every
+ *            every fork PR under every strategy; also every
  *            non-canonical branch under publish-gate
  *   canonical the head branch IS the canonical branch (same-repo head only)
  *   channel  a channel rule claims the head branch (same-repo head only)
@@ -138,9 +138,9 @@ function unrealizableReason(tuple: Tuple): string | null {
  * matching. A fork head can never reach a write-eligible tier.
  */
 function expectedTier(tuple: Tuple): BranchTier {
+  if (tuple.isForkPr) return 'gated';
   if (tuple.strategy === 'legacy') return 'legacy';
   if (tuple.refKind === 'tag' || tuple.refKind === 'unknown' || tuple.head === 'absent') return 'gated';
-  if (tuple.isForkPr) return 'gated';
   if (tuple.head === 'equals-canonical') return 'canonical';
   if (tuple.channels === 'matches-head') return 'channel';
   if (tuple.strategy === 'preview') return 'preview';
@@ -463,10 +463,14 @@ describe('branch decision: unresolved canonical branch is outside the tier table
     };
   }
 
-  it('throws CONTRACT_DEFAULT_BRANCH_UNRESOLVED for every non-legacy tuple', () => {
+  it('throws CONTRACT_DEFAULT_BRANCH_UNRESOLVED for non-legacy, non-fork tuples', () => {
     for (const strategy of STRATEGIES.filter((candidate) => candidate !== 'legacy')) {
       for (const refKind of REF_KINDS) {
         for (const isForkPr of FORK_STATES) {
+          if (isForkPr) {
+            expect(resolveBranchDecision(unresolvedOptions(strategy, refKind, true)).tier).toBe('gated');
+            continue;
+          }
           let thrown: unknown;
           try {
             resolveBranchDecision(unresolvedOptions(strategy, refKind, isForkPr));
@@ -480,11 +484,11 @@ describe('branch decision: unresolved canonical branch is outside the tier table
     }
   });
 
-  it('never throws under legacy, which is branch-blind by contract', () => {
+  it('never throws under legacy and still gates fork contexts', () => {
     for (const refKind of REF_KINDS) {
       for (const isForkPr of FORK_STATES) {
         const decision = resolveBranchDecision(unresolvedOptions('legacy', refKind, isForkPr));
-        expect(decision.tier).toBe('legacy');
+        expect(decision.tier).toBe(isForkPr ? 'gated' : 'legacy');
         expect(decision.canonicalBranch).toBeUndefined();
       }
     }
@@ -492,8 +496,8 @@ describe('branch decision: unresolved canonical branch is outside the tier table
 });
 
 describe('branch decision: fork-PR write gate coverage across the table', () => {
-  it('gates every fork PR under every non-legacy strategy, regardless of channel rules', () => {
-    const forkTuples = REALIZABLE.filter((tuple) => tuple.strategy !== 'legacy' && tuple.isForkPr);
+  it('gates every fork PR under every strategy, regardless of channel rules', () => {
+    const forkTuples = REALIZABLE.filter((tuple) => tuple.isForkPr);
     expect(forkTuples.length).toBeGreaterThan(0);
     for (const tuple of forkTuples) {
       for (const realization of realizationsFor(tuple)) {

@@ -115,7 +115,9 @@ describe('normalizeStagePaths properties via commitAndPush (WS8)', () => {
 
 describe('resolveCurrentRef properties (WS8)', () => {
   const refFragment = fc.stringMatching(/^[A-Za-z0-9._/-]{1,24}$/);
-  const branchName = fc.stringMatching(/^[A-Za-z0-9._-]{1,20}(\/[A-Za-z0-9._-]{1,20})?$/);
+  const branchName = fc
+    .stringMatching(/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,18}[A-Za-z0-9_-])?(\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,18}[A-Za-z0-9_-])?)?$/)
+    .filter((name) => !name.includes('..') && name.split('/').every((segment) => !segment.endsWith('.lock')));
 
   const anyRef = fc.oneof(
     fc.constant(''),

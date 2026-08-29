@@ -735,6 +735,7 @@ export function buildBranchAssetMarker(
     rawBranch,
     sanitizedBranch: buildBranchSlug(rawBranch).suffix,
     role: decision.tier,
+    ...(decision.tier === 'channel' && decision.channel ? { channelCode: decision.channel.code } : {}),
     headSha: decision.identity.headSha,
     createdAt: now.toISOString(),
     lastSyncedAt: now.toISOString(),

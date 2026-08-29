@@ -271,6 +271,27 @@ describe('repo mutation helpers', () => {
     ).toBe('/postman-cs/repo-sync-demo.git');
   });
 
+  it('rejects an explicit repo-url that differs from the checked-out origin before offering a token', async () => {
+    const execute = createExecuteMock(createCommandMap({}));
+    const repoMutation = new RepoMutationService({
+      repository: 'postman-cs/repo-sync-demo',
+      repoUrl: 'https://github.attacker.example/postman-cs/repo-sync-demo',
+      execute
+    });
+
+    await expect(repoMutation.commitAndPush({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'refs/heads/feature/sync-artifacts',
+      fallbackToken: 'fallback-token',
+      committerName: 'Postman',
+      committerEmail: 'support@postman.com',
+      stagePaths: ['postman', '.postman', '.github/workflows']
+    })).rejects.toThrow(/does not match the checked-out origin/);
+    expect(execute.mock.calls.some(([command, args]) =>
+      command === 'git' && args[0] === 'remote' && args[1] === 'set-url'
+    )).toBe(false);
+  });
+
   it('resolves the current ref with branch-safe semantics', () => {
     expect(
       resolveCurrentRef({
@@ -295,6 +316,12 @@ describe('repo mutation helpers', () => {
         githubRefName: 'refs/pull/42/merge'
       })
     ).toBe('');
+
+    expect(resolveCurrentRef({
+      repoWriteMode: 'commit-and-push',
+      currentRef: 'refs/pull/42/merge',
+      githubHeadRef: 'main:refs/heads/production'
+    })).toBe('');
   });
 
   it('pushes HEAD to the resolved branch instead of hardcoding main', async () => {

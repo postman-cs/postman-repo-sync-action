@@ -99,6 +99,13 @@ describe('stripManagedItemAuthBlocks', () => {
     expect(stripManagedItemAuthBlocks(input)).toBe(input);
   });
 
+  it('leaves an exact managed block inside a nested template interpolation string unchanged', () => {
+    const block = MANAGED_ITEM_AUTH_BLOCKS[2] ?? '';
+    const input = `const doc = \`outer \${\`inner\n${block}\nvalue\`} tail\`;\nvar keep = 1;`;
+    expect(stripManagedItemAuthBlocks(input)).toBe(input);
+    expect(countManagedItemAuthBlocks(input)).toBe(0);
+  });
+
   it.each([
     "var matcher = /don't/;",
     'var matcher = /"quoted"/;',

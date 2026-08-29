@@ -851,8 +851,34 @@ describe('PostmanGatewayAssetsClient', () => {
 
     await expect(assets.monitorExists('missing-monitor')).resolves.toBe(false);
     expect(requestJson).toHaveBeenCalledWith({
-      service: 'monitors', method: 'get', path: '/jobTemplates/missing-monitor?_etc=true'
+      service: 'monitors', method: 'get', path: '/jobTemplates/missing-monitor', query: { _etc: 'true' }
     });
+  });
+
+  it.each(['../whoami', 'id?_etc=false', 'id%2Fjobs', 'id&admin=true'])(
+    'rejects unsafe monitor path segments before transport: %s',
+    async (uid) => {
+      const requestJson = vi.fn();
+      const assets = new PostmanGatewayAssetsClient({
+        gateway: { requestJson } as never,
+        workspaceId: 'ws-1'
+      });
+
+      await expect(assets.monitorExists(uid)).rejects.toThrow(/safe path segment/);
+      await expect(assets.runMonitor(uid)).rejects.toThrow(/safe path segment/);
+      expect(requestJson).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects unsafe spec path segments before transport', async () => {
+    const requestJson = vi.fn();
+    const assets = new PostmanGatewayAssetsClient({
+      gateway: { requestJson } as never,
+      workspaceId: 'ws-1'
+    });
+
+    await expect(assets.deleteSpec('../victim')).rejects.toThrow(/safe path segment/);
+    expect(requestJson).not.toHaveBeenCalled();
   });
 
   it.each([

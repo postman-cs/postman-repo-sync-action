@@ -374,13 +374,17 @@ describe('renderCiWorkflowTemplate', () => {
 
   it('passes CI_ENVIRONMENT to Postman CLI as key=value', () => {
     const ciWorkflow = renderCiWorkflowTemplate();
+    const parsed = parse(ciWorkflow);
+    const runSteps = parsed.jobs.test.steps.filter((step: { name?: string }) =>
+      step.name === 'Run Smoke Tests' || step.name === 'Run Contract Tests'
+    );
 
-    expect(ciWorkflow).toContain(
-      '--env-var "CI_ENVIRONMENT=${{ vars.CI_ENVIRONMENT || \'Production\' }}"'
-    );
-    expect(ciWorkflow).not.toContain(
-      '--env-var "${{ vars.CI_ENVIRONMENT || \'Production\' }}"'
-    );
+    expect(runSteps).toHaveLength(2);
+    for (const step of runSteps) {
+      expect(step.env.CI_ENVIRONMENT).toBe("${{ vars.CI_ENVIRONMENT || 'Production' }}");
+      expect(step.run).toContain('--env-var "CI_ENVIRONMENT=$CI_ENVIRONMENT"');
+      expect(step.run).not.toContain('${{ vars.CI_ENVIRONMENT');
+    }
   });
 
   it('rejects javascript: pseudo-protocol', () => {
