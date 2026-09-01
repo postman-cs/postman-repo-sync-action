@@ -3,7 +3,7 @@
 The npm package ships a `postman-repo-sync` binary for GitLab CI, Bitbucket Pipelines, Azure DevOps, and other CI systems.
 
 ```bash
-npm install -g @postman/onboarding-repo-sync
+npm install -g @postman-cs/onboarding-repo-sync
 
 postman-repo-sync \
   --project-name core-payments \

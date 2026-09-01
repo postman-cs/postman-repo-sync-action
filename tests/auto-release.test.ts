@@ -119,6 +119,7 @@ describe('auto-release workflow', () => {
   });
 
   it('fetches full history and tags so burnt versions are visible', () => {
+    expect(autoReleaseWorkflow).toContain('token: ${{ secrets.RELEASE_WORKFLOW_TOKEN }}');
     expect(autoReleaseWorkflow).toContain('fetch-depth: 0');
     expect(autoReleaseWorkflow).toContain('fetch-tags: true');
   });
@@ -147,13 +148,22 @@ describe('auto-release workflow', () => {
     expect(autoReleaseWorkflow).toContain('gh workflow run release.yml --ref "$TAG"');
   });
 
-  it('reconciles the prior incomplete tag before planning another cut', () => {
+  it('plans before reconciling so a new release can supersede stale alias evidence', () => {
     const reconcile = autoReleaseWorkflow.indexOf('name: Reconcile prior release');
     const plan = autoReleaseWorkflow.indexOf('name: Plan release');
     expect(reconcile).toBeGreaterThan(-1);
-    expect(reconcile).toBeLessThan(plan);
+    expect(plan).toBeLessThan(reconcile);
     expect(autoReleaseWorkflow).toContain("git tag --list 'v*'");
     expect(autoReleaseWorkflow).toContain('if ! PACKAGE_VERSION="$(git show');
+    expect(autoReleaseWorkflow).toContain(
+      'RELEASE="$(node -p "require(process.env.PLAN_FILE).release === true")"'
+    );
+    expect(autoReleaseWorkflow).toContain(
+      'elif [ -n "$LATEST" ] && [ "$RELEASE" != true ]; then'
+    );
+    expect(autoReleaseWorkflow).toContain(
+      'only when no newer release-worthy change can supersede it'
+    );
     expect(autoReleaseWorkflow).toContain('gh run list --workflow release.yml --branch "$TAG"');
     expect(autoReleaseWorkflow).toContain("steps.reconcile.outputs.blocked != 'true'");
     const activeRun = autoReleaseWorkflow.indexOf('gh run list --workflow release.yml');
@@ -162,11 +172,30 @@ describe('auto-release workflow', () => {
     );
   });
 
-  it('recovers alias failures and resumes after a successful release', () => {
+  it('still blocks a new cut until an unpublished immutable tag is recovered', () => {
+    const missingRelease = autoReleaseWorkflow.indexOf(
+      'if [ -n "$LATEST" ] && ! gh release view "$LATEST"'
+    );
+    const staleAlias = autoReleaseWorkflow.indexOf(
+      'elif [ -n "$LATEST" ] && [ "$RELEASE" != true ]; then'
+    );
+    expect(missingRelease).toBeGreaterThan(-1);
+    expect(missingRelease).toBeLessThan(staleAlias);
+    expect(autoReleaseWorkflow).toContain(
+      "if: steps.reconcile.outputs.blocked != 'true' && steps.plan.outputs.release == 'true'"
+    );
+  });
+
+  it('redispatches release evidence and never advances an alias itself', () => {
     expect(autoReleaseWorkflow).toContain('workflow_run:');
     expect(autoReleaseWorkflow).toContain('workflows: [Release]');
     expect(autoReleaseWorkflow).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(autoReleaseWorkflow).toContain('git rev-parse --verify "${ALIAS}^{commit}"');
+    expect(autoReleaseWorkflow).toContain('Only release.yml may advance aliases');
+    expect(autoReleaseWorkflow).toContain('TAG="$LATEST"');
+    expect(autoReleaseWorkflow).not.toContain('ROLLING_ALIASES');
+    expect(autoReleaseWorkflow).not.toContain('git tag -fa "$ALIAS"');
+    expect(autoReleaseWorkflow).not.toContain('git push origin "$ALIAS" --force');
   });
 
   it('never cancels a cut in flight', () => {

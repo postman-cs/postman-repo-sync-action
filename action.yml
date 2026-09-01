@@ -5,11 +5,13 @@ branding:
   icon: refresh-cw
   color: orange
 inputs:
-
-  generate-ci-workflow:
-    description: Whether to generate the CI workflow file
+  working-directory:
+    description: Repository-root-relative directory used for all local inputs and generated artifacts.
     required: false
-    default: "true"
+    default: ''
+  generate-ci-workflow:
+    description: Whether to generate the CI workflow file. Defaults to true at the repository root and false when working-directory is set.
+    required: false
   ci-workflow-path:
     description: Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise.
     required: false
@@ -41,7 +43,7 @@ inputs:
     required: false
     default: full
   prebuilt-collections-json:
-    description: Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.
+    description: Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without a cloud snapshot read.
     required: false
     default: ''
   collection-sync-mode:
@@ -84,7 +86,7 @@ inputs:
     description: Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available.
     required: false
   repo-url:
-    description: 'Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted.'
+    description: 'Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. For commit-and-push it must identify the checked-out origin.'
     required: false
   integration-backend:
     description: Advanced/internal. Integration backend for managed workspace linking and environment sync; leave unset to use the default.
@@ -147,7 +149,7 @@ inputs:
     required: false
     default: warn
   branch-strategy:
-    description: "Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets."
+    description: "Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets."
     required: false
     default: legacy
   canonical-branch:
@@ -231,7 +233,7 @@ outputs:
   commit-sha:
     description: Commit SHA produced by repo-write-mode, if any.
   sync-status:
-    description: "Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy."
+    description: "Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run."
   branch-decision:
     description: Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION).
   spec-version-tag:

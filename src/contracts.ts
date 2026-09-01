@@ -90,11 +90,14 @@ export const postmanRepoSyncActionContract: {
     committerEmail: 'support@postman.com'
   },
   inputs: {
-
-    'generate-ci-workflow': {
-      description: 'Whether to generate the CI workflow file',
+    'working-directory': {
+      description: 'Repository-root-relative directory used for all local inputs and generated artifacts.',
       required: false,
-      default: 'true'
+      default: ''
+    },
+    'generate-ci-workflow': {
+      description: 'Whether to generate the CI workflow file. Defaults to true at the repository root and false when working-directory is set.',
+      required: false
     },
     'ci-workflow-path': {
       description: 'Path to write the generated CI workflow file',
@@ -140,7 +143,7 @@ export const postmanRepoSyncActionContract: {
     },
     'prebuilt-collections-json': {
       description:
-        'Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export.',
+        'Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without a cloud snapshot read.',
       required: false,
       default: ''
     },
@@ -197,7 +200,7 @@ export const postmanRepoSyncActionContract: {
       required: false
     },
     'repo-url': {
-      description: 'Explicit repository URL. Defaults to the workflow repository URL.',
+      description: 'Explicit repository URL. Defaults to the workflow repository URL. For commit-and-push it must identify the checked-out origin.',
       required: false
     },
     'integration-backend': {
@@ -285,7 +288,7 @@ export const postmanRepoSyncActionContract: {
     },
     'branch-strategy': {
       description:
-        'Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets.',
+        'Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets.',
       required: false,
       default: 'legacy',
       allowedValues: ['legacy', 'preview', 'publish-gate']
@@ -406,7 +409,7 @@ export const postmanRepoSyncActionContract: {
       description: 'Commit SHA produced by repo-write-mode, if any.'
     },
     'sync-status': {
-      description: 'Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy.'
+      description: 'Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run.'
     },
     'branch-decision': {
       description: 'Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION).'

@@ -1,6 +1,6 @@
 # Postman Onboarding: Repo Sync
 
-[![CI](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/postman-cs/postman-repo-sync-action?sort=semver)](https://github.com/postman-cs/postman-repo-sync-action/releases) [![npm](https://img.shields.io/npm/v/%40postman%2Fonboarding-repo-sync)](https://www.npmjs.com/package/@postman/onboarding-repo-sync) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml/badge.svg)](https://github.com/postman-cs/postman-repo-sync-action/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/postman-cs/postman-repo-sync-action?sort=semver)](https://github.com/postman-cs/postman-repo-sync-action/releases) [![npm](https://img.shields.io/npm/v/%40postman-cs%2Fonboarding-repo-sync)](https://www.npmjs.com/package/@postman-cs/onboarding-repo-sync) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Exports Postman [collections](https://learning.postman.com/docs/use/use-collections/collections-schemas/) and [environments](https://learning.postman.com/docs/use/send-requests/variables/managing-environments/) into your repository and wires CI, [mock servers](https://learning.postman.com/docs/design-apis/mock-apis/set-up-mock-servers/), and [monitors](https://learning.postman.com/docs/monitoring-your-api/setting-up-monitor/) around them.
 
@@ -8,6 +8,7 @@ Part of the [Postman API Onboarding suite](https://github.com/postman-cs/postman
 
 - [Usage](#usage)
 - [Examples](#examples)
+- [Monorepos](#monorepos)
 - [Inputs](#inputs) / [Outputs](#outputs)
 - [How it works](#how-it-works)
 
@@ -143,6 +144,13 @@ with:
 
 On canonical and legacy runs, the action creates or reuses `<project> - Mock`, sets its `baseUrl` to the validated mock URL, and emits `mock-environment-uid`. Preview and channel runs skip it so branch retention cleanup cannot leak an untracked environment. Its exported representation lives at `postman/mocks/manual-validation.postman_environment.json`; it is deliberately excluded from `environment-uids-json`, system-environment associations, monitors, and generated CI environment selection. Select it explicitly when running baseline, Smoke, or Contract collections manually. Repo-sync never replaces the runtime `prod` or `dev` `baseUrl` with a mock URL.
 
+## Monorepos
+
+Set `working-directory` to a service directory to keep its `postman/` and `.postman/` state isolated.
+Use one repository-root dispatcher workflow; nested `.github/workflows/` directories are ignored by
+GitHub. See the [monorepo onboarding guide](docs/monorepo.md) for the supported layout, change
+detection, concurrency, loop prevention, credentials, and CLI usage.
+
 ### mTLS certificates for Postman CLI runs
 
 The generated CI workflow can run [Postman CLI collection runs](https://learning.postman.com/docs/postman-cli/postman-cli-collections/) with client certificates. Pass the cert material as inputs; when a GitHub token and repository context are available, the action persists them as repository secrets (`POSTMAN_SSL_CLIENT_CERT_B64`, `POSTMAN_SSL_CLIENT_KEY_B64`, `POSTMAN_SSL_CLIENT_PASSPHRASE`, `POSTMAN_SSL_EXTRA_CA_CERTS_B64`) for the generated workflow:
@@ -159,7 +167,8 @@ with:
 <!-- inputs-table:start -->
 | Name | Description | Required | Default |
 | --- | --- | --- | --- |
-| `generate-ci-workflow` | Whether to generate the CI workflow file | no | `true` |
+| `working-directory` | Repository-root-relative directory used for all local inputs and generated artifacts. | no | `""` |
+| `generate-ci-workflow` | Whether to generate the CI workflow file. Defaults to true at the repository root and false when working-directory is set. | no |  |
 | `ci-workflow-path` | Path to write the generated CI workflow file. Defaults to azure-pipelines.yml for Azure DevOps, .github/workflows/ci.yml otherwise. | no |  |
 | `ci-runner-os` | Runner operating system for the generated CI workflow. Use windows for native PowerShell Azure DevOps CI. | no | `linux` |
 | `project-name` | Service project name used for environment, mock, and monitor naming. | yes |  |
@@ -169,7 +178,7 @@ with:
 | `smoke-collection-id` | Smoke collection ID used for monitor creation. | no |  |
 | `contract-collection-id` | Contract collection ID used for exported artifacts. | no |  |
 | `onboarding-scope` | Onboarding scope. Use full for the complete pipeline or spec-only for repository linking and workspace/spec state only. | no | `full` |
-| `prebuilt-collections-json` | Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without cloud export. | no | `""` |
+| `prebuilt-collections-json` | Optional digest-bound JSON manifest of unique baseline, smoke, or contract roles with confined repo-relative path, SHA-256 artifact digest of the on-disk v3 collection tree (sorted relative-path + NUL + bytes + NUL), and canonical cloud ID. The optional payloadDigest field is the semantic v2 payload digest carried for provenance (format-validated only, not the reuse gate). Exact role, path, cloudId, and artifactDigest matches reuse the on-disk tree without a cloud snapshot read. | no | `""` |
 | `collection-sync-mode` | Collection sync lifecycle mode (refresh or version). | no | `refresh` |
 | `spec-sync-mode` | Spec sync lifecycle mode (update or version). | no | `update` |
 | `release-label` | Optional release label used for versioned naming. | no |  |
@@ -181,7 +190,7 @@ with:
 | `environments-json` | JSON array of environment slugs or full definitions ({slug, values}) to create or replace. Secret-typed values must be empty runtime slots. | no | `["prod"]` |
 | `git-provider` | Git provider override ('github', 'gitlab', 'bitbucket', 'azure-devops'). Auto-detected from environment when omitted. | no |  |
 | `ado-token` | Azure DevOps personal access token or system token used to push commits in Azure Pipelines. Defaults to SYSTEM_ACCESSTOKEN when available. | no |  |
-| `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. | no |  |
+| `repo-url` | Explicit repository URL (GitHub, GitLab, or Azure DevOps). Defaults to the URL inferred from runner environment when omitted. For commit-and-push it must identify the checked-out origin. | no |  |
 | `workspace-link-enabled` | Enable workspace linking. | no | `true` |
 | `environment-sync-enabled` | Enable association of Postman environments to system environments. | no | `true` |
 | `system-env-map-json` | JSON map of environment slug to system environment id. | no | `{}` |
@@ -197,7 +206,7 @@ with:
 | `team-id` | Postman team ID resolved by postman-resolve-service-token-action. Primary team scope for all downstream actions; included as x-entity-team-id in org-mode Bifrost calls. Falls back to POSTMAN_TEAM_ID when omitted. Set explicitly for org-mode teams. | no | `""` |
 | `secrets-resolver` | Cloud secret store the generated environments seed credential slots for: none (default, no secret-store variables are added), aws (AWS Secrets Manager), azure (Azure Key Vault), or gcp (Google Secret Manager). Must match the secrets-resolver value passed to the bootstrap and smoke-flow actions. | no | `none` |
 | `credential-preflight` | Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token. | no | `warn` |
-| `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior; publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
+| `branch-strategy` | Branch-aware sync strategy. legacy (default) keeps branch-blind behavior for non-fork runs; fork PRs are always gated. publish-gate restricts canonical writes to the canonical branch and skips repo-sync on other branches; preview additionally maintains suffixed per-branch preview asset sets. | no | `legacy` |
 | `canonical-branch` | Explicit canonical branch (the sole writer of canonical assets and tracked state). Defaults to the provider-resolved default branch; required on providers without a default-branch variable (Bitbucket, Azure DevOps) when branch-strategy is not legacy. | no |  |
 | `channels` | Comma-separated channel map for long-lived promotion branches, e.g. "develop=DEV, staging=STAGE, release/*=RC". Channel branches maintain prefix-named parallel asset sets and never mutate canonical assets. | no |  |
 | `preview-ttl` | Sliding TTL in days for preview asset sets (refreshed on every successful preview sync; the retention contract of last resort when no provider credential is available for branch-existence checks). | no | `30` |
@@ -232,7 +241,7 @@ with:
 | `monitor-id` | Created or reused smoke monitor ID. |
 | `repo-sync-summary-json` | JSON summary of repo materialization and workspace sync outputs. |
 | `commit-sha` | Commit SHA produced by repo-write-mode, if any. |
-| `sync-status` | Branch-aware sync status: synced, skipped-branch-gate, or empty under branch-strategy legacy. |
+| `sync-status` | Branch-aware sync status: synced, skipped-branch-gate, or empty under a non-fork branch-strategy legacy run. |
 | `branch-decision` | Serialized BranchDecision JSON for downstream actions (also exported as POSTMAN_BRANCH_DECISION). |
 | `spec-version-tag` | Native Spec Hub version tag created after successful canonical repo-sync finalization. |
 | `spec-version-url` | Read-only URL for the tagged Spec Hub snapshot. |
@@ -317,7 +326,7 @@ When CI workflow generation is enabled, the committed GitHub Actions workflow ru
 
 A matching Azure DevOps Pipelines template is generated for Azure DevOps repositories. With `ci-runner-os: windows`, each Smoke and Contract CLI invocation forwards `RESPONSE_TIME_THRESHOLD` with `--env-var`; the Azure variable is used when set and otherwise defaults to `10000` milliseconds. GitHub Actions/Linux generation keeps its seeded `2000` millisecond threshold. The assertions those collections execute are generated upstream: the per-check reference is in [postman-bootstrap-action's Generated Assertions](https://github.com/postman-cs/postman-bootstrap-action/blob/main/docs/generated-assertions.md), and the curated Smoke journey scripts are in [postman-smoke-flow-action's Generated Test Scripts](https://github.com/postman-cs/postman-smoke-flow-action/blob/main/docs/generated-tests.md).
 
-For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch.
+For `commit-and-push`, the push target is resolved from `current-ref`, then `GITHUB_HEAD_REF`, then `GITHUB_REF_NAME`. Pull request merge refs are normalized to the PR head branch, but fork pull requests are always gated before credentials or repository writes are attempted. An explicit `repo-url` must identify the checked-out `origin`; the action will not redirect a push credential to a different host or repository.
 
 Mocks and monitors: when `baseline-collection-id`, `workspace-id`, and at least one environment are available, the action creates or reuses a mock server. When `smoke-collection-id` is also available, it creates or reuses a cloud smoke monitor unless `monitor-type: cli` is set. With an empty `monitor-cron`, a new cloud monitor is created disabled and triggered once per workflow invocation.
 
@@ -335,7 +344,7 @@ Deeper reference:
 
 ## Resources
 
-- npm package: [@postman/onboarding-repo-sync](https://www.npmjs.com/package/@postman/onboarding-repo-sync)
+- npm package: [@postman-cs/onboarding-repo-sync](https://www.npmjs.com/package/@postman-cs/onboarding-repo-sync)
 - Postman API and auth references: [Postman API](https://learning.postman.com/docs/reference/postman-api/intro-api/), [API authentication](https://learning.postman.com/docs/reference/postman-api/authentication/), [Postman CLI auth](https://learning.postman.com/docs/postman-cli/postman-cli-auth/), [EU data residency](https://learning.postman.com/docs/administration/enterprise/about-eu-data-residency/)
 - Postman artifact and runtime references: [Collection v3 schema](https://learning.postman.com/docs/use/use-collections/collections-schemas/), [Postman CLI collection runs](https://learning.postman.com/docs/postman-cli/postman-cli-run-collection/), [environments](https://learning.postman.com/docs/use/send-requests/variables/managing-environments/), [mock servers](https://learning.postman.com/docs/design-apis/mock-apis/set-up-mock-servers/), [monitors](https://learning.postman.com/docs/monitoring-your-api/setting-up-monitor/)
 

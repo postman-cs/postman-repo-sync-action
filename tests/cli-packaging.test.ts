@@ -318,7 +318,7 @@ describe('CLI packaging contract', () => {
 
       const version = await execute('--version');
       expect(version.stdout.trim()).toBe(packageJson.version);
-      expect(packageJson.name).toBe('@postman/onboarding-repo-sync');
+      expect(packageJson.name).toBe('@postman-cs/onboarding-repo-sync');
       return;
     }
 
@@ -343,13 +343,13 @@ describe('CLI packaging contract', () => {
       filename: string;
       name: string;
     }>;
-    expect(packed.name).toBe('@postman/onboarding-repo-sync');
+    expect(packed.name).toBe('@postman-cs/onboarding-repo-sync');
 
     const tarballPath = path.join(packDir, packed.filename);
     const installDir = path.join(
       prefixDir,
       'node_modules',
-      '@postman',
+      '@postman-cs',
       'onboarding-repo-sync'
     );
     await mkdir(installDir, { recursive: true });

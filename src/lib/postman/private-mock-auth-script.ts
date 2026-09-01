@@ -1,3 +1,5 @@
+import { tokenizer } from 'acorn';
+
 const LEGACY_PRIVATE_MOCK_AUTH_MARKER = 'postman-enterprise-automation: private-mock-auth';
 const PRIVATE_MOCK_AUTH_V2_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v2`;
 const PRIVATE_MOCK_AUTH_V3_MARKER = `${LEGACY_PRIVATE_MOCK_AUTH_MARKER}-v3`;
@@ -76,220 +78,36 @@ export function isManagedPrivateMockAuthRootHook(script: { type?: unknown; code?
     String(script.code ?? '') === PRIVATE_MOCK_AUTH_ROOT_SCRIPT;
 }
 
-type ScriptLexState = 'script' | 'single' | 'double' | 'template' | 'regex' | 'block_comment';
-
-const REGEX_PREFIX_KEYWORDS = new Set([
-  'await',
-  'case',
-  'delete',
-  'do',
-  'else',
-  'in',
-  'instanceof',
-  'of',
-  'return',
-  'throw',
-  'typeof',
-  'void',
-  'yield'
-]);
-
-function isIdentifierStart(ch: string | undefined): boolean {
-  return ch !== undefined && /[A-Za-z_$]/.test(ch);
-}
-
-function isIdentifierPart(ch: string | undefined): boolean {
-  return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
-}
-
 function markTopLevelScriptBytes(source: string): Uint8Array {
   const topLevel = new Uint8Array(source.length);
-  let state: ScriptLexState = 'script';
-  let canStartRegex = true;
-  let regexCharacterClass = false;
-
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i];
-    const next = source[i + 1];
-
-    if (state === 'script') {
-      topLevel[i] = 1;
-      if (ch === '/' && next === '*') {
-        topLevel[i] = 0;
-        state = 'block_comment';
-        i++;
-        topLevel[i] = 0;
-        continue;
+  topLevel.fill(1);
+  const excluded: Array<{ start: number; end: number }> = [];
+  try {
+    const tokens = tokenizer(source, {
+      ecmaVersion: 'latest',
+      allowHashBang: true,
+      onComment: (isBlock, _text, start, end) => {
+        // Line comments begin every managed block and remain eligible. Block
+        // comments are opaque so embedded byte-exact examples cannot match.
+        if (isBlock) excluded.push({ start, end });
       }
-      if (ch === '/' && next === '/') {
-        topLevel[i + 1] = 1;
-        i++;
-        while (i + 1 < source.length && source[i + 1] !== '\n') {
-          i++;
-          topLevel[i] = 1;
-        }
-        continue;
+    });
+    while (true) {
+      const token = tokens.getToken();
+      const label = token.type.label;
+      if (label === 'eof') break;
+      if (label === 'string' || label === 'regexp' || label === 'template' || label === '`') {
+        excluded.push({ start: token.start, end: token.end });
       }
-      if (ch === '/') {
-        if (canStartRegex) {
-          topLevel[i] = 0;
-          state = 'regex';
-          regexCharacterClass = false;
-          continue;
-        }
-        canStartRegex = true;
-        if (next === '=') {
-          i++;
-          topLevel[i] = 1;
-        }
-        continue;
-      }
-      if (ch === "'") {
-        state = 'single';
-        topLevel[i] = 0;
-        continue;
-      }
-      if (ch === '"') {
-        state = 'double';
-        topLevel[i] = 0;
-        continue;
-      }
-      if (ch === '`') {
-        state = 'template';
-        topLevel[i] = 0;
-        continue;
-      }
-      if (/\s/.test(ch)) {
-        continue;
-      }
-      if (isIdentifierStart(ch)) {
-        let end = i + 1;
-        while (isIdentifierPart(source[end])) {
-          topLevel[end] = 1;
-          end++;
-        }
-        canStartRegex = REGEX_PREFIX_KEYWORDS.has(source.slice(i, end));
-        i = end - 1;
-        continue;
-      }
-      if (/[0-9]/.test(ch)) {
-        let end = i + 1;
-        while (/[A-Za-z0-9_.]/.test(source[end] ?? '')) {
-          topLevel[end] = 1;
-          end++;
-        }
-        canStartRegex = false;
-        i = end - 1;
-        continue;
-      }
-      if ((ch === '+' || ch === '-') && next === ch) {
-        const wasPrefix: boolean = canStartRegex;
-        i++;
-        topLevel[i] = 1;
-        canStartRegex = wasPrefix;
-        continue;
-      }
-      if (ch === '?' && next === '.') {
-        i++;
-        topLevel[i] = 1;
-        canStartRegex = false;
-        continue;
-      }
-      if (')]}'.includes(ch) || ch === '.') {
-        canStartRegex = false;
-        continue;
-      }
-      if ('([{,;:=!~*%&|^<>+-?'.includes(ch)) {
-        canStartRegex = true;
-        continue;
-      }
-      canStartRegex = false;
-      continue;
     }
-
-    if (state === 'block_comment') {
-      topLevel[i] = 0;
-      if (ch === '*' && next === '/') {
-        topLevel[i] = 0;
-        i++;
-        topLevel[i] = 0;
-        state = 'script';
-      }
-      continue;
-    }
-
-    if (state === 'single') {
-      topLevel[i] = 0;
-      if (ch === '\\' && i + 1 < source.length) {
-        i++;
-        topLevel[i] = 0;
-        continue;
-      }
-      if (ch === "'") {
-        state = 'script';
-        canStartRegex = false;
-      }
-      continue;
-    }
-
-    if (state === 'double') {
-      topLevel[i] = 0;
-      if (ch === '\\' && i + 1 < source.length) {
-        i++;
-        topLevel[i] = 0;
-        continue;
-      }
-      if (ch === '"') {
-        state = 'script';
-        canStartRegex = false;
-      }
-      continue;
-    }
-
-    if (state === 'regex') {
-      topLevel[i] = 0;
-      if (ch === '\\' && i + 1 < source.length) {
-        i++;
-        topLevel[i] = 0;
-        continue;
-      }
-      if (ch === '\n' || ch === '\r') {
-        state = 'script';
-        canStartRegex = true;
-        regexCharacterClass = false;
-        continue;
-      }
-      if (ch === '[') {
-        regexCharacterClass = true;
-        continue;
-      }
-      if (ch === ']' && regexCharacterClass) {
-        regexCharacterClass = false;
-        continue;
-      }
-      if (ch === '/' && !regexCharacterClass) {
-        while (isIdentifierPart(source[i + 1])) {
-          i++;
-          topLevel[i] = 0;
-        }
-        state = 'script';
-        canStartRegex = false;
-      }
-      continue;
-    }
-
-    topLevel[i] = 0;
-    if (ch === '\\' && i + 1 < source.length) {
-      i++;
-      topLevel[i] = 0;
-      continue;
-    }
-    if (ch === '`') {
-      state = 'script';
-      canStartRegex = false;
-    }
+  } catch {
+    // Malformed customer JavaScript is not a safe surface for source surgery.
+    topLevel.fill(0);
+    return topLevel;
   }
-
+  for (const range of excluded) {
+    topLevel.fill(0, range.start, range.end);
+  }
   return topLevel;
 }
 

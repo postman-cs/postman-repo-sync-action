@@ -32,7 +32,6 @@ import type { RepoSyncDependencies, ResolvedInputs } from '../src/index.js';
 import { runRepoSync } from '../src/index.js';
 import {
   PRIVATE_MOCK_AUTH_ROOT_MARKER,
-  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
   PRIVATE_MOCK_AUTH_ROOT_TYPE
 } from '../src/lib/postman/private-mock-auth-script.js';
 import { computeArtifactDigest } from '../src/postman-v3/converter.js';
@@ -84,22 +83,32 @@ describe('private-mock export cleanup wiring contract', () => {
     expect(indexSource).toMatch(/acquireCollectionArtifact\(\{[\s\S]*?\bprivateMockAuth\b/);
   });
 
-  it('invokes applyPrivateMockExportCleanup on the cloud export path before YAML conversion', () => {
+  it('transforms populated Sync v2 to v3 before cloud-snapshot cleanup and YAML conversion', () => {
     const exportFn = collectionAcquisitionSource();
     expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toMatch(
-      /async function preparePrivateMockCloudCollection[\s\S]*applyPrivateMockExportCleanup/
+      /async function preparePrivateMockCloudCollection[\s\S]*convertV2CollectionToV3Collection[\s\S]*applyPrivateMockExportCleanup/
     );
   });
 
-  it('forces every collection through verified cloud export when private-mock auth is active', () => {
+  it('reuses only locally reconciled exact prebuilt trees for private-mock auth', () => {
     const exportFn = collectionAcquisitionSource();
-    expect(exportFn).toContain('const forceCloudExport = privateMockAuth;');
     expect(exportFn).toContain('tryReusePrebuiltCollection');
+    expect(exportFn).toContain('entry?.privateMockArtifactReady === true');
+    expect(exportFn).toContain('Reusing locally reconciled private-mock');
     expect(exportFn).toMatch(/preparePrivateMockCloudCollection\(role, collectionId, postman\)/);
   });
 
-  it('fails before repo mutation when the managed root hook is absent from export IR', () => {
+  it('plans local private-mock edits before cloud PATCH and applies them only after every PATCH', () => {
+    expect(indexSource).toMatch(
+      /async function planPrivateMockPrebuiltArtifact[\s\S]*PRIVATE_MOCK_AUTH_ROOT_SCRIPT/
+    );
+    expect(indexSource).toMatch(
+      /for \(const \{ role, collectionUid \} of collectionTargets\)[\s\S]*configurePrivateMockRuntimeAuth[\s\S]*applyPrivateMockPrebuiltPlans/
+    );
+  });
+
+  it('fails before repo mutation when the managed root hook is absent from the populated snapshot IR', () => {
     const exportFn = collectionAcquisitionSource();
     expect(exportFn).toMatch(/preparePrivateMockCloudCollection/);
     expect(indexSource).toContain('PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED');
@@ -205,12 +214,13 @@ function createCoreStub() {
 
 function writeCanonicalV3Tree(
   collectionPath: string,
-  definitionBody = '$kind: collection\nname: Fixture\n'
+  definitionBody = '$kind: collection\nname: Fixture\n',
+  requestBody = '$kind: http-request\nmethod: GET\n'
 ): { artifactDigest: string } {
   mkdirSync(join(collectionPath, '.resources'), { recursive: true });
   mkdirSync(join(collectionPath, 'Folder', '.resources'), { recursive: true });
   writeFileSync(join(collectionPath, '.resources', 'definition.yaml'), definitionBody, 'utf8');
-  writeFileSync(join(collectionPath, 'List.request.yaml'), '$kind: http-request\nmethod: GET\n', 'utf8');
+  writeFileSync(join(collectionPath, 'List.request.yaml'), requestBody, 'utf8');
   writeFileSync(join(collectionPath, 'Folder', '.resources', 'definition.yaml'), '$kind: collection\nname: Folder\n', 'utf8');
   writeFileSync(join(collectionPath, 'Folder', 'Created.example.yaml'), '$kind: http-example\n', 'utf8');
   writeFileSync(join(collectionPath, 'Folder', 'Event.message.yaml'), '$kind: websocket-message\n', 'utf8');
@@ -245,10 +255,37 @@ function buildPrebuiltManifest(
   );
 }
 
-function buildAllPrebuiltManifest(): string {
-  const baseline = writeCanonicalV3Tree('postman/collections/core-payments');
-  const smoke = writeCanonicalV3Tree('postman/collections/[Smoke] core-payments');
-  const contract = writeCanonicalV3Tree('postman/collections/[Contract] core-payments');
+function buildAllPrebuiltManifest(
+  customerListeners: Partial<Record<'baseline' | 'smoke' | 'contract', string>> = {}
+): string {
+  const request = (role: 'baseline' | 'smoke' | 'contract') => [
+    '$kind: http-request',
+    'method: GET',
+    ...(customerListeners[role]
+      ? [
+          'scripts:',
+          '  - type: beforeRequest',
+          '    code: |-',
+          `      ${customerListeners[role]}`
+        ]
+      : []),
+    ''
+  ].join('\n');
+  const baseline = writeCanonicalV3Tree(
+    'postman/collections/core-payments',
+    '$kind: collection\nname: Fixture\n',
+    request('baseline')
+  );
+  const smoke = writeCanonicalV3Tree(
+    'postman/collections/[Smoke] core-payments',
+    '$kind: collection\nname: Fixture\n',
+    request('smoke')
+  );
+  const contract = writeCanonicalV3Tree(
+    'postman/collections/[Contract] core-payments',
+    '$kind: collection\nname: Fixture\n',
+    request('contract')
+  );
   return buildPrebuiltManifest([
     {
       role: 'baseline',
@@ -271,49 +308,8 @@ function buildAllPrebuiltManifest(): string {
   ]);
 }
 
-function createCloudCollectionState(
-  name: string,
-  customerListenerScript: string
-): Record<string, unknown> {
-  return {
-    id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
-    name,
-    $kind: 'collection',
-    items: [
-      {
-        id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-        name: 'List Payments',
-        $kind: 'http-request',
-        method: 'GET',
-        url: 'https://api.example.com/payments',
-        scripts: [
-          {
-            type: 'beforeRequest',
-            code: customerListenerScript,
-            language: 'text/javascript'
-          }
-        ]
-      }
-    ]
-  };
-}
-
-function installManagedRootHook(collection: Record<string, unknown>): void {
-  const existingScripts = Array.isArray(collection.scripts)
-    ? [...(collection.scripts as unknown[])]
-    : [];
-  existingScripts.push({
-    type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
-    code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-    language: 'text/javascript'
-  });
-  collection.scripts = existingScripts;
-}
-
 function createStatefulPrivateMockPostman(
-  cloudCollections: Map<string, Record<string, unknown>>,
-  events: string[],
-  metrics?: { active: number; peak: number }
+  events: string[]
 ) {
   return {
     createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -333,28 +329,19 @@ function createStatefulPrivateMockPostman(
     deleteEnvironment: vi.fn().mockResolvedValue(undefined),
     deleteMock: vi.fn().mockResolvedValue(undefined),
     deleteMonitor: vi.fn().mockResolvedValue(undefined),
-    configurePrivateMockRuntimeAuth: vi.fn(async (collectionUid: string) => {
+    configurePrivateMockRuntimeAuth: vi.fn(async (
+      collectionUid: string,
+      trustedRootScripts?: unknown
+    ) => {
       events.push(`configure:${collectionUid}`);
-      const state = cloudCollections.get(collectionUid);
-      if (!state) {
-        throw new Error(`missing cloud collection ${collectionUid}`);
+      if (!Array.isArray(trustedRootScripts)) {
+        throw new Error(`missing trusted root scripts for ${collectionUid}`);
       }
-      installManagedRootHook(state);
       return 1;
     }),
     getCollection: vi.fn(async (collectionUid: string) => {
       events.push(`export:${collectionUid}`);
-      if (metrics) {
-        metrics.active += 1;
-        metrics.peak = Math.max(metrics.peak, metrics.active);
-        await Promise.resolve();
-        metrics.active -= 1;
-      }
-      const state = cloudCollections.get(collectionUid);
-      if (!state) {
-        throw new Error(`missing cloud collection ${collectionUid}`);
-      }
-      return structuredClone(state);
+      throw new Error(`exact prebuilt path must not export ${collectionUid}`);
     })
   };
 }
@@ -383,32 +370,8 @@ describe('private-mock behavioral ordering regression (C6)', () => {
     vi.unstubAllEnvs();
   });
 
-  it('exports every collection only after configure patches the managed root hook into cloud state', async () => {
+  it('patches every cloud root before committing locally reconciled exact prebuilt trees without export', async () => {
     const events: string[] = [];
-    const metrics = { active: 0, peak: 0 };
-    const cloudCollections = new Map<string, Record<string, unknown>>([
-      [
-        'col-baseline',
-        createCloudCollectionState(
-          'core-payments',
-          "console.log('baseline-customer-listener');"
-        )
-      ],
-      [
-        'col-smoke',
-        createCloudCollectionState(
-          '[Smoke] core-payments',
-          "console.log('smoke-customer-listener');"
-        )
-      ],
-      [
-        'col-contract',
-        createCloudCollectionState(
-          '[Contract] core-payments',
-          "console.log('contract-customer-listener');"
-        )
-      ]
-    ]);
 
     const commitAndPush = vi.fn(async () => {
       events.push('commit');
@@ -419,7 +382,7 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       };
     });
 
-    const postman = createStatefulPrivateMockPostman(cloudCollections, events, metrics);
+    const postman = createStatefulPrivateMockPostman(events);
     const { core } = createCoreStub();
     const dependencies = {
       core,
@@ -442,7 +405,11 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       createInputs({
         mockVisibility: 'private',
         mockUrl: PRIVATE_MOCK_LIST_ENTRY.mockUrl,
-        prebuiltCollectionsJson: buildAllPrebuiltManifest()
+        prebuiltCollectionsJson: buildAllPrebuiltManifest({
+          baseline: "console.log('baseline-customer-listener');",
+          smoke: "console.log('smoke-customer-listener');",
+          contract: "console.log('contract-customer-listener');"
+        })
       }),
       dependencies
     );
@@ -450,20 +417,15 @@ describe('private-mock behavioral ordering regression (C6)', () => {
     const configureBaseline = events.indexOf('configure:col-baseline');
     const configureSmoke = events.indexOf('configure:col-smoke');
     const configureContract = events.indexOf('configure:col-contract');
-    const exportBaseline = events.indexOf('export:col-baseline');
-    const exportSmoke = events.indexOf('export:col-smoke');
-    const exportContract = events.indexOf('export:col-contract');
     const commitIndex = events.indexOf('commit');
 
     expect(configureBaseline).toBeGreaterThanOrEqual(0);
     expect(configureSmoke).toBeGreaterThanOrEqual(0);
     expect(configureContract).toBeGreaterThanOrEqual(0);
-    expect(exportBaseline).toBeGreaterThan(configureBaseline);
-    expect(exportSmoke).toBeGreaterThan(configureSmoke);
-    expect(exportContract).toBeGreaterThan(configureContract);
-    expect(commitIndex).toBeGreaterThan(exportBaseline);
-    expect(commitIndex).toBeGreaterThan(exportSmoke);
-    expect(commitIndex).toBeGreaterThan(exportContract);
+    expect(events.filter((event) => event.startsWith('export:'))).toEqual([]);
+    expect(commitIndex).toBeGreaterThan(configureBaseline);
+    expect(commitIndex).toBeGreaterThan(configureSmoke);
+    expect(commitIndex).toBeGreaterThan(configureContract);
     expect(commitAndPush).toHaveBeenCalledTimes(1);
 
     const baselineDefinition = readFileSync(
@@ -479,15 +441,15 @@ describe('private-mock behavioral ordering regression (C6)', () => {
       'utf8'
     );
     const baselineRequest = readFileSync(
-      'postman/collections/core-payments/List Payments.request.yaml',
+      'postman/collections/core-payments/List.request.yaml',
       'utf8'
     );
     const smokeRequest = readFileSync(
-      'postman/collections/[Smoke] core-payments/List Payments.request.yaml',
+      'postman/collections/[Smoke] core-payments/List.request.yaml',
       'utf8'
     );
     const contractRequest = readFileSync(
-      'postman/collections/[Contract] core-payments/List Payments.request.yaml',
+      'postman/collections/[Contract] core-payments/List.request.yaml',
       'utf8'
     );
 
@@ -515,12 +477,9 @@ describe('private-mock behavioral ordering regression (C6)', () => {
     expect(exportedArtifact).not.toMatch(/['"][a-f0-9]{32,}['"]/i);
 
     expect(existsSync('postman/collections/core-payments/.resources/definition.yaml')).toBe(true);
-    expect(postman.getCollection).toHaveBeenCalledTimes(3);
-    expect(metrics.peak).toBeGreaterThan(1);
-    expect(metrics.peak).toBeLessThanOrEqual(2);
-    expect(postman.getCollection).toHaveBeenCalledWith('col-baseline');
-    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline');
-    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke');
-    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract');
+    expect(postman.getCollection).not.toHaveBeenCalled();
+    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-baseline', []);
+    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-smoke', []);
+    expect(postman.configurePrivateMockRuntimeAuth).toHaveBeenCalledWith('col-contract', []);
   });
 });

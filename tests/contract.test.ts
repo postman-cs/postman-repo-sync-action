@@ -29,10 +29,28 @@ const packageManifest = JSON.parse(
 };
 
 describe('postman-repo-sync-action contract', () => {
+  it('declares the service-directory and dynamic workflow-generation contract', () => {
+    const actionYaml = parse(readFileSync(resolve(repoRoot, 'action.yml'), 'utf8')) as {
+      inputs: Record<string, { required?: boolean; default?: string }>;
+    };
+
+    expect(postmanRepoSyncActionContract.inputs['working-directory']).toMatchObject({
+      required: false,
+      default: ''
+    });
+    expect(actionYaml.inputs['working-directory']).toMatchObject({
+      required: false,
+      default: ''
+    });
+    expect(postmanRepoSyncActionContract.inputs['generate-ci-workflow'].default).toBeUndefined();
+    expect(actionYaml.inputs['generate-ci-workflow'].default).toBeUndefined();
+  });
+
   it('keeps the action surface in kebab-case with bifrost as the default backend', () => {
     expect(postmanRepoSyncActionContract.defaults.integrationBackend).toBe('bifrost');
 
     expect(Object.keys(postmanRepoSyncActionContract.inputs)).toEqual([
+      'working-directory',
       'generate-ci-workflow',
       'ci-workflow-path',
       'ci-runner-os',
@@ -294,7 +312,7 @@ describe('postman-repo-sync-action contract', () => {
     expect(readme).not.toMatch(/preview feature|public preview|private preview|in preview/i);
     expect(publicDocs).not.toMatch(/\binternal\b/i);
 
-    expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v1');
+    expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v2');
     expect(credentials).toContain('Legacy fallback');
     expect(credentials).toContain('non-service-account access token');
     expect(credentials).not.toContain('`off` skips');

@@ -13,13 +13,15 @@ import {
 } from 'node:fs';
 import * as path from 'node:path';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import sodium from 'libsodium-wrappers';
 // @ts-expect-error postman-collection does not declare this internal registry.
 import dynamicVariables from 'postman-collection/lib/superstring/dynamic-variables';
 
 import {
   appendArtifactDigestFileStreaming,
   ArtifactDigestStreamError,
-  convertAndSplitAnyCollection
+  convertAndSplitAnyCollection,
+  convertV2CollectionToV3Collection
 } from './postman-v3/converter.js';
 import { getCiWorkflowTemplate, renderCiWorkflowTemplate, renderGcWorkflowTemplate } from './lib/ci-workflow-template.js';
 import { RepoMutationService, resolveCurrentRef } from './lib/github/repo-mutation.js';
@@ -32,7 +34,7 @@ import {
   secretsResolverEnvironmentKeys,
   type Logger,
   type SecretsResolverProvider
-} from '@postman-cse/automation-core';
+} from '@postman-cs/automation-core';
 import { resolveActionVersion } from './action-version.js';
 import {
   createInternalIntegrationAdapter,
@@ -51,7 +53,7 @@ import {
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
-import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cse/automation-core';
+import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cs/automation-core';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
 import {
@@ -63,10 +65,16 @@ import {
   PRIVATE_MOCK_AUTH_VARIABLE
 } from './lib/postman/postman-gateway-assets-client.js';
 import {
+  applyPrivateMockArtifactNodeCleanup,
   applyPrivateMockExportCleanup,
   isPrivateMockLegacyExportCleanupEnabled,
   verifyPrivateMockRootHook
 } from './lib/postman/private-mock-export-cleanup.js';
+import {
+  isManagedPrivateMockAuthRootHook,
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from './lib/postman/private-mock-auth-script.js';
 import { AccessTokenProvider, mintAccessTokenIfNeeded } from './lib/postman/token-provider.js';
 import { defaultPostmanAppVersionProvider } from './lib/postman/app-version.js';
 import {
@@ -89,6 +97,7 @@ import {
   type BranchDecision,
   type BranchStrategy
 } from './lib/repo/branch-decision.js';
+import { activateWorkingDirectory } from './lib/working-directory.js';
 
 type EnvironmentValues = {
   key: string;
@@ -101,6 +110,7 @@ type Status = 'success' | 'skipped' | 'failed';
 export type CiRunnerOs = 'linux' | 'windows';
 
 export interface ResolvedInputs {
+  workingDirectory?: string;
   projectName: string;
   workspaceId: string;
   baselineCollectionId: string;
@@ -143,6 +153,7 @@ export interface ResolvedInputs {
   provider: GitProvider;
   ciWorkflowBase64: string;
   generateCiWorkflow: boolean;
+  generateCiWorkflowDefaulted?: boolean;
   ciRunnerOs?: CiRunnerOs;
   monitorType: string;
   ciWorkflowPath: string;
@@ -242,7 +253,7 @@ export interface RepoSyncDependencies {
     | 'deleteEnvironment'
     | 'deleteMock'
     | 'deleteMonitor'
-  > & Partial<Pick<PostmanGatewayAssetsClient, 'rebindMonitorByName' | 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
+  > & Partial<Pick<PostmanGatewayAssetsClient, 'rebindMonitorByName' | 'configurePrivateMockRuntimeAuth' | 'deleteCollection' | 'listCollections' | 'listSpecifications' | 'getSpecContent' | 'listSpecCollections' | 'deleteSpec' | 'tagSpecVersion' | 'listSpecVersionTags'>>;
   github?: {
     getRepositoryVariable(name: string): Promise<string>;
     setRepositoryVariable(name: string, value: string): Promise<void>;
@@ -721,8 +732,23 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
   const postmanRegion = parsePostmanRegion(getInput('postman-region', env));
   const postmanStack = parsePostmanStack(getInput('postman-stack', env));
   const endpointProfile = resolvePostmanEndpointProfile(postmanStack, postmanRegion, env);
+  const workingDirectory = getInput('working-directory', env);
+  const generateCiWorkflowInput = getInput('generate-ci-workflow', env);
+  let generateCiWorkflow = parseBooleanInput(generateCiWorkflowInput, true);
+  let generateCiWorkflowDefaulted = false;
+  if (workingDirectory) {
+    if (!generateCiWorkflowInput) {
+      generateCiWorkflow = false;
+      generateCiWorkflowDefaulted = true;
+    } else if (generateCiWorkflow) {
+      throw new Error(
+        'generate-ci-workflow=true is not supported with working-directory because GitHub ignores nested workflow files. Set generate-ci-workflow=false and use the monorepo dispatcher guide.'
+      );
+    }
+  }
 
   return {
+    workingDirectory,
     projectName: getInput('project-name', env),
     workspaceId: getInput('workspace-id', env),
     baselineCollectionId: getInput('baseline-collection-id', env),
@@ -777,7 +803,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     ghFallbackToken: getInput('gh-fallback-token', env),
     provider: repoContext.provider,
     ciWorkflowBase64: getInput('ci-workflow-base64', env),
-    generateCiWorkflow: parseBooleanInput(getInput('generate-ci-workflow', env), true),
+    generateCiWorkflow,
+    generateCiWorkflowDefaulted,
     ciRunnerOs: parseCiRunnerOs(getInput('ci-runner-os', env)),
     monitorType: getInput('monitor-type', env) || 'cloud',
     ciWorkflowPath:
@@ -835,6 +862,7 @@ export function buildBranchAssetMarker(
     rawBranch,
     sanitizedBranch: buildBranchSlug(rawBranch).suffix,
     role: decision.tier,
+    ...(decision.tier === 'channel' && decision.channel ? { channelCode: decision.channel.code } : {}),
     headSha: decision.identity.headSha,
     createdAt: now.toISOString(),
     lastSyncedAt: now.toISOString(),
@@ -1331,6 +1359,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
 
   const inputs = resolveInputs({
     ...process.env,
+    INPUT_WORKING_DIRECTORY: readInput(actionCore, 'working-directory'),
     INPUT_PROJECT_NAME: projectName,
     INPUT_WORKSPACE_ID: readInput(actionCore, 'workspace-id'),
     INPUT_BASELINE_COLLECTION_ID: readInput(actionCore, 'baseline-collection-id'),
@@ -1416,35 +1445,106 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
   return inputs;
 }
 
-export function buildGhCliEnv(env: NodeJS.ProcessEnv, token: string): Record<string, string> {
-  const allowList = [
-    'PATH',
-    'HOME',
-    'USERPROFILE',
-    'XDG_CONFIG_HOME',
-    'GH_CONFIG_DIR',
-    'TMPDIR',
-    'TMP',
-    'TEMP',
-    'RUNNER_TEMP',
-    'SYSTEMROOT'
-  ];
-  const filtered: Record<string, string> = { GH_TOKEN: token };
-  for (const key of allowList) {
-    const value = env[key];
-    if (value) {
-      filtered[key] = value;
+const GITHUB_API_VERSION = '2022-11-28';
+const GITHUB_REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+const GITHUB_SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function githubApiBaseUrl(env: NodeJS.ProcessEnv): string {
+  return (normalizeInputValue(env.GITHUB_API_URL) || 'https://api.github.com').replace(/\/+$/, '');
+}
+
+function githubHeaders(token: string, contentType = false): Record<string, string> {
+  return {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    ...(contentType ? { 'Content-Type': 'application/json' } : {}),
+    'X-GitHub-Api-Version': GITHUB_API_VERSION
+  };
+}
+
+async function githubResponseBody(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch (error) {
+    throw new Error(`GitHub API response body was unreadable: ${causeText(error)}`, { cause: error });
+  }
+}
+
+function throwGitHubResponseError(response: Response, body: string): never {
+  throw new Error(`GitHub API request failed (HTTP ${response.status})${body ? `: ${body}` : ''}`);
+}
+
+export async function writeGitHubRepositorySecrets(
+  repository: string,
+  token: string,
+  secrets: ReadonlyArray<readonly [name: string, value: string]>,
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: Fetcher = fetch
+): Promise<void> {
+  if (!GITHUB_REPOSITORY.test(repository)) {
+    throw new Error('repository must be exactly owner/repository for GitHub secret persistence');
+  }
+  for (const [name] of secrets) {
+    if (!GITHUB_SECRET_NAME.test(name) || /^GITHUB_/i.test(name)) {
+      throw new Error(`invalid GitHub Actions secret name ${name}`);
     }
   }
-  return filtered;
+
+  const separator = repository.indexOf('/');
+  const owner = repository.slice(0, separator);
+  const repositoryName = repository.slice(separator + 1);
+  const baseUrl = githubApiBaseUrl(env);
+  const publicKeyResponse = await fetcher(
+    `${baseUrl}/repos/${owner}/${repositoryName}/actions/secrets/public-key`,
+    { method: 'GET', headers: githubHeaders(token) }
+  );
+  const publicKeyBody = await githubResponseBody(publicKeyResponse);
+  if (!publicKeyResponse.ok) throwGitHubResponseError(publicKeyResponse, publicKeyBody);
+
+  let publicKey: unknown;
+  try {
+    publicKey = publicKeyBody ? JSON.parse(publicKeyBody) : {};
+  } catch (error) {
+    throw new Error(`GitHub public-key response returned malformed JSON: ${causeText(error)}`, { cause: error });
+  }
+  if (
+    !publicKey ||
+    typeof publicKey !== 'object' ||
+    typeof (publicKey as { key_id?: unknown }).key_id !== 'string' ||
+    typeof (publicKey as { key?: unknown }).key !== 'string'
+  ) {
+    throw new Error('GitHub public-key response did not include key_id and key strings');
+  }
+  const keyId = (publicKey as { key_id: string }).key_id;
+  const key = (publicKey as { key: string }).key;
+
+  await sodium.ready;
+  const keyBytes = sodium.from_base64(key, sodium.base64_variants.ORIGINAL);
+  for (const [name, value] of secrets) {
+    const encrypted = sodium.crypto_box_seal(sodium.from_string(value), keyBytes);
+    const encryptedValue = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
+    const response = await fetcher(
+      `${baseUrl}/repos/${owner}/${repositoryName}/actions/secrets/${name}`,
+      {
+        method: 'PUT',
+        headers: githubHeaders(token, true),
+        body: JSON.stringify({ encrypted_value: encryptedValue, key_id: keyId })
+      }
+    );
+    const body = await githubResponseBody(response);
+    if (!response.ok) throwGitHubResponseError(response, body);
+  }
 }
 
 export async function persistSslSecrets(
   inputs: ResolvedInputs,
   actionCore: Pick<CoreLike, 'info' | 'warning'>,
-  actionExec: ExecLike,
+  _actionExec: ExecLike,
   repository: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: Fetcher = fetch
 ): Promise<void> {
   if (inputs.onboardingScope === 'spec-only') {
     return;
@@ -1480,25 +1580,18 @@ export async function persistSslSecrets(
   }
 
   try {
-    for (const [name, value] of secretsToPersist) {
-      const result = await actionExec.getExecOutput(
-        'gh',
-        ['secret', 'set', name, '--repo', repository],
-        {
-          input: Buffer.from(value),
-          env: buildGhCliEnv(env, token),
-          ignoreReturnCode: true
-        }
-      );
-
-      if (result.exitCode !== 0) {
-        throw new Error(result.stderr || `gh secret set ${name} failed`);
-      }
-    }
+    await writeGitHubRepositorySecrets(repository, token, secretsToPersist, env, fetcher);
     actionCore.info('SSL certificate inputs persisted to repository secrets');
   } catch (error) {
+    const mask = createSecretMasker([token, ...secretsToPersist.map(([, value]) => value)]);
     actionCore.warning(
-      `Unable to persist SSL certificate secrets automatically (missing secrets:write permissions?): ${error instanceof Error ? error.message : String(error)}. Set these repository secrets manually: POSTMAN_SSL_CLIENT_CERT_B64, POSTMAN_SSL_CLIENT_KEY_B64, POSTMAN_SSL_CLIENT_PASSPHRASE (optional), POSTMAN_SSL_EXTRA_CA_CERTS_B64 (optional).`
+      formatOrchestrationIssue({
+        operation: 'GitHub Actions SSL secret persistence',
+        entity: `repository ${repository}`,
+        cause: error,
+        remediation: 'grant Actions secrets write permission or set POSTMAN_SSL_CLIENT_CERT_B64 and POSTMAN_SSL_CLIENT_KEY_B64 manually',
+        mask
+      })
     );
   }
 }
@@ -2023,6 +2116,8 @@ type PreparedPrebuiltCollectionEntry = {
   entry: PrebuiltCollectionEntry;
   confinedPath: string;
   artifactDigest?: string;
+  /** Set only after every cloud root patch succeeds and controlled local edits are applied. */
+  privateMockArtifactReady?: boolean;
 };
 
 type PrebuiltTreeFileMeta = {
@@ -2031,6 +2126,19 @@ type PrebuiltTreeFileMeta = {
   dev: number;
   ino: number | bigint;
   size: number;
+};
+
+type PrivateMockArtifactFileUpdate = {
+  absolute: string;
+  relative: string;
+  original: Buffer;
+  next: Buffer;
+};
+
+type PrivateMockPrebuiltPlan = {
+  prepared: PreparedPrebuiltCollectionEntry;
+  rootScripts: Record<string, unknown>[];
+  updates: PrivateMockArtifactFileUpdate[];
 };
 
 const PREBUILT_COLLECTION_ROLES = new Set<PrebuiltCollectionRole>([
@@ -2379,7 +2487,8 @@ function validateCanonicalV3CollectionFile(relative: string, bytes: Buffer): voi
 }
 
 async function digestAndValidatePrebuiltCollectionTree(
-  files: PrebuiltTreeFileMeta[]
+  files: PrebuiltTreeFileMeta[],
+  onFile?: (file: PrebuiltTreeFileMeta, bytes: Buffer) => void
 ): Promise<string> {
   if (!files.some((file) => file.relative === '.resources/definition.yaml')) {
     failPrebuiltCollections('prebuilt collection tree is missing .resources/definition.yaml');
@@ -2410,6 +2519,7 @@ async function digestAndValidatePrebuiltCollectionTree(
     }
 
     validateCanonicalV3CollectionFile(file.relative, bytes);
+    onFile?.(file, bytes);
   }
 
   return hash.digest('hex');
@@ -2479,18 +2589,180 @@ function tryReusePrebuiltCollection(options: {
   return prepared.artifactDigest === entry.artifactDigest;
 }
 
+function normalizeTrustedPrivateMockRootScripts(
+  value: unknown,
+  role: PrebuiltCollectionRole
+): Record<string, unknown>[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((entry) => !isPlainObject(entry))) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection root scripts must be an array of mappings`
+    );
+  }
+  return value.map((entry) => ({ ...(entry as Record<string, unknown>) }));
+}
+
+function serializePrivateMockArtifactNode(node: Record<string, unknown>): Buffer {
+  return Buffer.from(dumpYaml(node, {
+    lineWidth: -1,
+    noRefs: true,
+    sortKeys: false
+  }));
+}
+
+async function planPrivateMockPrebuiltArtifact(options: {
+  role: PrebuiltCollectionRole;
+  collectionId: string;
+  expectedPath: string;
+  artifactDir: string;
+  prepared?: PreparedPrebuiltCollectionEntry;
+}): Promise<PrivateMockPrebuiltPlan | undefined> {
+  const { role, collectionId, expectedPath, artifactDir, prepared } = options;
+  if (!prepared || !tryReusePrebuiltCollection({
+    prepared,
+    expectedPath,
+    expectedCloudId: collectionId
+  })) {
+    return undefined;
+  }
+
+  const files = listPrebuiltCollectionTreeFiles(prepared.confinedPath, artifactDir);
+  const updates: PrivateMockArtifactFileUpdate[] = [];
+  let rootScripts: Record<string, unknown>[] | undefined;
+  const stripManagedBlocks = isPrivateMockLegacyExportCleanupEnabled();
+  const currentDigest = await digestAndValidatePrebuiltCollectionTree(files, (file, original) => {
+    let parsed: unknown;
+    try {
+      parsed = loadYaml(original.toString('utf8'));
+    } catch (error) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection changed to malformed YAML at ${file.relative} (${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+    if (!isPlainObject(parsed)) {
+      failPrebuiltCollections(
+        `prebuilt ${role} collection file ${file.relative} must contain a YAML mapping`
+      );
+    }
+
+    let nextNode: Record<string, unknown> | undefined;
+    if (file.relative === '.resources/definition.yaml') {
+      rootScripts = normalizeTrustedPrivateMockRootScripts(parsed.scripts, role);
+      if (!rootScripts.some((script) => isManagedPrivateMockAuthRootHook(script))) {
+        nextNode = {
+          ...parsed,
+          scripts: [
+            ...rootScripts,
+            {
+              type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+              code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+              language: 'text/javascript'
+            }
+          ]
+        };
+      }
+    } else {
+      const cleaned = applyPrivateMockArtifactNodeCleanup(parsed, { stripManagedBlocks });
+      if (cleaned.strippedBlocks > 0) {
+        nextNode = cleaned.node;
+      }
+    }
+
+    if (nextNode) {
+      const next = serializePrivateMockArtifactNode(nextNode);
+      if (!next.equals(original)) {
+        updates.push({
+          absolute: file.absolute,
+          relative: file.relative,
+          original: Buffer.from(original),
+          next
+        });
+      }
+    }
+  });
+
+  if (currentDigest !== prepared.entry.artifactDigest) {
+    failPrebuiltCollections(
+      `prebuilt ${role} collection changed after initial validation; expected artifactDigest ${prepared.entry.artifactDigest}, observed ${currentDigest}`
+    );
+  }
+  if (!rootScripts) {
+    failPrebuiltCollections(`prebuilt ${role} collection root definition disappeared`);
+  }
+  return { prepared, rootScripts, updates };
+}
+
+function applyPrivateMockPrebuiltPlans(plans: PrivateMockPrebuiltPlan[]): void {
+  const updates = plans.flatMap((plan) => plan.updates);
+  const seen = new Set<string>();
+  for (const update of updates) {
+    if (seen.has(update.absolute)) {
+      failPrebuiltCollections(
+        `private-mock artifact plan addressed ${update.relative} more than once`
+      );
+    }
+    seen.add(update.absolute);
+    let current: Buffer;
+    try {
+      const stat = lstatSync(update.absolute);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        failPrebuiltCollections(
+          `prebuilt collection tree file changed or became unsupported at ${update.relative}`
+        );
+      }
+      current = readFileSync(update.absolute);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('CONTRACT_PREBUILT_COLLECTIONS_INVALID:')) {
+        throw error;
+      }
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed or became unreadable at ${update.relative}`
+      );
+    }
+    if (!current.equals(update.original)) {
+      failPrebuiltCollections(
+        `prebuilt collection tree file changed before private-mock reconciliation at ${update.relative}`
+      );
+    }
+  }
+
+  const written: PrivateMockArtifactFileUpdate[] = [];
+  try {
+    for (const update of updates) {
+      writeFileSync(update.absolute, update.next);
+      written.push(update);
+    }
+  } catch (error) {
+    for (const update of written.reverse()) {
+      try {
+        writeFileSync(update.absolute, update.original);
+      } catch {
+        // Preserve the original write error; the next run revalidates every byte.
+      }
+    }
+    throw error;
+  }
+
+  for (const plan of plans) {
+    plan.prepared.privateMockArtifactReady = true;
+  }
+}
+
 async function preparePrivateMockCloudCollection(
   role: PrebuiltCollectionRole,
   collectionId: string,
   postman: RepoSyncDependencies['postman']
 ): Promise<Record<string, unknown>> {
-  const col = await postman.getCollection(collectionId);
-  const { collection } = applyPrivateMockExportCleanup(col as Record<string, unknown>, {
+  const snapshot = await postman.getCollection(collectionId) as Record<string, unknown>;
+  const v3Collection = convertV2CollectionToV3Collection(snapshot);
+  const { collection } = applyPrivateMockExportCleanup(v3Collection, {
     stripManagedBlocks: isPrivateMockLegacyExportCleanupEnabled()
   });
   if (!verifyPrivateMockRootHook(collection)) {
     throw new Error(
-      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from exported ${role} collection ${collectionId}`
+      `PRIVATE_MOCK_AUTH_ROOT_UNVERIFIED: Managed root hook missing from populated ${role} collection snapshot ${collectionId}`
     );
   }
   return collection;
@@ -2543,22 +2815,27 @@ async function acquireCollectionArtifact(options: {
 }): Promise<CollectionArtifactAcquisition> {
   const { role, collectionId, dirName, collectionsDir, prebuiltByRole, postman, core, privateMockAuth = false } = options;
   const expectedPath = `${collectionsDir}/${dirName}`;
-  const forceCloudExport = privateMockAuth;
   const entry = prebuiltByRole.get(role);
-  if (entry && !forceCloudExport && tryReusePrebuiltCollection({
+  const exactPrebuilt = Boolean(entry && tryReusePrebuiltCollection({
     prepared: entry,
     expectedPath,
     expectedCloudId: collectionId
-  })) {
-    core.info(`Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`);
+  }));
+  const reusePrebuilt = exactPrebuilt && (!privateMockAuth || entry?.privateMockArtifactReady === true);
+  if (reusePrebuilt) {
+    core.info(
+      privateMockAuth
+        ? `Reusing locally reconciled private-mock ${role} collection tree at ${expectedPath} (source artifactDigest match)`
+        : `Reusing prebuilt ${role} collection tree at ${expectedPath} (artifactDigest match)`
+    );
     return { reusePrebuilt: true };
   }
   if (entry) {
-    core.info(forceCloudExport
-      ? `Private mock requires cloud export for ${role} collection to reconcile managed root hook; exporting from cloud`
-      : `Prebuilt ${role} collection entry present but did not exactly match; exporting from cloud`);
+    core.info(privateMockAuth
+      ? `Private mock has no locally reconciled exact prebuilt ${role} collection; reading populated cloud snapshot`
+      : `Prebuilt ${role} collection entry present but did not exactly match; reading populated cloud snapshot`);
   }
-  const cloud = forceCloudExport
+  const cloud = privateMockAuth
     ? await preparePrivateMockCloudCollection(role, collectionId, postman)
     : await postman.getCollection(collectionId) as Record<string, unknown>;
   return { reusePrebuilt: false, cloudCollection: cloud };
@@ -3409,19 +3686,53 @@ async function runRepoSyncInner(
             'PRIVATE_MOCK_RUNTIME_AUTH_UNAVAILABLE: The Postman client cannot configure runtime x-api-key injection.'
           );
         }
+        const collectionTargets = [
+          { role: 'baseline' as const, collectionUid: inputs.baselineCollectionId, kind: 'Baseline' as const },
+          { role: 'smoke' as const, collectionUid: inputs.smokeCollectionId, kind: 'Smoke' as const },
+          { role: 'contract' as const, collectionUid: inputs.contractCollectionId, kind: 'Contract' as const }
+        ].filter((target) => Boolean(target.collectionUid));
+        const prebuiltPlans = new Map<PrebuiltCollectionRole, PrivateMockPrebuiltPlan>();
+        for (const target of collectionTargets) {
+          const plan = await planPrivateMockPrebuiltArtifact({
+            role: target.role,
+            collectionId: target.collectionUid,
+            expectedPath: `${inputs.artifactDir}/collections/${getCollectionDirectoryName(target.kind, assetProjectName)}`,
+            artifactDir: inputs.artifactDir,
+            prepared: preparedPrebuiltCollections.get(target.role)
+          });
+          if (plan) {
+            prebuiltPlans.set(target.role, plan);
+          }
+        }
+
         const configured: string[] = [];
         const configuredUids = new Set<string>();
-        for (const { role, collectionUid } of [
-          { role: 'baseline' as const, collectionUid: inputs.baselineCollectionId },
-          { role: 'smoke' as const, collectionUid: inputs.smokeCollectionId },
-          { role: 'contract' as const, collectionUid: inputs.contractCollectionId }
-        ]) {
-          if (!collectionUid || configuredUids.has(collectionUid)) {
+        for (const { role, collectionUid } of collectionTargets) {
+          if (configuredUids.has(collectionUid)) {
             continue;
           }
           configuredUids.add(collectionUid);
           try {
-            await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            const plansForUid = collectionTargets
+              .filter((target) => target.collectionUid === collectionUid)
+              .map((target) => prebuiltPlans.get(target.role))
+              .filter((plan): plan is PrivateMockPrebuiltPlan => Boolean(plan));
+            const trustedRootScripts = plansForUid[0]?.rootScripts;
+            if (trustedRootScripts && plansForUid.some(
+              (plan) => JSON.stringify(plan.rootScripts) !== JSON.stringify(trustedRootScripts)
+            )) {
+              failPrebuiltCollections(
+                `roles sharing collection ${collectionUid} disagree on trusted root scripts`
+              );
+            }
+            if (trustedRootScripts) {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(
+                collectionUid,
+                trustedRootScripts
+              );
+            } else {
+              await dependencies.postman.configurePrivateMockRuntimeAuth(collectionUid);
+            }
             configured.push(collectionUid);
           } catch (error) {
             throw new Error(
@@ -3430,6 +3741,10 @@ async function runRepoSyncInner(
             );
           }
         }
+        // Keep repository bytes untouched until every cloud collection is
+        // configured. A later PATCH failure therefore cannot leave a partial
+        // local private-mock artifact that might be committed on retry.
+        applyPrivateMockPrebuiltPlans([...prebuiltPlans.values()]);
         if (configured.length > 0) {
           (dependencies.core.notice ?? dependencies.core.info)(
             `Private mock: installed a request hook on ${configured.length} collection(s) that sends the ` +
@@ -3762,7 +4077,7 @@ async function runRepoSyncInner(
 export async function resolvePostmanApiKeyAndTeamId(
   inputs: ResolvedInputs,
   actionCore: Pick<CoreLike, 'info' | 'setSecret' | 'warning'>,
-  actionExec: ExecLike,
+  _actionExec: ExecLike,
   masker: SecretMasker,
   options: {
     allowApiKeyCreation?: boolean;
@@ -3858,28 +4173,16 @@ export async function resolvePostmanApiKeyAndTeamId(
       const repo = inputs.repository;
       if (repo) {
         try {
-          const ghCommand = await actionExec.getExecOutput('gh', [
-            'secret', 'set', 'POSTMAN_API_KEY', '--repo', repo
-          ], {
-            input: Buffer.from(apiKey),
-            env: buildGhCliEnv(options.env, ghToken),
-            ignoreReturnCode: true
-          });
-          if (ghCommand.exitCode !== 0) {
-            actionCore.warning(
-              formatOrchestrationIssue({
-                operation: 'gh secret set POSTMAN_API_KEY',
-                entity: `repository ${repo}`,
-                cause: ghCommand.stderr || `exit code ${ghCommand.exitCode}`,
-                remediation: persistSecretRemediation,
-                mask: masker
-              })
-            );
-          }
+          await writeGitHubRepositorySecrets(
+            repo,
+            ghToken,
+            [['POSTMAN_API_KEY', apiKey]],
+            options.env
+          );
         } catch (error: unknown) {
           actionCore.warning(
             formatOrchestrationIssue({
-              operation: 'gh secret set POSTMAN_API_KEY',
+              operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
               entity: `repository ${repo}`,
               cause: error,
               remediation: persistSecretRemediation,
@@ -3890,7 +4193,7 @@ export async function resolvePostmanApiKeyAndTeamId(
       } else {
         actionCore.warning(
           formatOrchestrationIssue({
-            operation: 'gh secret set POSTMAN_API_KEY',
+            operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
             entity: 'repository (missing)',
             cause: 'repository context is empty',
             remediation: 'set repository context or persist POSTMAN_API_KEY manually then rerun',
@@ -3901,7 +4204,7 @@ export async function resolvePostmanApiKeyAndTeamId(
     } else if (options.persistGeneratedApiKeySecret ?? true) {
       actionCore.warning(
         formatOrchestrationIssue({
-          operation: 'gh secret set POSTMAN_API_KEY',
+          operation: 'GitHub Actions secret persistence for POSTMAN_API_KEY',
           entity: inputs.repository
             ? `repository ${inputs.repository}`
             : 'repository (unknown)',
@@ -4105,9 +4408,9 @@ export function createRepoSyncDependencies(
     getEnvironment: gatewayAssets.getEnvironment.bind(gatewayAssets),
     updateEnvironment: gatewayAssets.updateEnvironment.bind(gatewayAssets),
     findEnvironmentByName: gatewayAssets.findEnvironmentByName.bind(gatewayAssets),
-    // Collection read via the v3 export endpoint — returns canonical v3 IR,
-    // written to disk by `convertAndSplitAnyCollection`. PMAK is never used for
-    // collection reads.
+    // Collection read via one retry-free populated Sync GET — returns a full
+    // v2.1 snapshot that the official runtime.models transform converts to v3
+    // before repository materialization. PMAK is never used for reads.
     getCollection: gatewayAssets.getCollection.bind(gatewayAssets),
     // Mocks via the `mock` service, collection-based monitors via the `monitors`
     // service (jobTemplates). Both reference the collection by its full public
@@ -4130,6 +4433,7 @@ export function createRepoSyncDependencies(
     deleteMock: gatewayAssets.deleteMock.bind(gatewayAssets),
     deleteMonitor: gatewayAssets.deleteMonitor.bind(gatewayAssets),
     deleteCollection: gatewayAssets.deleteCollection.bind(gatewayAssets),
+    listCollections: gatewayAssets.listCollections.bind(gatewayAssets),
     listSpecifications: gatewayAssets.listSpecifications.bind(gatewayAssets),
     getSpecContent: gatewayAssets.getSpecContent.bind(gatewayAssets),
     listSpecCollections: gatewayAssets.listSpecCollections.bind(gatewayAssets),
@@ -4142,6 +4446,7 @@ export function createRepoSyncDependencies(
     repository &&
     (inputs.repoWriteMode === 'commit-only' || inputs.repoWriteMode === 'commit-and-push')
       ? new RepoMutationService({
+          cwd: process.cwd(),
           provider: inputs.provider,
           repository,
           repoUrl: inputs.repoUrl || undefined,
@@ -4236,7 +4541,16 @@ export async function runAction(
   actionCore: CoreLike = core,
   actionExec: ExecLike = exec
 ): Promise<RepoSyncOutputs> {
+  activateWorkingDirectory(
+    actionCore.getInput('working-directory'),
+    process.env.GITHUB_WORKSPACE ?? process.cwd()
+  );
   const inputs = readActionInputs(actionCore);
+  if (inputs.generateCiWorkflowDefaulted) {
+    actionCore.info(
+      'working-directory is set; generate-ci-workflow defaulted to false. Use the root monorepo dispatcher workflow.'
+    );
+  }
 
   // Decide step (branch-aware sync): resolve the immutable BranchDecision from
   // provider CI env BEFORE any credential validation or token mint.

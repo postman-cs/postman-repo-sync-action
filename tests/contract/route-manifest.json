@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "routes": [
     {
+      "id": "github-api.actions-secrets.public-key",
+      "service": "github-api",
+      "method": "GET",
+      "path": "/repos/{param}/{param}/actions/secrets/public-key",
+      "classification": "intentionally-unsimulated",
+      "reason": "Fetches the repository public key used for GitHub Actions secret encryption. Focused tests use an injected fetcher; a live cassette would contain authenticated repository traffic."
+    },
+    {
+      "id": "github-api.actions-secrets.write",
+      "service": "github-api",
+      "method": "PUT",
+      "path": "/repos/{param}/{param}/actions/secrets/{param}",
+      "classification": "intentionally-unsimulated",
+      "reason": "Writes sealed-box encrypted repository Actions secrets. Focused tests cover ordered writes and redacted failures; live cassettes would mutate credentials."
+    },
+    {
       "id": "api-catalog.associate-system-environments",
       "service": "api-catalog",
       "method": "POST",
@@ -26,14 +42,30 @@
       "reason": "Collection garbage collection is outside the WS3 cassette scenario; focused client tests and live probes cover this route."
     },
     {
-      "id": "collection.export-collection",
-      "service": "collection",
+      "id": "sync.get-populated-collection",
+      "service": "sync",
       "method": "GET",
-      "path": "/v3/collections/{param}/export",
+      "path": "/collection/{param}",
       "classification": "simulated",
       "cassettes": [
         "tests/contract/cassettes/repo-sync-wire.json"
       ]
+    },
+    {
+      "id": "collection.get-collection-root",
+      "service": "collection",
+      "method": "GET",
+      "path": "/v3/collections/{param}",
+      "classification": "live-only",
+      "reason": "Private-mock reconciliation uses one stable root snapshot/readback with transport retries disabled; focused client and branch-platform tests cover exact scripts and public-UID routing."
+    },
+    {
+      "id": "collection.list-workspace-collections",
+      "service": "collection",
+      "method": "GET",
+      "path": "/v3/collections",
+      "classification": "live-only",
+      "reason": "Branch-aware GC uses one authoritative paginated collection inventory; focused route, cursor, malformed-response, ambiguity, and no-export tests cover it."
     },
     {
       "id": "collection.patch-collection",

@@ -35,6 +35,8 @@ describe('cli', () => {
       [
         '--project-name',
         'core-payments',
+        '--working-directory',
+        'services/payments',
         '--workspace-id=ws-123',
         '--repo-url',
         'https://github.com/postman-cs/repo-sync-demo',
@@ -51,6 +53,7 @@ describe('cli', () => {
 
     expect(config.inputEnv.EXISTING_ENV).toBe('keep-me');
     expect(config.inputEnv.INPUT_PROJECT_NAME).toBe('core-payments');
+    expect(config.inputEnv.INPUT_WORKING_DIRECTORY).toBe('services/payments');
     expect(config.inputEnv.INPUT_WORKSPACE_ID).toBe('ws-123');
     expect(config.inputEnv.INPUT_REPO_URL).toBe('https://github.com/postman-cs/repo-sync-demo');
     expect(config.inputEnv.INPUT_POSTMAN_STACK).toBe('beta');

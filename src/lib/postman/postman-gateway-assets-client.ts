@@ -3,12 +3,14 @@ import {
   retry,
   sleep as defaultSleep,
   type AccessTokenGatewayClient
-} from '@postman-cse/automation-core';
+} from '@postman-cs/automation-core';
+import { isDeepStrictEqual } from 'node:util';
 import {
   isManagedPrivateMockAuthRootHook,
   PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
   PRIVATE_MOCK_AUTH_ROOT_TYPE
 } from './private-mock-auth-script.js';
+import { assertV2CollectionModel } from '../../postman-v3/converter.js';
 
 export { PRIVATE_MOCK_AUTH_VARIABLE } from './private-mock-auth-script.js';
 
@@ -63,6 +65,7 @@ export function requirePublicMock(mock: MockRecord): MockRecord {
 }
 
 const MAX_CREATE_FLIGHTS = 256;
+const COLLECTION_LIST_PAGE_LIMIT = 100;
 interface CreateFlight {
   fingerprint: string;
   promise: Promise<unknown>;
@@ -103,13 +106,16 @@ export interface PostmanGatewayAssetsClientOptions {
  * collection editor" / "need read access to this collection"). So `collection`
  * is the public uid passed straight through, as a flat string (never `{ id }`).
  *
- * Routes the probe proved unavailable through this bifrost — the `environment`
- * service (invalidServiceError) and the v2 `collection` reads by public uid
- * (RESOURCE_NOT_FOUND) — are NOT wired here. Collection reads use the verified
- * `GET /v3/collections/:id/export` v3 endpoint (`getCollection`); environment
- * reads/updates use the `sync` service. PMAK is never used for any asset op.
- * Collection export and root-mutation routes require the full owner-prefixed
- * public UID; bare model ids are rejected before transport.
+ * service (invalidServiceError) and the public REST collection reads by public
+ * uid (RESOURCE_NOT_FOUND) — are NOT wired here. Whole-collection reads use the
+ * app-canonical populated Sync v2.1 endpoint (`getCollection`), while
+ * collection-root script reconciliation uses the lighter app-canonical
+ * `GET /v3/collections/:id`; environment reads/updates use the `sync` service.
+ * PMAK is never used for any asset op. Collection snapshot and root-mutation
+ * routes require the full owner-prefixed public UID; bare model ids are rejected
+ * before transport. GC name resolution uses one paginated
+ * `GET /v3/collections/?workspace=...` inventory instead of exporting every
+ * collection relation.
  *
  * Create operations submit once and reconcile via live discovery on ambiguous
  * responses. Blind transport retries are reserved for safe reads. Per-process
@@ -144,17 +150,19 @@ export class PostmanGatewayAssetsClient {
 
   /** Native Spec Hub tags attach to the latest changelog group. */
   async tagSpecVersion(specId: string, name: string): Promise<{ id: string; name: string }> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const trimmed = name.trim().slice(0, 255);
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'post', path: `/specifications/${specId}/tags`, body: { name: trimmed }
+      service: 'specification', method: 'post', path: `/specifications/${id}/tags`, body: { name: trimmed }
     });
     const record = this.dataOf(response) ?? {};
     return { id: String(record.id ?? '').trim(), name: String(record.name ?? trimmed).trim() };
   }
 
   async listSpecVersionTags(specId: string): Promise<Array<{ id: string; name: string }>> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/tags`, query: { limit: '50' }
+      service: 'specification', method: 'get', path: `/specifications/${id}/tags`, query: { limit: '50' }
     });
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
@@ -174,7 +182,7 @@ export class PostmanGatewayAssetsClient {
    * Ordinary 4xx are not retried.
    */
   async deleteCollection(collectionUid: string): Promise<void> {
-    const bareId = String(collectionUid).split('-').slice(-5).join('-') || collectionUid;
+    const bareId = this.toModelId(collectionUid);
     try {
       await retry(
         () =>
@@ -200,7 +208,8 @@ export class PostmanGatewayAssetsClient {
 
   async listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications?containerType=workspace&containerId=${workspaceId}`
+      service: 'specification', method: 'get', path: '/specifications',
+      query: { containerType: 'workspace', containerId: this.requireSafePathSegment(workspaceId, 'Workspace UID') }
     });
     const data = Array.isArray(response?.data) ? response.data : [];
     return data.map((entry) => this.asRecord(entry))
@@ -222,16 +231,17 @@ export class PostmanGatewayAssetsClient {
   }
 
   private async getSpecContentLegacy(specId: string): Promise<string | undefined> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const files = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/files`
+      service: 'specification', method: 'get', path: `/specifications/${id}/files`
     });
     const entries = Array.isArray(files?.data) ? files.data : [];
     const root = entries.map((entry) => this.asRecord(entry)).find((entry) => entry?.type === 'ROOT')
       ?? entries.map((entry) => this.asRecord(entry)).find((entry) => entry !== null);
-    const fileId = String(root?.id ?? '').trim();
+    const fileId = root?.id ? this.requireSafePathSegment(String(root.id), 'Specification file UID') : '';
     if (!fileId) return undefined;
     const file = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/files/${fileId}`, query: { fields: 'content' }
+      service: 'specification', method: 'get', path: `/specifications/${id}/files/${fileId}`, query: { fields: 'content' }
     });
     const record = this.dataOf(file);
     return typeof record?.content === 'string' ? record.content : undefined;
@@ -239,12 +249,13 @@ export class PostmanGatewayAssetsClient {
 
   /** Minimal `/tree` reader: validate the entire returned inventory before selecting ROOT. */
   private async getSpecContentFromTree(specId: string): Promise<string | undefined> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const rows: JsonRecord[] = [];
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 100; page += 1) {
       const response = await this.gateway.requestJson<JsonRecord>({
-        service: 'specification', method: 'get', path: `/specifications/${specId}/tree`,
+        service: 'specification', method: 'get', path: `/specifications/${id}/tree`,
         query: { fields: 'id,name,type,path,parentId,fileType,content', limit: 100, ...(cursor ? { cursor } : {}) }
       });
       if (!Array.isArray(response?.data)) return undefined;
@@ -277,19 +288,98 @@ export class PostmanGatewayAssetsClient {
   }
 
   async listSpecCollections(specId: string): Promise<Array<{ uid: string; name: string }>> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'get', path: `/specifications/${specId}/collections`
+      service: 'specification', method: 'get', path: `/specifications/${id}/collections`
     });
-    const data = Array.isArray(response?.data) ? response.data : [];
-    return data.map((entry) => this.asRecord(entry))
-      .filter((entry): entry is JsonRecord => entry !== null)
-      .map((entry) => ({ uid: String(entry.collection ?? entry.collectionId ?? entry.id ?? '').trim(), name: String(entry.name ?? '').trim() }))
-      .filter((entry) => entry.uid);
+    if (!Array.isArray(response?.data)) throw new Error('SPEC_COLLECTION_LIST_RESPONSE_INVALID');
+    return response.data.map((value) => {
+      const entry = this.asRecord(value);
+      const rawUid = entry?.collection ?? entry?.collectionId ?? entry?.id;
+      if (!entry || typeof rawUid !== 'string' || (entry.name !== undefined && typeof entry.name !== 'string')) {
+        throw new Error('SPEC_COLLECTION_LIST_RESPONSE_INVALID');
+      }
+      const uid = this.requireSafePathSegment(rawUid, 'Specification collection UID');
+      return { uid, name: typeof entry.name === 'string' ? entry.name.trim() : '' };
+    });
+  }
+
+  /**
+   * Authoritative workspace collection-name snapshot for GC. Drain the v3
+   * collection service's cursor before returning: a partial inventory must not
+   * authorize parent/spec deletion. This list route replaces per-relation full
+   * exports in GC; `getCollection` remains reserved for repo file materialization.
+   */
+  async listCollections(workspaceId: string): Promise<Array<{ uid: string; name: string }>> {
+    const ws = this.requireSafePathSegment(workspaceId, 'Workspace UID');
+    const rows: Array<{ uid: string; name: string }> = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < COLLECTION_LIST_PAGE_LIMIT; page += 1) {
+      const response = await this.gateway.requestJson<JsonRecord>({
+        service: 'collection',
+        method: 'get',
+        path: `/v3/collections/?workspace=${ws}`,
+        ...(cursor ? { query: { cursor } } : {})
+      });
+      if (!Array.isArray(response?.data)) throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+      for (const value of response.data) {
+        const record = this.asRecord(value);
+        const rawUid = record?.id ?? record?.uid;
+        const rawName = record?.name ?? record?.title;
+        if (typeof rawUid !== 'string' || typeof rawName !== 'string') {
+          throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+        }
+        const uid = rawUid.trim();
+        const name = rawName.trim();
+        if (!uid || !name || !/^[A-Za-z0-9._~-]+$/.test(uid) || uid === '.' || uid === '..') {
+          throw new Error('COLLECTION_LIST_RESPONSE_INVALID');
+        }
+        rows.push({ uid, name });
+      }
+
+      const meta = response.meta === undefined ? null : this.asRecord(response.meta);
+      if (response.meta !== undefined && response.meta !== null && !meta) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const paginationValue = meta?.pagination;
+      const pagination = paginationValue === undefined ? null : this.asRecord(paginationValue);
+      if (paginationValue !== undefined && paginationValue !== null && !pagination) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const cursorValue = meta?.cursor;
+      const cursorEnvelope = cursorValue === undefined ? null : this.asRecord(cursorValue);
+      if (cursorValue !== undefined && cursorValue !== null && !cursorEnvelope) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      // Collection v3 normally returns meta.pagination.nextPage. Accept the
+      // other already-observed gateway cursor envelopes too, but reject any
+      // disagreement so a partial page can never authorize GC.
+      const candidates = [pagination?.nextPage, cursorEnvelope?.next, meta?.nextCursor, response.nextCursor]
+        .filter((value) => value !== undefined && value !== null && value !== '');
+      if (candidates.some((value) => typeof value !== 'string')) {
+        throw new Error('COLLECTION_LIST_CURSOR_INVALID');
+      }
+      const nextCursors = [...new Set(candidates.map((value) => String(value).trim()).filter(Boolean))];
+      if (nextCursors.length > 1) throw new Error('COLLECTION_LIST_CURSOR_AMBIGUOUS');
+      const next = nextCursors[0];
+      if (!next) return rows;
+      if (seenCursors.has(next)) throw new Error('COLLECTION_LIST_CURSOR_REPEATED');
+      seenCursors.add(next);
+      if (page === COLLECTION_LIST_PAGE_LIMIT - 1) {
+        throw new Error('COLLECTION_LIST_PAGE_LIMIT_EXCEEDED');
+      }
+      cursor = next;
+    }
+
+    throw new Error('COLLECTION_LIST_PAGE_LIMIT_EXCEEDED');
   }
 
   async deleteSpec(specId: string): Promise<void> {
+    const id = this.requireSafePathSegment(specId, 'Specification UID');
     await this.gateway.requestJson<JsonRecord>({
-      service: 'specification', method: 'delete', path: `/specifications/${specId}`
+      service: 'specification', method: 'delete', path: `/specifications/${id}`
     });
   }
 
@@ -341,8 +431,8 @@ export class PostmanGatewayAssetsClient {
 
   /**
    * Validate and normalize a collection public UID for routes that require the
-   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): collection
-   * GET export, collection-root PATCH/read, and private-mock runtime auth.
+   * full owner-prefixed UID (`<owner>-<uuid>`, 6 hyphen segments): populated
+   * collection snapshot, collection-root PATCH/read, and private-mock runtime auth.
    *
    * - Trims once.
    * - Rejects empty values.
@@ -388,6 +478,15 @@ export class PostmanGatewayAssetsClient {
     return trimmed;
   }
 
+  /** Positive single-segment contract for every identifier interpolated into a gateway path. */
+  private requireSafePathSegment(value: string, label: string): string {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed || !/^[A-Za-z0-9._~-]+$/.test(trimmed) || trimmed === '.' || trimmed === '..') {
+      throw new Error(`${label} must be a non-empty safe path segment.`);
+    }
+    return trimmed;
+  }
+
   /**
    * Reduce a Postman public uid (`<owner>-<uuid>`, 6 hyphen groups) to the bare
    * model id (`<uuid>`, 5 groups), mirroring `decomposeUID`. Used ONLY for the
@@ -398,7 +497,7 @@ export class PostmanGatewayAssetsClient {
    * other shapes pass through unchanged so the helper is idempotent.
    */
   private toModelId(uid: string): string {
-    const trimmed = String(uid ?? '').trim();
+    const trimmed = this.requireSafePathSegment(uid, 'Postman UID');
     const parts = trimmed.split('-');
     return parts.length >= 6 ? parts.slice(1).join('-') : trimmed;
   }
@@ -699,33 +798,63 @@ export class PostmanGatewayAssetsClient {
     return match?.uid ? { uid: match.uid, name: match.name } : null;
   }
 
-  // --- collection read (service: collection, v3 export) ---
+  // --- collection read (service: sync, populated v2.1 snapshot) ---
   //
-  // The gateway `collection` service does NOT serve spec-generated uids on the
-  // v2 `/collections/:uid` path (404 RESOURCE_NOT_FOUND, live-probed). It DOES
-  // serve `GET /v3/collections/:id/export`, which returns the canonical v3
-  // collection IR (`{ data: { collection: { ... } } }`). That v3 IR is fed
-  // straight to `convertAndSplitV3Collection` — never round-tripped back to v2.
-  // The full owner-prefixed public UID must be sent verbatim; the bare model id
-  // is rejected on root mutation routes (403 FORBIDDEN) and must not be used
-  // here either, so the caller is responsible for passing the public UID.
+  // This is the canonical full collection read used by
+  // api-specification-service before whole-tree Sync updates. Collection v3
+  // `/export` performs an expensive projection and has returned 500s for fresh
+  // roots under provider load. The populated Sync read returns the complete
+  // v2.1 model directly and is transformed in memory through the official
+  // runtime.models V2 -> V3 pipeline before repository materialization.
 
   /**
-   * Fetch a collection's v3 IR through the gateway v3 export endpoint.
-   * Returns the `data.collection` object (canonical v3 shape with `$kind`
-   * discriminators, `items`, `variables`, `references`). Caller writes it to
-   * disk via `convertAndSplitV3Collection`. PMAK is never used for collection
-   * reads.
+   * Fetch one complete v2.1 collection through a single retry-free populated
+   * Sync GET. The response must be a v2.1 model for the requested public UID;
+   * malformed or foreign snapshots fail closed. PMAK is never used.
    */
   async getCollection(uid: string): Promise<unknown> {
     const id = this.requireCollectionPublicUid(uid);
     const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'collection',
+      service: 'sync',
       method: 'get',
-      path: `/v3/collections/${id}/export`
+      path: `/collection/${encodeURIComponent(id)}`,
+      query: { populate: 'true', format: '2.1.0', uid: 'false' },
+      retry: 'none',
+      fallback: 'none'
     });
-    const data = this.asRecord(response?.data);
-    return data?.collection ?? null;
+    const collection = this.asRecord(response?.data);
+    const info = this.asRecord(collection?.info);
+    const schema = typeof info?.schema === 'string' ? info.schema.trim() : '';
+    if (
+      !collection ||
+      !info ||
+      typeof info.name !== 'string' ||
+      !info.name.trim() ||
+      !/\/collection\/v2\.1\.0\/collection\.json\/?$/i.test(schema) ||
+      !Array.isArray(collection.item)
+    ) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync read did not return a complete v2.1 collection'
+      );
+    }
+    try {
+      assertV2CollectionModel(collection);
+    } catch (error) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync payload failed v2.1 schema validation',
+        { cause: error }
+      );
+    }
+    const observedId = String(info._postman_id ?? collection.id ?? '').trim();
+    if (
+      !observedId ||
+      this.toModelId(observedId).toLowerCase() !== this.toModelId(id).toLowerCase()
+    ) {
+      throw new Error(
+        'COLLECTION_SNAPSHOT_INVALID: populated Sync read returned a different collection identity'
+      );
+    }
+    return collection;
   }
 
   // --- mocks (service: mock) ---
@@ -806,54 +935,108 @@ export class PostmanGatewayAssetsClient {
     return this.isRetryableIdempotentWriteOutcome(error);
   }
 
-  private normalizeCollectionScripts(scripts: unknown): JsonRecord[] {
-    if (!Array.isArray(scripts)) return [];
-    return scripts
-      .map((entry) => this.asRecord(entry))
-      .filter((entry): entry is JsonRecord => entry !== null);
+  private isRootPatchSnapshotConflict(error: unknown): boolean {
+    return error instanceof HttpError && [400, 409, 412].includes(error.status);
+  }
+
+  private normalizeCollectionScripts(scripts: unknown, operation: string): JsonRecord[] {
+    if (scripts === undefined || scripts === null) return [];
+    if (!Array.isArray(scripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-array scripts field.`
+      );
+    }
+    const normalized = scripts.map((entry) => this.asRecord(entry));
+    if (normalized.some((entry) => entry === null)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: ${operation} returned a non-object script entry.`
+      );
+    }
+    return normalized as JsonRecord[];
   }
 
   private rootScriptsIncludeManagedAuthHook(scripts: JsonRecord[]): boolean {
     return scripts.some((script) => isManagedPrivateMockAuthRootHook(script));
   }
 
-  private buildPrivateMockRootScripts(existingScripts: JsonRecord[]): JsonRecord[] {
-    const managedScript: JsonRecord = {
-      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
-      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
-      language: 'text/javascript'
-    };
-    return [...existingScripts, managedScript];
+  private expectedPrivateMockRootScripts(existingScripts: JsonRecord[]): JsonRecord[] {
+    return [
+      ...existingScripts,
+      {
+        type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+        code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+        language: 'text/javascript'
+      }
+    ];
+  }
+
+  private assertAtMostOneManagedRootHook(scripts: JsonRecord[], operation: string): void {
+    const count = scripts.filter((script) => isManagedPrivateMockAuthRootHook(script)).length;
+    if (count > 1) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_DUPLICATE: ${operation} contains ${count} exact managed hooks.`
+      );
+    }
   }
 
   private async readCollectionRootScripts(collectionUid: string): Promise<JsonRecord[]> {
     const id = this.requireCollectionPublicUid(collectionUid);
-    const response = await this.gateway.requestJson<JsonRecord>({
-      service: 'collection',
-      method: 'get',
-      path: `/v3/collections/${id}/export`
-    });
+    const response = await this.gateway.requestJson<JsonRecord>(
+      {
+        service: 'collection',
+        method: 'get',
+        path: `/v3/collections/${id}`
+      },
+      // Root reconciliation is evidence, not a transient-success mechanism.
+      // One response must prove the current state; never hide a 5xx by retrying.
+      { retryTransient: false }
+    );
     const data = this.asRecord(response?.data);
-    const collection = this.asRecord(data?.collection);
-    if (!collection) {
+    if (!data) {
       throw new Error(
-        `PRIVATE_MOCK_AUTH_EXPORT_INVALID: Collection ${id} export did not return data.collection; refusing to configure private-mock root auth from an unexpected envelope.`
+        `PRIVATE_MOCK_AUTH_ROOT_INVALID: Collection ${id} root read did not return data; refusing to configure private-mock root auth from an unexpected envelope.`
       );
     }
-    return this.normalizeCollectionScripts(collection.scripts);
+    return this.normalizeCollectionScripts(data.scripts, `Collection ${id} root read`);
   }
 
-  private async patchCollectionRootScripts(collectionUid: string, scripts: JsonRecord[]): Promise<void> {
+  private async patchCollectionRootScripts(
+    collectionUid: string,
+    existingScripts: JsonRecord[]
+  ): Promise<JsonRecord[]> {
     const id = this.requireCollectionPublicUid(collectionUid);
-    await this.gateway.requestJson<JsonRecord>(
+    const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
+    const managedScript = expectedScripts.at(-1)!;
+    const response = await this.gateway.requestJson<JsonRecord>(
       {
         service: 'collection',
         method: 'patch',
         path: `/v3/collections/${id}`,
-        body: [{ op: 'add', path: '/scripts', value: scripts }]
+        // Bootstrap creates these HTTP collections through Sync. Its current
+        // collection-service wire projection materializes absent/null scripts
+        // as `[]` before applying RFC 6902, so this pair is one atomic
+        // compare-and-append. If that contract ever changes, `test` fails and
+        // the append cannot overwrite or manufacture a scripts field.
+        body: [
+          { op: 'test', path: '/scripts', value: existingScripts },
+          { op: 'add', path: '/scripts/-', value: managedScript }
+        ]
       },
       { retryTransient: false }
     );
+    const data = this.asRecord(response?.data);
+    if (!data) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_INVALID: Collection ${id} root patch did not return data.`
+      );
+    }
+    const scripts = this.normalizeCollectionScripts(data.scripts, `Collection ${id} root patch`);
+    if (!isDeepStrictEqual(scripts, expectedScripts)) {
+      throw new Error(
+        `PRIVATE_MOCK_AUTH_ROOT_PATCH_UNVERIFIED: Collection ${id} root patch response did not exactly preserve the prior scripts and append one managed hook.`
+      );
+    }
+    return scripts;
   }
 
   /**
@@ -861,33 +1044,71 @@ export class PostmanGatewayAssetsClient {
    * supplied only by the runner as a transient variable; this method persists
    * the variable name and header wiring, never the credential.
    */
-  async configurePrivateMockRuntimeAuth(collectionUid: string): Promise<number> {
+  async configurePrivateMockRuntimeAuth(
+    collectionUid: string,
+    trustedRootScripts?: unknown
+  ): Promise<number> {
     const cid = this.requireCollectionPublicUid(collectionUid);
 
-    const installFromFreshRoot = async (existingScripts: JsonRecord[]): Promise<number> => {
+    const installFromRootSnapshot = async (existingScripts: JsonRecord[]): Promise<number> => {
+      this.assertAtMostOneManagedRootHook(existingScripts, `Collection ${cid} root snapshot`);
       if (this.rootScriptsIncludeManagedAuthHook(existingScripts)) {
         return 0;
       }
-      const nextScripts = this.buildPrivateMockRootScripts(existingScripts);
+      const expectedScripts = this.expectedPrivateMockRootScripts(existingScripts);
       try {
-        await this.patchCollectionRootScripts(cid, nextScripts);
+        await this.patchCollectionRootScripts(cid, existingScripts);
         return 1;
       } catch (error) {
+        if (this.isRootPatchSnapshotConflict(error)) {
+          const currentScripts = await this.readCollectionRootScripts(cid);
+          if (isDeepStrictEqual(currentScripts, expectedScripts)) {
+            return 0;
+          }
+          throw error;
+        }
         if (!this.isAmbiguousTransportError(error)) {
           throw error;
         }
         const freshScripts = await this.readCollectionRootScripts(cid);
-        if (this.rootScriptsIncludeManagedAuthHook(freshScripts)) {
+        if (isDeepStrictEqual(freshScripts, expectedScripts)) {
           return 1;
         }
-        const recomputed = this.buildPrivateMockRootScripts(freshScripts);
-        await this.patchCollectionRootScripts(cid, recomputed);
-        return 1;
+        if (!isDeepStrictEqual(freshScripts, existingScripts)) {
+          throw new Error(
+            `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed while reconciling an ambiguous patch.`,
+            { cause: error }
+          );
+        }
+        try {
+          await this.patchCollectionRootScripts(cid, existingScripts);
+          return 1;
+        } catch (resendError) {
+          if (!this.isAmbiguousTransportError(resendError)) {
+            throw resendError;
+          }
+          // The one allowed resend may itself commit before its response is
+          // lost. Perform one final stable read (still no retry/wait) and accept
+          // only the exact compare-and-append result.
+          const finalScripts = await this.readCollectionRootScripts(cid);
+          if (isDeepStrictEqual(finalScripts, expectedScripts)) {
+            return 1;
+          }
+          if (!isDeepStrictEqual(finalScripts, existingScripts)) {
+            throw new Error(
+              `PRIVATE_MOCK_AUTH_ROOT_RECONCILE_DIVERGED: Collection ${cid} root scripts changed after the ambiguous patch resend.`,
+              { cause: resendError }
+            );
+          }
+          throw resendError;
+        }
       }
     };
 
-    const scripts = await this.readCollectionRootScripts(cid);
-    return installFromFreshRoot(scripts);
+    const scripts = trustedRootScripts === undefined
+      ? await this.readCollectionRootScripts(cid)
+      : this.normalizeCollectionScripts(trustedRootScripts, `Trusted collection ${cid} root`);
+    return installFromRootSnapshot(scripts);
   }
 
   async listMocks(): Promise<MockRecord[]> {
@@ -1085,11 +1306,13 @@ export class PostmanGatewayAssetsClient {
   }
 
   async monitorExists(uid: string): Promise<boolean> {
+    const id = this.requireSafePathSegment(uid, 'Monitor UID');
     try {
       await this.gateway.requestJson<JsonRecord>({
         service: 'monitors',
         method: 'get',
-        path: `/jobTemplates/${uid}?_etc=true`
+        path: `/jobTemplates/${id}`,
+        query: { _etc: 'true' }
       });
       return true;
     } catch (error) {
@@ -1248,11 +1471,12 @@ export class PostmanGatewayAssetsClient {
   }
 
   async runMonitor(uid: string): Promise<void> {
+    const id = this.requireSafePathSegment(uid, 'Monitor UID');
     await this.gateway.requestJson<JsonRecord>(
       {
         service: 'monitors',
         method: 'post',
-        path: `/jobTemplates/${uid}/jobs`
+        path: `/jobTemplates/${id}/jobs`
       },
       { retryTransient: false }
     );

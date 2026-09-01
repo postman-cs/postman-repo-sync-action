@@ -5,13 +5,13 @@
  * file with zero live transport.
  *
  * This is the cross-action half of the shared cassette transport: repo-sync and
- * bootstrap both replay through `@postman-cse/automation-core/cassette`, so one
+ * bootstrap both replay through `@postman-cs/automation-core/cassette`, so one
  * wire-contract format covers both actions.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import type { Cassette } from '@postman-cse/automation-core/cassette';
+import type { Cassette } from '@postman-cs/automation-core/cassette';
 
 import type { PlatformOptions } from './platform-fake.js';
 
@@ -111,7 +111,19 @@ export const REPO_SYNC_CASSETTE: RepoSyncCassetteScenario = {
     'environment-sync-enabled': 'false',
     'mock-visibility': 'public'
   },
-  fake: { org: true },
+  fake: {
+    org: true,
+    existingCollections: [
+      {
+        id: '12345678-col-baseline',
+        collection: { info: { name: 'core-payments' }, item: [] }
+      },
+      {
+        id: '12345678-col-smoke',
+        collection: { info: { name: '[Smoke] core-payments' }, item: [] }
+      }
+    ]
+  },
   secrets: [PMAK, ACCESS_TOKEN, 'access-token-minted', 'pmak-generated']
 };
 

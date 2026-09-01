@@ -35,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      release_tgz_sha256: ${{ steps.artifact-digests.outputs.release_tgz_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -67,6 +69,9 @@ jobs:
           mkdir release-artifacts
           npm pack --pack-destination release-artifacts
           mv release-artifacts/*.tgz release-artifacts/release.tgz
+      - name: Record immutable package digest
+        id: artifact-digests
+        run: echo "release_tgz_sha256=$(sha256sum release-artifacts/release.tgz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
       - name: Build self-contained SEA binary
         run: bash scripts/build-sea.sh
       - name: Smoke test SEA binary with an empty environment
@@ -149,11 +154,9 @@ jobs:
       - name: Publish npm package
         id: npm-publish
         continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"; fi
+          sed -i '/_authToken/d' "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           echo "published=false" >> "$GITHUB_OUTPUT"
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
@@ -185,7 +188,19 @@ jobs:
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
           SRI=$(node -e "const fs=require('fs'),crypto=require('crypto');console.log('sha512-'+crypto.createHash('sha512').update(fs.readFileSync('release-artifacts/release.tgz')).digest('base64'))")
-          npm view "$PKG@$VERSION" dist.integrity >/tmp/integrity
+          # A first publish of a new package name takes minutes to become readable.
+          # Measured 309s (azure 1.5.1) and 307s (gcp 1.3.1) on 2026-08-25; a later
+          # version of an existing package resolved in ~20s. 40 x 15s = 10 minutes.
+          set +e
+          for attempt in $(seq 1 40); do
+            npm view "$PKG@$VERSION" dist.integrity >/tmp/integrity 2>/tmp/npm-view.err
+            NPM_VIEW_STATUS=$?
+            if [ "$NPM_VIEW_STATUS" -eq 0 ]; then break; fi
+            echo "::notice::registry read-back attempt $attempt/40 has not resolved yet"
+            if [ "$attempt" -lt 40 ]; then sleep 15; fi
+          done
+          set -e
+          test "$NPM_VIEW_STATUS" -eq 0 || { echo '::error::npm package is not visible after a successful publish'; exit 1; }
           test "$(tr -d '[:space:]' </tmp/integrity)" = "$SRI" || {
             echo '::error::Published npm integrity differs from staged tarball'
             exit 1
@@ -195,22 +210,75 @@ jobs:
         run: |
           PKG=$(node -p "require('./release-artifacts/release-manifest.json').package_name")
           VERSION=$(node -p "require('./release-artifacts/release-manifest.json').package_version")
-          MESSAGE="npm publish for $PKG@$VERSION did not complete (missing/invalid NPM_TOKEN or registry error); GitHub Release remains authoritative; recover via backfill-npm.yml once publish access exists"
+          MESSAGE="npm publish for $PKG@$VERSION did not complete (OIDC trusted publisher or registry error); GitHub Release remains authoritative; rerun this release after trusted publishing is restored"
           echo "::warning::$MESSAGE"
           echo "::warning::$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
 
-  advance-major-alias:
-    needs: [classify, publish]
-    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
+  verify-release-e2e:
+    needs: [classify, verify-package, publish]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      outcome: ${{ steps.verifier.outputs.e2e_outcome }}
+      correlation_id: ${{ steps.verifier.outputs.e2e_correlation_id }}
+      manifest_sha256: ${{ steps.verifier.outputs.e2e_manifest_sha256 }}
+      provider_commit: ${{ steps.verifier.outputs.e2e_provider_commit }}
+      provider_tag: ${{ steps.verifier.outputs.e2e_provider_tag }}
+      workflow_run_id: ${{ steps.verifier.outputs.e2e_workflow_run_id }}
+      run_url: ${{ steps.verifier.outputs.e2e_run_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Dispatch and await exact correlated E2E verifier
+        id: verifier
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+          E2E_GATE_MODE: enforce
+          E2E_GATE_ACTION: postman-repo-sync-action
+          E2E_GATE_SUITE: branch-aware
+          E2E_GATE_REF: ${{ github.ref_name }}
+          E2E_GATE_RELEASE_COMMIT: ${{ github.sha }}
+          E2E_GATE_SOURCE_DIGEST: ${{ needs.verify-package.outputs.release_tgz_sha256 }}
+          E2E_GATE_PROVIDER_TAG: e2e-provider-v1.2.0
+          E2E_GATE_PROVIDER_COMMIT: 53c5d10093b7dafb165d3caafbe3f1d70dec687d
+          E2E_GATE_PROVIDER_SOURCE_DIGEST: 8c7ee211fccd2869f3901fcbc5ed154d6dea8e3d0d7d2e5312f6c0b57b4f6b78
+          E2E_GATE_PEER_TAGS: '{"postman-cs/postman-api-onboarding-action":"v3.5.8","postman-cs/postman-bootstrap-action":"v2.21.9","postman-cs/postman-insights-onboarding-action":"v2.5.2","postman-cs/postman-resolve-service-token-action":"v2.2.4","postman-cs/postman-smoke-flow-action":"v3.7.4"}'
+        run: node .github/scripts/verify-e2e-release.mjs
+
+  advance-major-alias:
+    needs: [classify, publish, verify-release-e2e]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
+          token: ${{ secrets.RELEASE_WORKFLOW_TOKEN }}
           fetch-depth: 1
       - name: Advance rolling major alias without regression
+        env:
+          VERIFIED_E2E_MANIFEST_SHA256: ${{ needs.verify-release-e2e.outputs.manifest_sha256 }}
+          VERIFIED_E2E_PROVIDER_COMMIT: ${{ needs.verify-release-e2e.outputs.provider_commit }}
+          VERIFIED_E2E_PROVIDER_TAG: ${{ needs.verify-release-e2e.outputs.provider_tag }}
         run: |
+          set -euo pipefail
+          [[ "$VERIFIED_E2E_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo '::error::verified E2E manifest digest is missing or invalid'
+            exit 1
+          }
+          [ "$VERIFIED_E2E_PROVIDER_TAG" = 'e2e-provider-v1.2.0' ] || {
+            echo '::error::verified E2E provider tag mismatch'
+            exit 1
+          }
+          [ "$VERIFIED_E2E_PROVIDER_COMMIT" = '53c5d10093b7dafb165d3caafbe3f1d70dec687d' ] || {
+            echo '::error::verified E2E provider commit mismatch'
+            exit 1
+          }
           CANDIDATE="$(node -p "require('./package.json').version")"
           MAJOR="v${CANDIDATE%%.*}"
           set +e
@@ -228,31 +296,43 @@ jobs:
             echo "::error::failed to probe rolling alias $MAJOR (git ls-remote exit $status)"
             exit 1
           fi
-          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          RELEASE_TAG_REF="refs/tags/$GITHUB_REF_NAME"
+          REMOTE_RELEASE_REFS="$(git ls-remote --exit-code --tags origin "$RELEASE_TAG_REF" "${RELEASE_TAG_REF}^{}")" || {
+            echo "::error::failed to re-resolve immutable release tag $GITHUB_REF_NAME"
+            exit 1
+          }
+          REMOTE_RELEASE_TAG=''
+          REMOTE_RELEASE_PEELED=''
+          while IFS=$'\t' read -r object ref; do
+            if [ "$ref" = "$RELEASE_TAG_REF" ]; then
+              [ -z "$REMOTE_RELEASE_TAG" ] || { echo '::error::duplicate immutable release tag ref'; exit 1; }
+              REMOTE_RELEASE_TAG="$object"
+            elif [ "$ref" = "${RELEASE_TAG_REF}^{}" ]; then
+              [ -z "$REMOTE_RELEASE_PEELED" ] || { echo '::error::duplicate peeled release tag ref'; exit 1; }
+              REMOTE_RELEASE_PEELED="$object"
+            else
+              echo "::error::unexpected ref while resolving immutable release tag: $ref"
+              exit 1
+            fi
+          done <<< "$REMOTE_RELEASE_REFS"
+          [[ "$REMOTE_RELEASE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::immutable release tag did not resolve to an object'; exit 1; }
+          REMOTE_RELEASE_COMMIT="${REMOTE_RELEASE_PEELED:-$REMOTE_RELEASE_TAG}"
+          [[ "$REMOTE_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::immutable release tag did not peel to a commit'; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::release workflow SHA is invalid'; exit 1; }
+          [ "$REMOTE_RELEASE_COMMIT" = "$GITHUB_SHA" ] || {
+            echo "::error::immutable release tag moved: expected $GITHUB_SHA, resolved $REMOTE_RELEASE_COMMIT"
+            exit 1
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -fa "$MAJOR" -m "Rolling $MAJOR alias -> $GITHUB_REF_NAME" "$GITHUB_SHA"
           git push origin "$MAJOR" --force
-
-  dispatch-live-monitor:
-    needs: [classify, publish]
-    if: ${{ needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' }}
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - name: Dispatch post-release smoke monitor
-        env:
-          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-          E2E_GATE_SUITE: smoke
-          E2E_GATE_REF: ${{ github.ref_name }}
-        run: node .github/scripts/dispatch-e2e-monitor.mjs
 
   # GITHUB_TOKEN-created Release runs never emit workflow_run cascades; the
   # composite's daily cron remains the backstop when App secrets are absent.
   notify-composite:
-    needs: [classify, publish, advance-major-alias]
-    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success' }}
+    needs: [classify, publish, verify-release-e2e, advance-major-alias]
+    if: ${{ !cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' && needs['advance-major-alias'].result == 'success' }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:

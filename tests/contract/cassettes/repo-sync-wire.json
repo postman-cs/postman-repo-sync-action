@@ -6,7 +6,7 @@
       "requestQuery": "",
       "status": 200,
       "statusText": "",
-      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"Ada Lovelace\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
+      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"test-fixture\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       },
@@ -28,7 +28,7 @@
       "requestQuery": "",
       "status": 200,
       "statusText": "",
-      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"Ada Lovelace\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
+      "body": "{\"user\":{\"id\":12345678,\"fullName\":\"test-fixture\",\"teamId\":13347347,\"teamName\":\"field-services-v12-demo\",\"teamDomain\":\"field-services-v12-demo\"}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       },
@@ -159,21 +159,21 @@
       }
     },
     {
-      "key": "proxy:collection GET /v3/collections/12345678-col-baseline/export",
-      "requestQuery": "",
+      "key": "proxy:sync GET /collection/12345678-col-baseline?format=2.1.0&populate=true&uid=false",
+      "requestQuery": "format=2.1.0&populate=true&uid=false",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":{\"collection\":{\"info\":{\"name\":\"baseline\"},\"item\":[]}}}",
+      "body": "{\"data\":{\"info\":{\"name\":\"core-payments\",\"_postman_id\":\"12345678-col-baseline\",\"schema\":\"https://schema.getpostman.com/json/collection/v2.1.0/collection.json\"},\"item\":[]}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }
     },
     {
-      "key": "proxy:collection GET /v3/collections/12345678-col-smoke/export",
-      "requestQuery": "",
+      "key": "proxy:sync GET /collection/12345678-col-smoke?format=2.1.0&populate=true&uid=false",
+      "requestQuery": "format=2.1.0&populate=true&uid=false",
       "status": 200,
       "statusText": "",
-      "body": "{\"data\":{\"collection\":{\"info\":{\"name\":\"baseline\"},\"item\":[]}}}",
+      "body": "{\"data\":{\"info\":{\"name\":\"[Smoke] core-payments\",\"_postman_id\":\"12345678-col-smoke\",\"schema\":\"https://schema.getpostman.com/json/collection/v2.1.0/collection.json\"},\"item\":[]}}",
       "responseHeaders": {
         "content-type": "text/plain;charset=UTF-8"
       }

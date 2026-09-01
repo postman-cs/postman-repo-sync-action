@@ -47,11 +47,10 @@ describe('asynchronous e2e monitor dispatch', () => {
     expect(monitorScript).toContain('REDACTED_TOKEN_MARKER');
   });
 
-  it('is invoked post-publish as a non-blocking observer with the release tag pinned', () => {
-    expect(releaseWorkflow).toMatch(
-      /dispatch-live-monitor:[\s\S]*?continue-on-error: true/
-    );
-    expect(releaseWorkflow).toContain('E2E_GATE_REF:');
-    expect(releaseWorkflow).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+  it('is not invoked by release.yml alongside the closed immutable verifier', () => {
+    expect(releaseWorkflow).not.toContain('dispatch-live-monitor:');
+    expect(releaseWorkflow).not.toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+    expect(releaseWorkflow).toContain('verify-release-e2e:');
+    expect(releaseWorkflow).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
   });
 });

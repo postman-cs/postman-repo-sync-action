@@ -39,6 +39,7 @@ export interface GcPostmanClient {
   listSpecifications(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   getSpecContent(uid: string): Promise<string | undefined>;
   listSpecCollections(uid: string): Promise<Array<{ uid: string; name: string }>>;
+  listCollections(workspaceId: string): Promise<Array<{ uid: string; name: string }>>;
   deleteEnvironment(uid: string): Promise<void>;
   deleteMock(uid: string): Promise<void>;
   deleteMonitor(uid: string): Promise<void>;
@@ -133,6 +134,48 @@ function isGcCandidateName(name: string): boolean {
   return / @[A-Za-z0-9._-]+/.test(name) || /^\[[A-Z][A-Z0-9]*\] /.test(name);
 }
 
+const BARE_COLLECTION_MODEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PUBLIC_COLLECTION_MODEL_ID = /^\d+-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const SAFE_COLLECTION_ID = /^[A-Za-z0-9._~-]+$/;
+
+/**
+ * Join collection-service inventory rows to mock/monitor/spec relation UIDs.
+ * Production may expose the same model as a bare UUID in one service and an
+ * owner-prefixed public UID in another, so normalize only those two proven
+ * forms. Other safe opaque IDs retain exact, case-sensitive identity.
+ */
+function normalizedCollectionIdentity(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  if (!value || value === '.' || value === '..' || !SAFE_COLLECTION_ID.test(value)) return undefined;
+  const publicMatch = PUBLIC_COLLECTION_MODEL_ID.exec(value);
+  if (publicMatch) return publicMatch[1].toLowerCase();
+  if (BARE_COLLECTION_MODEL_ID.test(value)) return value.toLowerCase();
+  return value;
+}
+
+type CollectionInventoryEntry = { uid: string; name: string };
+
+/** Validate the complete snapshot before it can authorize any deletion. */
+function indexCollectionInventory(rows: unknown): Map<string, CollectionInventoryEntry[]> {
+  if (!Array.isArray(rows)) throw new Error('COLLECTION_INVENTORY_INVALID');
+  const index = new Map<string, CollectionInventoryEntry[]>();
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('COLLECTION_INVENTORY_INVALID');
+    }
+    const record = raw as Record<string, unknown>;
+    const identity = normalizedCollectionIdentity(record.uid);
+    const uid = typeof record.uid === 'string' ? record.uid.trim() : '';
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!identity || !uid || !name) throw new Error('COLLECTION_INVENTORY_INVALID');
+    const matches = index.get(identity) ?? [];
+    matches.push({ uid, name });
+    index.set(identity, matches);
+  }
+  return index;
+}
+
 /**
  * Build candidates from the workspace inventory. Only generated-name shapes
  * enter the candidate list at all — everything else in the workspace is
@@ -143,6 +186,24 @@ export async function collectGcCandidates(
   workspaceId: string
 ): Promise<GcCandidate[]> {
   const candidates: GcCandidate[] = [];
+  let collectionInventory: Map<string, CollectionInventoryEntry[]> | undefined;
+  try {
+    collectionInventory = indexCollectionInventory(await postman.listCollections(workspaceId));
+  } catch {
+    // Missing/malformed/incomplete inventory can never authorize collection or
+    // parent-spec deletion. Other independently marked asset kinds may still
+    // take part in the sweep.
+    collectionInventory = undefined;
+  }
+  const resolveGeneratedCollection = (uid: string): CollectionInventoryEntry | undefined => {
+    const identity = normalizedCollectionIdentity(uid);
+    if (!identity || !collectionInventory) return undefined;
+    const matches = collectionInventory.get(identity) ?? [];
+    if (matches.length !== 1) return undefined;
+    const match = matches[0];
+    return isGcCandidateName(match.name) ? match : undefined;
+  };
+  const discoveredCollectionIdentities = new Set<string>();
 
   const environments = await postman.listEnvironments(workspaceId);
   for (const env of environments) {
@@ -179,17 +240,22 @@ export async function collectGcCandidates(
   // Mocks and monitors refer to the generated baseline/smoke collections. They
   // do not expose a durable description field, so inherit the proven marker
   // from their branch-scoped environment and collect each owned collection once.
-  const ownedCollections = new Map<string, { name: string; marker?: AssetMarker }>();
-  for (const mock of mocks) {
+  const ownedCollections = new Map<string, { marker: AssetMarker }>();
+  for (const mock of mocks.filter((entry) => isGcCandidateName(entry.name))) {
     const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === mock.environment)?.marker;
-    if (marker && mock.collection) ownedCollections.set(mock.collection, { name: `${mock.name} collection`, marker });
+    if (marker && mock.collection) ownedCollections.set(mock.collection, { marker });
   }
-  for (const monitor of monitors) {
+  for (const monitor of monitors.filter((entry) => isGcCandidateName(entry.name))) {
     const marker = candidates.find((entry) => entry.kind === 'environment' && entry.uid === monitor.environmentUid)?.marker;
-    if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { name: `${monitor.name} collection`, marker });
+    if (marker && monitor.collectionUid) ownedCollections.set(monitor.collectionUid, { marker });
   }
   for (const [uid, collection] of ownedCollections) {
-    candidates.push({ kind: 'collection', uid, name: collection.name, marker: collection.marker });
+    const resolved = resolveGeneratedCollection(uid);
+    const identity = normalizedCollectionIdentity(resolved?.uid);
+    if (resolved && identity && !discoveredCollectionIdentities.has(identity)) {
+      candidates.push({ kind: 'collection', uid: resolved.uid, name: resolved.name, marker: collection.marker });
+      discoveredCollectionIdentities.add(identity);
+    }
   }
 
   const specifications = await postman.listSpecifications(workspaceId);
@@ -201,18 +267,45 @@ export async function collectGcCandidates(
     } catch {
       marker = undefined;
     }
-    candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
     if (marker) {
+      const linkedCandidates: GcCandidate[] = [];
+      let relationsResolved = true;
       try {
-        for (const collection of await postman.listSpecCollections(spec.uid)) {
-          if (!ownedCollections.has(collection.uid)) {
-            candidates.push({ kind: 'collection', uid: collection.uid, name: collection.name || `${spec.name} collection`, marker });
+        const relations = await postman.listSpecCollections(spec.uid);
+        if (relations.length === 0) relationsResolved = false;
+        for (const collection of relations) {
+          const relationIdentity = normalizedCollectionIdentity(collection.uid);
+          if (!relationIdentity) {
+            relationsResolved = false;
+            continue;
           }
+          if (discoveredCollectionIdentities.has(relationIdentity)) continue;
+          const resolved = resolveGeneratedCollection(collection.uid);
+          const resolvedIdentity = normalizedCollectionIdentity(resolved?.uid);
+          if (!resolved || !resolvedIdentity || resolvedIdentity !== relationIdentity) {
+            relationsResolved = false;
+            continue;
+          }
+          linkedCandidates.push({ kind: 'collection', uid: resolved.uid, name: resolved.name, marker });
         }
       } catch {
-        // The spec itself remains eligible; a transient list failure must not
-        // broaden deletion scope or prevent a later sweep from retrying.
+        relationsResolved = false;
       }
+      if (!relationsResolved) {
+        // Never delete a parent when its relation set cannot be resolved to
+        // independently identified generated collections. A later sweep can
+        // retry without orphaning a child after a partial inventory read.
+        continue;
+      }
+      candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
+      for (const collection of linkedCandidates) {
+        const identity = normalizedCollectionIdentity(collection.uid);
+        if (!identity || discoveredCollectionIdentities.has(identity)) continue;
+        candidates.push(collection);
+        discoveredCollectionIdentities.add(identity);
+      }
+    } else {
+      candidates.push({ kind: 'spec', uid: spec.uid, name: spec.name, marker });
     }
   }
 
@@ -222,6 +315,8 @@ export async function collectGcCandidates(
 export async function runGc(options: GcRunOptions): Promise<GcSummary> {
   const now = options.now ?? new Date();
   const log = options.log ?? (() => undefined);
+
+  const candidates = await collectGcCandidates(options.postman, options.workspaceId);
 
   const remoteBranches = options.onlyBranch || options.allPreviews
     ? undefined // manual scopes never probe: the operator's word is the trigger
@@ -243,8 +338,13 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
           : rawBranch === rule.pattern
       )
     : undefined;
-
-  const candidates = await collectGcCandidates(options.postman, options.workspaceId);
+  const channelCode = channelRules
+    ? (rawBranch: string): string | undefined => channelRules.find((rule) =>
+        rule.pattern.endsWith('*')
+          ? rawBranch.startsWith(rule.pattern.slice(0, -1))
+          : rawBranch === rule.pattern
+      )?.code
+    : undefined;
 
   // The environment is the durable marker surface for a channel set. Once it
   // carries retirement state, use that state for every same-branch asset so
@@ -265,8 +365,10 @@ export async function runGc(options: GcRunOptions): Promise<GcSummary> {
       now,
       branchExists,
       channelMapped,
+      channelCode,
       onlyBranch: options.onlyBranch,
-      allPreviews: options.allPreviews
+      allPreviews: options.allPreviews,
+      triggerGeneration: now
     },
     candidates,
     deleters: {

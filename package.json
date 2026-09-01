@@ -1,5 +1,5 @@
 {
-  "name": "@postman/onboarding-repo-sync",
+  "name": "@postman-cs/onboarding-repo-sync",
   "version": "2.8.7",
   "description": "Postman repo sync GitHub Action.",
   "type": "module",
@@ -25,9 +25,10 @@
     "verify:dist:assert": "npm run verify:dist:shape && npm run verify:dist:parity",
     "verify:dist": "npm run build && npm run verify:dist:assert",
     "docs:tables": "node scripts/render-action-tables.mjs",
+    "docs:pins": "node scripts/check-doc-pins.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run --exclude tests/ci-workflow-template.test.ts && vitest run tests/ci-workflow-template.test.ts && node --test .github/scripts/dispatch-e2e-monitor.test.mjs .github/scripts/prefetch-vendored-deps.test.mjs",
+    "test": "vitest run --exclude tests/ci-workflow-template.test.ts && vitest run tests/ci-workflow-template.test.ts && node --test .github/scripts/dispatch-e2e-monitor.test.mjs .github/scripts/prefetch-vendored-deps.test.mjs .github/scripts/verify-e2e-release.test.mjs",
     "test:emulator:git": "vitest run --config vitest.emulator.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "record:cassettes": "RECORD_FAKE_CASSETTES=1 vitest run tests/contract/record-fake-cassettes.test.ts"
@@ -53,18 +54,20 @@
   "dependencies": {
     "@actions/core": "^3.0.1",
     "@actions/exec": "^3.0.0",
-    "@postman-cse/automation-core": "^1.6.0",
-    "@postman/runtime.models": "^1.13.1",
-    "@postman/v3.export": "0.2.28",
+    "@postman-cs/automation-core": "^1.8.1",
     "js-yaml": "^5.2.1",
+    "libsodium-wrappers": "0.8.4",
     "undici": "^8.10.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
+    "@postman/runtime.models": "^1.13.1",
+    "@postman/v3.export": "0.2.28",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.0",
+    "acorn": "8.18.0",
     "esbuild": "0.28.1",
     "eslint": "^10.7.0",
     "fast-check": "^4.9.0",

@@ -21,6 +21,7 @@ import type { RetryEvent } from './lib/postman/token-provider.js';
 import { createSecretMasker } from './lib/secrets.js';
 import { runGc } from './lib/repo/gc-runner.js';
 import { renderGcSummary } from './lib/repo/preview-gc.js';
+import { activateWorkingDirectory } from './lib/working-directory.js';
 
 interface CliConfig {
   inputEnv: NodeJS.ProcessEnv;
@@ -39,6 +40,7 @@ const execFileAsync = promisify(execFile);
 type ReporterCore = RepoSyncDependencies['core'];
 
 const CLI_INPUT_NAMES = [
+  'working-directory',
   'project-name',
   'workspace-id',
   'baseline-collection-id',
@@ -268,7 +270,7 @@ function resolvePackageVersion(): string {
         name?: string;
         version?: string;
       };
-      if (packageJson.name === '@postman/onboarding-repo-sync' && packageJson.version) {
+      if (packageJson.name === '@postman-cs/onboarding-repo-sync' && packageJson.version) {
         return String(packageJson.version).trim();
       }
     } catch {
@@ -565,6 +567,7 @@ export async function runCli(
   }
 
   const config = parseCliArgs(argv, env);
+  activateWorkingDirectory(config.inputEnv.INPUT_WORKING_DIRECTORY, process.cwd());
   const inputs = resolveInputs(config.inputEnv);
   const branchDecision = decideBranchTier(inputs, config.inputEnv);
   // Non-gated runs still generate artifact/CI files even when repo-write-mode=none.
@@ -576,6 +579,11 @@ export async function runCli(
     partialOutputs[name] = String(value ?? '');
     writeOptionalFileAtomic(config.resultJsonPath, JSON.stringify(partialOutputs, null, 2));
   });
+  if (inputs.generateCiWorkflowDefaulted) {
+    reporter.info(
+      'working-directory is set; generate-ci-workflow defaulted to false. Use the root monorepo dispatcher workflow.'
+    );
+  }
 
   // Match the action entrypoint: a gated branch must never mint an access
   // token, run credential preflight, or construct a Postman client.
@@ -716,7 +724,7 @@ async function runGcCommand(
     { persistGeneratedApiKeySecret: false, env }
   );
   const dependencies = createCliDependencies(inputs, resolved);
-  if (!dependencies.postman.deleteCollection || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
+  if (!dependencies.postman.deleteCollection || !dependencies.postman.listCollections || !dependencies.postman.listSpecifications || !dependencies.postman.getSpecContent || !dependencies.postman.listSpecCollections || !dependencies.postman.deleteSpec) {
     throw new Error('gc requires the full branch-aware inventory client; this runtime is missing a spec or collection GC capability.');
   }
 
@@ -726,6 +734,7 @@ async function runGcCommand(
     postman: {
       ...dependencies.postman,
       deleteCollection: dependencies.postman.deleteCollection,
+      listCollections: dependencies.postman.listCollections,
       listSpecifications: dependencies.postman.listSpecifications,
       getSpecContent: dependencies.postman.getSpecContent,
       listSpecCollections: dependencies.postman.listSpecCollections,

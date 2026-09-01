@@ -76,17 +76,23 @@ function parseProvider(
     return explicit;
   }
 
-  const url = (repoUrl ?? '').toLowerCase();
-  if (url.includes('github')) {
+  const hostname = (() => {
+    try {
+      return new URL(repoUrl ?? '').hostname.toLowerCase();
+    } catch {
+      return '';
+    }
+  })();
+  if (hostname === 'github.com') {
     return 'github';
   }
-  if (url.includes('gitlab')) {
+  if (hostname === 'gitlab.com') {
     return 'gitlab';
   }
-  if (url.includes('bitbucket')) {
+  if (hostname === 'bitbucket.org') {
     return 'bitbucket';
   }
-  if (url.includes('dev.azure.com') || url.includes('visualstudio.com')) {
+  if (hostname === 'dev.azure.com' || hostname.endsWith('.visualstudio.com')) {
     return 'azure-devops';
   }
 

@@ -106,6 +106,7 @@ describe('CI and SEA PR workflow contracts', () => {
       'typecheck',
       'dist-shape',
       'actionlint',
+      'docs-pins',
       'commitlint',
     ]);
     expect(runGates).toContain('run lint       npm run lint');
@@ -113,6 +114,7 @@ describe('CI and SEA PR workflow contracts', () => {
     expect(runGates).toContain('run typecheck  npm run typecheck');
     expect(runGates).toContain('run dist-shape npm run verify:dist:shape');
     expect(runGates).toContain('run actionlint "$ACTIONLINT_BIN"');
+    expect(runGates).toContain('run docs-pins  npm run docs:pins');
     expect(runGates).toContain('if [ "${{ github.event_name }}" = "pull_request" ]; then');
     expect(runGates).toContain('run commitlint npx commitlint \\');
     expect(runGates).toContain('--from "${{ github.event.pull_request.base.sha }}"');
@@ -276,12 +278,13 @@ describe('CI and SEA PR workflow contracts', () => {
 });
 
 describe('live e2e tiering contract', () => {
-  it('keeps live sandbox work off PRs and dispatches immutable releases asynchronously', () => {
+  it('keeps live sandbox work off PRs and uses only the closed immutable release verifier', () => {
     expect(existsSync(join(process.cwd(), '.github/workflows/live-e2e.yml'))).toBe(false);
-    expect(releaseWorkflow).toContain('dispatch-live-monitor:');
-    expect(releaseWorkflow).toContain('E2E_GATE_SUITE: smoke');
-    expect(releaseWorkflow).toContain('continue-on-error: true');
-    expect(releaseWorkflow).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+    expect(releaseWorkflow).not.toContain('dispatch-live-monitor:');
+    expect(releaseWorkflow).not.toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
+    expect(releaseWorkflow).toContain('verify-release-e2e:');
+    expect(releaseWorkflow).toContain('E2E_GATE_SUITE: branch-aware');
+    expect(releaseWorkflow).toContain('E2E_GATE_MODE: enforce');
     expect(releaseWorkflow).not.toContain('wait-for-e2e-gate.mjs');
     expect(releaseWorkflow).not.toContain('gate_required');
   });

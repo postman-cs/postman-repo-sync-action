@@ -30,6 +30,8 @@ jobs:
           node-version: '24'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
+      - name: Reject tracked scratch paths
+        run: node scripts/check-tracked-scratch-paths.mjs
       - name: Prefetch vendored dependencies
         env:
           DEPS_REPO: ${{ secrets.DEPS_REPO }}
@@ -74,6 +76,7 @@ jobs:
           run typecheck  npm run typecheck
           run dist-shape npm run verify:dist:shape
           run actionlint "$ACTIONLINT_BIN"
+          run docs-pins  npm run docs:pins
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             run commitlint npx commitlint \
               --from "${{ github.event.pull_request.base.sha }}" \

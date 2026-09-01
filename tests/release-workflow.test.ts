@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -180,7 +180,8 @@ describe('release workflow publishing contract', () => {
     );
     expect(publish).toContain('published: ${{ steps.npm-publish.outputs.published }}');
     expect(publish).toContain('continue-on-error: true');
-    expect(publish).toContain('if [ -z "${NODE_AUTH_TOKEN:-}" ]; then sed -i');
+    expect(publish).toContain("sed -i '/_authToken/d' \"${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}\"");
+    expect(publish).not.toContain('NODE_AUTH_TOKEN');
     expect(publish).toContain("if: steps.npm-publish.outputs.published == 'true'");
     expect(publish).toContain("if: steps.npm-publish.outputs.published != 'true'");
     expect(publish).toContain('Report npm publish skipped');
@@ -194,35 +195,67 @@ describe('release workflow publishing contract', () => {
     expect(releaseWorkflow.indexOf('  publish:')).toBeLessThan(releaseWorkflow.indexOf('  advance-major-alias:'));
   });
 
-  it('dispatches the post-release monitor without blocking publication', () => {
-    const monitor = job('dispatch-live-monitor');
-    expect(monitor).toContain('continue-on-error: true');
-    expect(monitor).toMatch(/permissions:\n\s+contents: read\n/);
-    expect(monitor).not.toContain('id-token:');
-    expect(monitor).not.toMatch(/permissions:[\s\S]*?\n\s+actions:/);
-    expect(monitor).not.toContain('contents: write');
-    expect(monitor).not.toContain('pull-requests: write');
-    expect(monitor).toContain('actions/checkout@v7');
-    expect(monitor).toContain("needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success'");
-    expect(monitor).toContain('E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}');
-    expect(monitor).toContain('E2E_GATE_SUITE: smoke');
-    expect(monitor).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
-    expect(monitor).toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
-    expect(monitor.indexOf('actions/checkout@v7')).toBeLessThan(
-      monitor.indexOf('node .github/scripts/dispatch-e2e-monitor.mjs')
-    );
+  it('does not race the closed release proof with a mutable post-release monitor', () => {
+    expect(job('dispatch-live-monitor')).toBe('');
+    expect(releaseWorkflow).not.toContain('dispatch-live-monitor:');
+    expect(releaseWorkflow).not.toContain('node .github/scripts/dispatch-e2e-monitor.mjs');
     expect(releaseWorkflow).not.toContain('live-e2e-gate:');
+  });
+
+  it('awaits exact closed immutable-provider E2E evidence before moving the rolling alias', () => {
+    const verifier = job('verify-release-e2e');
+    expect(verifier).toContain('needs: [classify, verify-package, publish]');
+    expect(verifier).not.toContain('continue-on-error');
+    expect(verifier).toContain('E2E_GATE_MODE: enforce');
+    expect(verifier).toContain('E2E_GATE_ACTION: postman-repo-sync-action');
+    expect(verifier).toContain('E2E_GATE_SUITE: branch-aware');
+    expect(verifier).toContain('E2E_GATE_REF: ${{ github.ref_name }}');
+    expect(verifier).toContain('E2E_GATE_RELEASE_COMMIT: ${{ github.sha }}');
+    expect(verifier).toContain(
+      'E2E_GATE_SOURCE_DIGEST: ${{ needs.verify-package.outputs.release_tgz_sha256 }}'
+    );
+    expect(verifier).toContain('E2E_GATE_PROVIDER_TAG: e2e-provider-v1.2.0');
+    expect(verifier).toContain(
+      'E2E_GATE_PROVIDER_COMMIT: 53c5d10093b7dafb165d3caafbe3f1d70dec687d'
+    );
+    expect(verifier).toContain(
+      'E2E_GATE_PROVIDER_SOURCE_DIGEST: 8c7ee211fccd2869f3901fcbc5ed154d6dea8e3d0d7d2e5312f6c0b57b4f6b78'
+    );
+    expect(verifier).not.toContain('__FILL_PROVIDER_');
+    expect(verifier).toContain(
+      'E2E_GATE_PEER_TAGS: \'{"postman-cs/postman-api-onboarding-action":"v3.5.8","postman-cs/postman-bootstrap-action":"v2.21.9","postman-cs/postman-insights-onboarding-action":"v2.5.2","postman-cs/postman-resolve-service-token-action":"v2.2.4","postman-cs/postman-smoke-flow-action":"v3.7.4"}\''
+    );
+    expect(verifier).not.toContain('E2E_GATE_REGISTRY_REVISION');
+    expect(verifier).not.toContain('E2E_GATE_CONTRACT_SCENARIOS');
+    expect(verifier).not.toContain('E2E_GATE_WORKFLOW_REF: main');
+    expect(verifier).toContain(
+      'manifest_sha256: ${{ steps.verifier.outputs.e2e_manifest_sha256 }}'
+    );
+    expect(verifier).toContain(
+      'provider_commit: ${{ steps.verifier.outputs.e2e_provider_commit }}'
+    );
+    expect(verifier).toContain('provider_tag: ${{ steps.verifier.outputs.e2e_provider_tag }}');
+    expect(verifier).toContain('node .github/scripts/verify-e2e-release.mjs');
+    expect(verifier).toContain('outcome: ${{ steps.verifier.outputs.e2e_outcome }}');
+    expect(job('advance-major-alias')).toContain(
+      "needs.verify-release-e2e.outputs.outcome == 'success'"
+    );
+    expect(releaseWorkflow.indexOf('  verify-release-e2e:')).toBeLessThan(
+      releaseWorkflow.indexOf('  advance-major-alias:')
+    );
   });
 
   it('keeps a single non-regressing rolling major alias job after publish with bounded fetch', () => {
     const alias = job('advance-major-alias');
     expect(alias).toMatch(/^ {2}advance-major-alias:/m);
+    expect(alias).toMatch(/permissions:\n\s+contents: read/);
     expect(alias).toContain('Advance rolling major alias without regression');
     expect(alias).toContain('require(\'./package.json\').version');
     expect(alias).toContain('isSemverOlder');
     expect(alias).toContain('scripts/release-policy.mjs');
     expect(alias).toContain('Candidate $CANDIDATE is older than current alias');
     expect(alias).toContain('actions/checkout@v7');
+    expect(alias).toContain('token: ${{ secrets.RELEASE_WORKFLOW_TOKEN }}');
     expect(alias).toContain('fetch-depth: 1');
     expect(alias).toContain('git ls-remote --exit-code --tags origin "refs/tags/$MAJOR"');
     expect(alias).toContain('git fetch --depth=1 --no-tags origin "refs/tags/$MAJOR:refs/tags/$MAJOR"');
@@ -233,14 +266,46 @@ describe('release workflow publishing contract', () => {
     expect(alias).toContain('git tag -fa "$MAJOR"');
     expect(alias).toContain('git push origin "$MAJOR" --force');
     expect(alias).toContain("needs.classify.outputs.release_kind == 'immutable'");
+    expect(alias).toContain('needs: [classify, publish, verify-release-e2e]');
+    expect(alias).toContain("needs.verify-release-e2e.result == 'success'");
+    expect(alias).toContain("needs.verify-release-e2e.outputs.outcome == 'success'");
+    expect(alias).toContain(
+      'VERIFIED_E2E_MANIFEST_SHA256: ${{ needs.verify-release-e2e.outputs.manifest_sha256 }}'
+    );
+    expect(alias).toContain(
+      'VERIFIED_E2E_PROVIDER_COMMIT: ${{ needs.verify-release-e2e.outputs.provider_commit }}'
+    );
+    expect(alias).toContain(
+      'VERIFIED_E2E_PROVIDER_TAG: ${{ needs.verify-release-e2e.outputs.provider_tag }}'
+    );
+    expect(alias).toContain('[[ "$VERIFIED_E2E_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]');
+    expect(alias).toContain("[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.2.0' ]");
+    expect(alias).toContain(
+      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '53c5d10093b7dafb165d3caafbe3f1d70dec687d' ]"
+    );
+    expect(alias).toContain(
+      'git ls-remote --exit-code --tags origin "$RELEASE_TAG_REF" "${RELEASE_TAG_REF}^{}"'
+    );
+    expect(alias).toContain('[ "$REMOTE_RELEASE_COMMIT" = "$GITHUB_SHA" ]');
+    for (const validation of [
+      '[[ "$VERIFIED_E2E_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]',
+      "[ \"$VERIFIED_E2E_PROVIDER_TAG\" = 'e2e-provider-v1.2.0' ]",
+      "[ \"$VERIFIED_E2E_PROVIDER_COMMIT\" = '53c5d10093b7dafb165d3caafbe3f1d70dec687d' ]",
+      '[ "$REMOTE_RELEASE_COMMIT" = "$GITHUB_SHA" ]'
+    ]) {
+      expect(alias.indexOf(validation)).toBeLessThan(alias.indexOf('git tag -fa "$MAJOR"'));
+      expect(alias.indexOf(validation)).toBeLessThan(alias.indexOf('git push origin "$MAJOR" --force'));
+    }
     expect(releaseWorkflow.match(/^ {2}advance-major-alias:/gm) ?? []).toHaveLength(1);
   });
 
   it('dispatches sibling-release to the composite after immutable publish and alias advance', () => {
     const notify = job('notify-composite');
-    expect(notify).toContain('needs: [classify, publish, advance-major-alias]');
     expect(notify).toContain(
-      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs['advance-major-alias'].result == 'success'"
+      'needs: [classify, publish, verify-release-e2e, advance-major-alias]'
+    );
+    expect(notify).toContain(
+      "!cancelled() && needs.classify.outputs.release_kind == 'immutable' && needs.publish.result == 'success' && needs.verify-release-e2e.result == 'success' && needs.verify-release-e2e.outputs.outcome == 'success' && needs['advance-major-alias'].result == 'success'"
     );
     expect(notify).toMatch(/permissions:\s*\{\}/);
     expect(notify).toContain(
@@ -263,8 +328,108 @@ describe('release workflow publishing contract', () => {
     expect(notify).toContain('exit 0');
     expect(releaseWorkflow).not.toContain('github.event.workflow_run');
     expect(releaseWorkflow.indexOf('  notify-composite:')).toBeGreaterThan(
-      releaseWorkflow.indexOf('  dispatch-live-monitor:')
+      releaseWorkflow.indexOf('  advance-major-alias:')
     );
+  });
+});
+
+const aliasRunBody: string = (() => {
+  const parsed = parse(releaseWorkflow) as {
+    jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }>;
+  };
+  return (
+    parsed.jobs['advance-major-alias'].steps.find(
+      (step) => step.name === 'Advance rolling major alias without regression'
+    )?.run ?? ''
+  );
+})();
+
+interface AliasShellResult {
+  status: number;
+  output: string;
+  mutations: string[];
+}
+
+function executeAliasShell(overrides: Record<string, string> = {}): AliasShellResult {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'release-alias-'));
+  const scriptPath = join(tmpDir, 'alias.sh');
+  const mutationPrefix = '__ALIAS_GIT_MUTATION__:';
+  const gitShim = `git() {
+case "\${1:-}" in
+  rev-parse) printf '%s\\n' "$GITHUB_SHA" ;;
+  ls-remote)
+    if [ "$#" -eq 6 ]; then
+      printf '%s\\trefs/tags/%s\\n' "$GIT_STUB_RELEASE_TAG_OBJECT" "$GITHUB_REF_NAME"
+      printf '%s\\trefs/tags/%s^{}\\n' "$GIT_STUB_RELEASE_COMMIT" "$GITHUB_REF_NAME"
+    elif [[ " $* " == *" --exit-code "* ]]; then
+      return 2
+    fi
+    ;;
+  config) ;;
+  tag|push) printf '${mutationPrefix}%s\\n' "$*" ;;
+  *) printf 'unexpected git call: %s\\n' "$*" >&2; return 90 ;;
+esac
+}
+`;
+  // A shell function is deterministic on Unix and Git Bash alike. In
+  // particular, Git Bash prepends its own /mingw64/bin/git ahead of Windows
+  // PATH entries, so executable and .bat stubs can silently hit the real
+  // remote alias instead of exercising the release step.
+  writeFileSync(scriptPath, `${gitShim}\n${aliasRunBody}`);
+  try {
+    const result = spawnSync('bash', ['--noprofile', '--norc', scriptPath], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BASH_ENV: '',
+        ENV: '',
+        GITHUB_REF_NAME: 'v9.9.9',
+        GITHUB_SHA: 'a'.repeat(40),
+        GIT_STUB_RELEASE_COMMIT: 'a'.repeat(40),
+        GIT_STUB_RELEASE_TAG_OBJECT: '1'.repeat(40),
+        VERIFIED_E2E_MANIFEST_SHA256: 'c'.repeat(64),
+        VERIFIED_E2E_PROVIDER_COMMIT: '53c5d10093b7dafb165d3caafbe3f1d70dec687d',
+        VERIFIED_E2E_PROVIDER_TAG: 'e2e-provider-v1.2.0',
+        ...overrides
+      },
+      timeout: 10_000
+    });
+    const mutations = (result.stdout ?? '')
+      .split('\n')
+      .filter((line) => line.startsWith(mutationPrefix))
+      .map((line) => line.slice(mutationPrefix.length).trim());
+    return {
+      status: result.status ?? -1,
+      output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+      mutations
+    };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+describe('release alias evidence shell', () => {
+  it('executes the exact alias step only after all evidence and tag checks pass', () => {
+    expect(aliasRunBody).toContain('VERIFIED_E2E_MANIFEST_SHA256');
+    const result = executeAliasShell();
+    expect(result.status).toBe(0);
+    expect(result.mutations).toHaveLength(2);
+    expect(result.mutations[0]).toMatch(/^tag -fa v\d+ /);
+    expect(result.mutations[1]).toMatch(/^push origin v\d+ --force$/);
+  });
+
+  it.each([
+    ['missing manifest', { VERIFIED_E2E_MANIFEST_SHA256: '' }, 'manifest digest'],
+    ['non-lowercase manifest', { VERIFIED_E2E_MANIFEST_SHA256: 'C'.repeat(64) }, 'manifest digest'],
+    ['provider tag mismatch', { VERIFIED_E2E_PROVIDER_TAG: 'e2e-provider-v9.9.9' }, 'provider tag mismatch'],
+    ['provider commit mismatch', { VERIFIED_E2E_PROVIDER_COMMIT: 'f'.repeat(40) }, 'provider commit mismatch'],
+    ['moved release tag', { GIT_STUB_RELEASE_COMMIT: 'e'.repeat(40) }, 'immutable release tag moved']
+  ])('fails closed on %s before any alias mutation', (_name, overrides, message) => {
+    const result = executeAliasShell(overrides);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain(message);
+    expect(result.mutations).toEqual([]);
   });
 });
 

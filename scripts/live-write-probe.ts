@@ -15,7 +15,7 @@
  *     npx --yes tsx scripts/live-write-probe.ts
  */
 import { AccessTokenProvider } from '../src/lib/postman/token-provider.js';
-import { AccessTokenGatewayClient, HttpError } from '@postman-cse/automation-core';
+import { AccessTokenGatewayClient, HttpError } from '@postman-cs/automation-core';
 import {
   PostmanGatewayAssetsClient,
   requirePublicMock

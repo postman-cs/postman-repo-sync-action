@@ -7,8 +7,13 @@ import {
   computeArtifactDigest,
   convertAndSplitAnyCollection,
   convertAndSplitCollection,
-  convertAndSplitV3Collection
+  convertAndSplitV3Collection,
+  convertV2CollectionToV3Collection
 } from '../src/postman-v3/converter.js';
+import {
+  PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+  PRIVATE_MOCK_AUTH_ROOT_TYPE
+} from '../src/lib/postman/private-mock-auth-script.js';
 
 const tmpDirs: string[] = [];
 function freshDir(): string {
@@ -72,6 +77,25 @@ const v2Collection = {
 };
 
 describe('convertAndSplitCollection (v2 -> canonical v3)', () => {
+  it('projects a populated Sync root event into the exact managed v3 hook', () => {
+    const v3 = convertV2CollectionToV3Collection({
+      ...v2Collection,
+      event: [{
+        listen: 'prerequest',
+        script: {
+          type: 'text/javascript',
+          exec: PRIVATE_MOCK_AUTH_ROOT_SCRIPT.split('\n')
+        }
+      }]
+    });
+
+    expect(v3.scripts).toEqual([{
+      type: PRIVATE_MOCK_AUTH_ROOT_TYPE,
+      code: PRIVATE_MOCK_AUTH_ROOT_SCRIPT,
+      language: 'text/javascript'
+    }]);
+  });
+
   it('emits the canonical v3 layout, never the legacy collection.yaml/type dialect', async () => {
     const dir = freshDir();
     await convertAndSplitCollection(v2Collection, dir);
