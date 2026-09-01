@@ -1,15 +1,15 @@
 # Credentials
 
-Use a [service-account](https://learning.postman.com/docs/administration/service-accounts/) Postman API key as the durable secret, then mint short-lived credentials in CI with `postman-cs/postman-resolve-service-token-action@v1`.
+Use a [service-account](https://learning.postman.com/docs/administration/service-accounts/) Postman API key as the durable secret, then mint short-lived credentials in CI with `postman-cs/postman-resolve-service-token-action@v2`.
 
 ```yaml
 - id: postman-auth
-  uses: postman-cs/postman-resolve-service-token-action@v1
+  uses: postman-cs/postman-resolve-service-token-action@v2
   with:
     postman-region: us
     postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
 
-- uses: postman-cs/postman-repo-sync-action@v1
+- uses: postman-cs/postman-repo-sync-action@v2
   with:
     project-name: core-payments
     postman-region: us
