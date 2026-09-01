@@ -312,7 +312,7 @@ describe('postman-repo-sync-action contract', () => {
     expect(readme).not.toMatch(/preview feature|public preview|private preview|in preview/i);
     expect(publicDocs).not.toMatch(/\binternal\b/i);
 
-    expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v1');
+    expect(credentials).toContain('postman-cs/postman-resolve-service-token-action@v2');
     expect(credentials).toContain('Legacy fallback');
     expect(credentials).toContain('non-service-account access token');
     expect(credentials).not.toContain('`off` skips');
