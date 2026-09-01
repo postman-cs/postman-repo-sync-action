@@ -11,6 +11,7 @@ import {
   renderCiWorkflowTemplate,
   renderGcWorkflowTemplate
 } from '../src/lib/ci-workflow-template.js';
+import { environmentFileName } from '../src/lib/postman/environment-yaml.js';
 
 type ExecPwshOptions = {
   cwd?: string;
@@ -533,6 +534,47 @@ describe('renderCiWorkflowTemplate', () => {
     expect(azureScriptBodies).not.toContain('$(POSTMAN_ENVIRONMENT_UID)');
   });
 
+  it('resolves the project-named environment before the exact legacy migration filename', () => {
+    const projectName = `Core API ${'a'.repeat(100)} #{raise 'boom'} $(bad)`;
+    const expectedFileName = environmentFileName(projectName, 'prod');
+    const rawFileName = `${projectName} - prod.environment.yaml`;
+    const options = { projectName };
+    const workflows = [
+      renderCiWorkflowTemplate(options),
+      getCiWorkflowTemplate('azure-devops', options),
+      getCiWorkflowTemplate('azure-devops', { ...options, runnerOs: 'windows' })
+    ];
+
+    for (const workflow of workflows) {
+      expect(workflow).toContain(expectedFileName);
+      expect(workflow).not.toContain(rawFileName);
+      expect(workflow).toContain('prod.postman_environment.json');
+      expect(workflow).not.toContain('environments.values.first if expected_environment.empty?');
+    }
+    expect(workflows[0]).toContain("expected_environment = 'Core API");
+    expect(workflows[1]).toContain("expected_environment = 'Core API");
+    expect(workflows[2]).toContain("$expectedEnvironment = 'Core API");
+  });
+
+  it('keeps Windows resource parsing scoped to environment entries with YAML apostrophe keys', () => {
+    const workflow = getCiWorkflowTemplate('azure-devops', {
+      projectName: "O'Brien #1",
+      runnerOs: 'windows'
+    });
+    const literalApostropheWorkflow = getCiWorkflowTemplate('azure-devops', {
+      projectName: "O''Brien",
+      runnerOs: 'windows'
+    });
+
+    expect(workflow).toContain("$expectedEnvironment = 'O''Brien #1 - prod.environment.yaml'");
+    expect(literalApostropheWorkflow).toContain(
+      "$expectedEnvironment = 'O''''Brien - prod.environment.yaml'"
+    );
+    expect(workflow).toContain("(collections|environments|specs):\\s*$");
+    expect(workflow).toContain('$rawKey.StartsWith("\'")');
+    expect(workflow).toContain('$rawKey.Substring(1, $rawKey.Length - 2) -replace "\'\'", "\'"');
+  });
+
   it('renders a native PowerShell Azure DevOps workflow for Windows runners', () => {
     const ciWorkflow = getCiWorkflowTemplate('azure-devops', {
       postmanCliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
@@ -665,7 +707,8 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const parsed = parse(
         getCiWorkflowTemplate('azure-devops', {
-          runnerOs: 'windows'
+          runnerOs: 'windows',
+          projectName: 'Core'
         })
       );
       const resolveStep = parsed.steps.find(
@@ -683,7 +726,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
             '    ../postman/collections/[Smoke] Core: smoke-uid',
             '    ../postman/collections/[Contract] Core: contract-uid',
             '  environments:',
-            '    ../postman/environments/prod.postman_environment.json: env-uid',
+            '    ../postman/environments/Core - prod.environment.yaml: env-uid',
             ''
           ].join('\n'),
           'utf8'

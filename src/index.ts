@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs';
 import * as path from 'node:path';
@@ -53,6 +54,13 @@ import {
   runCredentialPreflight,
   type PreflightMode
 } from './lib/postman/credential-identity.js';
+import {
+  assertUniqueEnvironmentFileNames,
+  environmentFileName,
+  environmentManifestRef,
+  legacyEnvironmentManifestRef,
+  serializeEnvironmentYaml
+} from './lib/postman/environment-yaml.js';
 import { AccessTokenGatewayClient, HttpError, retry } from '@postman-cs/automation-core';
 import { postmanRepoSyncActionContract } from './contracts.js';
 import { PostmanAssetsClient } from './lib/postman/postman-assets-client.js';
@@ -1052,21 +1060,96 @@ function matchesBaselineCollectionResource(filePath: string, assetProjectName: s
   );
 }
 
-function getEnvironmentUidsFromResources(
-  resourcesState: PostmanResourcesState | null
-): Record<string, string> {
-  const cloudEnvironments = resourcesState?.cloudResources?.environments;
-  if (!cloudEnvironments) {
-    return {};
+type EnvironmentManifestOwnership = {
+  currentRef: string;
+  legacyRef: string;
+  currentUid?: string;
+  legacyUid?: string;
+};
+
+function getEnvironmentOwnershipFromResources(
+  resourcesState: PostmanResourcesState | null,
+  artifactDir: string,
+  projectName: string,
+  environmentNames: Iterable<string>
+): Record<string, EnvironmentManifestOwnership> {
+  const result: Record<string, EnvironmentManifestOwnership> = {};
+  for (const environmentName of environmentNames) {
+    result[environmentName] = {
+      currentRef: canonicalizeRelativePath(environmentManifestRef(artifactDir, projectName, environmentName)),
+      legacyRef: canonicalizeRelativePath(legacyEnvironmentManifestRef(artifactDir, environmentName))
+    };
   }
 
-  return Object.fromEntries(
-    Object.entries(cloudEnvironments)
-      .map(([filePath, uid]) => {
-        const match = filePath.match(/\/environments\/(.+)\.postman_environment\.json$/);
-        return match ? [match[1], uid] : null;
-      })
-      .filter((entry): entry is [string, string] => Boolean(entry))
+  const cloudEnvironments = resourcesState?.cloudResources?.environments;
+  if (!cloudEnvironments) {
+    return result;
+  }
+
+  const normalizedEntries = Object.entries(cloudEnvironments).map(([filePath, uid]) => [
+    canonicalizeRelativePath(filePath),
+    uid
+  ] as const);
+  for (const environmentName of environmentNames) {
+    const ownership = result[environmentName];
+    const currentUids = new Set(
+      normalizedEntries
+        .filter(([filePath]) => filePath === ownership.currentRef)
+        .map(([, uid]) => uid)
+    );
+    const legacyUids = new Set(
+      normalizedEntries
+        .filter(([filePath]) => filePath === ownership.legacyRef)
+        .map(([, uid]) => uid)
+    );
+    if (currentUids.size > 1 || legacyUids.size > 1) {
+      throw new StateUnreadableError(
+        `.postman/resources.yaml maps environment "${environmentName}" artifact to multiple UIDs. Reconcile the entries before rerunning.`
+      );
+    }
+    ownership.currentUid = [...currentUids][0];
+    ownership.legacyUid = [...legacyUids][0];
+    const uids = new Set([ownership.currentUid, ownership.legacyUid].filter(Boolean));
+    if (uids.size > 1) {
+      throw new StateUnreadableError(
+        `.postman/resources.yaml maps canonical and legacy artifacts for environment "${environmentName}" to different UIDs. Reconcile the entries before rerunning.`
+      );
+    }
+  }
+  return result;
+}
+
+function getEnvironmentUidsFromOwnership(
+  ownership: Record<string, EnvironmentManifestOwnership>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [environmentName, entry] of Object.entries(ownership)) {
+    const uid = entry.currentUid || entry.legacyUid;
+    if (uid) result[environmentName] = uid;
+  }
+  return result;
+}
+
+function assertEnvironmentTargetAvailable(options: {
+  filePath: string;
+  currentUid?: string;
+}): void {
+  assertPathWithinCwd(options.filePath, 'environment target');
+  let stats: ReturnType<typeof lstatSync>;
+  try {
+    stats = lstatSync(options.filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new StateUnreadableError(
+      `${options.filePath} exists but is not a regular owned environment file. Remove it before rerunning; no cloud environment was changed.`
+    );
+  }
+  if (options.currentUid) return;
+  throw new StateUnreadableError(
+    `${options.filePath} exists but is not owned by .postman/resources.yaml. Adopt its UID into the manifest or remove the file before rerunning; no cloud environment was changed.`
   );
 }
 
@@ -1602,8 +1685,38 @@ async function upsertEnvironments(
   resourcesState: PostmanResourcesState | null,
   assetMarker?: AssetMarker
 ): Promise<Record<string, string>> {
+  const environmentNames = new Set([
+    ...inputs.environments,
+    ...Object.keys(inputs.environmentUids)
+  ]);
+  assertUniqueEnvironmentFileNames(inputs.projectName, environmentNames);
+  const trackedOwnership = getEnvironmentOwnershipFromResources(
+    resourcesState,
+    inputs.artifactDir,
+    inputs.projectName,
+    environmentNames
+  );
+  const trackedUids = getEnvironmentUidsFromOwnership(trackedOwnership);
+  for (const [environmentName, explicitUid] of Object.entries(inputs.environmentUids)) {
+    const trackedUid = trackedUids[environmentName];
+    if (trackedUid && trackedUid !== explicitUid) {
+      throw new StateUnreadableError(
+        `.postman/resources.yaml and environment-uids-json map environment "${environmentName}" to different UIDs. Reconcile the inputs before rerunning.`
+      );
+    }
+  }
+  for (const environmentName of environmentNames) {
+    assertEnvironmentTargetAvailable({
+      filePath: path.join(
+        inputs.artifactDir,
+        'environments',
+        environmentFileName(inputs.projectName, environmentName)
+      ),
+      currentUid: trackedOwnership[environmentName].currentUid
+    });
+  }
   const envUids = {
-    ...getEnvironmentUidsFromResources(resourcesState),
+    ...trackedUids,
     ...inputs.environmentUids
   };
   if (!inputs.workspaceId) {
@@ -1953,12 +2066,14 @@ function buildResourcesManifest(
   collectionMap: Record<string, string>,
   envMap: Record<string, string>,
   artifactDir: string,
+  projectName: string,
   localSpecRefs: string[],
   mappedSpecRef?: string,
   specId?: string,
   existingSpecs?: CloudResourceMap,
   priorState?: PostmanResourcesState | null,
-  preserveGeneratedAssets = false
+  preserveGeneratedAssets = false,
+  preservePriorEnvironmentAssets = preserveGeneratedAssets
 ): string {
   // Merge-preserving writer (state v2): round-trip every unknown field from
   // the prior tracked state instead of rebuilding the document from scratch,
@@ -1986,17 +2101,28 @@ function buildResourcesManifest(
   }
 
   // Environments
-  const priorEnvironmentMap = preserveGeneratedAssets
+  const priorEnvironmentMap = preservePriorEnvironmentAssets
     ? { ...(priorState?.cloudResources?.environments ?? {}) }
     : {};
   const envEntries = Object.entries(envMap);
+  for (const [envName] of envEntries) {
+    const replacedRefs = new Set([
+      canonicalizeRelativePath(environmentManifestRef(artifactDir, projectName, envName)),
+      canonicalizeRelativePath(legacyEnvironmentManifestRef(artifactDir, envName))
+    ]);
+    for (const filePath of Object.keys(priorEnvironmentMap)) {
+      if (replacedRefs.has(canonicalizeRelativePath(filePath))) {
+        delete priorEnvironmentMap[filePath];
+      }
+    }
+  }
   if (Object.keys(priorEnvironmentMap).length > 0 || envEntries.length > 0) {
     cloudResources.environments = priorEnvironmentMap;
   }
   if (envEntries.length > 0) {
     cloudResources.environments ??= {};
     for (const [envName, envUid] of envEntries) {
-      cloudResources.environments[`../${artifactDir}/environments/${envName}.postman_environment.json`] = envUid;
+      cloudResources.environments[environmentManifestRef(artifactDir, projectName, envName)] = envUid;
     }
   }
 
@@ -3001,6 +3127,7 @@ async function exportArtifacts(
       {},
       {},
       inputs.artifactDir,
+      inputs.projectName,
       discoveredSpecs.map((spec) => spec.configRelativePath),
       mappedSpecCloudKey,
       inputs.specId || undefined,
@@ -3075,15 +3202,33 @@ async function exportArtifacts(
   }
 
   const environmentSpecs = [
-    ...Object.entries(envUids).map(([envName, envUid]) => ({
-      envName,
-      envUid,
-      filePath: `${environmentsDir}/${envName}.postman_environment.json`
-    })),
+    ...Object.entries(envUids).map(([envName, envUid]) => {
+      const ownership = getEnvironmentOwnershipFromResources(
+        options.priorState ?? null,
+        inputs.artifactDir,
+        inputs.projectName,
+        [envName]
+      )[envName];
+      return {
+        kind: 'environment' as const,
+        envName,
+        envUid,
+        filePath: `${environmentsDir}/${environmentFileName(inputs.projectName, envName)}`,
+        currentUid: ownership.currentUid,
+        legacyUid: ownership.legacyUid,
+        legacyFilePath: ownership.legacyUid === envUid
+          ? `${environmentsDir}/${envName}.postman_environment.json`
+          : undefined
+      };
+    }),
     ...(options.mockEnvironmentUid ? [{
+      kind: 'mock' as const,
       envName: 'manual-validation',
       envUid: options.mockEnvironmentUid,
-      filePath: `${mocksDir}/manual-validation.postman_environment.json`
+      filePath: `${mocksDir}/manual-validation.postman_environment.json`,
+      currentUid: undefined,
+      legacyUid: undefined,
+      legacyFilePath: undefined
     }] : [])
   ];
   const environmentStartedAt = Date.now();
@@ -3103,15 +3248,24 @@ async function exportArtifacts(
       `environment-artifact-acquisition count=${environmentSpecs.length} width=${ARTIFACT_ACQUISITION_WIDTH} ms=${Date.now() - environmentStartedAt} status=${environmentStatus}`
     );
   }
+  const legacyEnvironmentCleanupPaths: string[] = [];
   for (const [index, spec] of environmentSpecs.entries()) {
-    assertPathWithinCwd(spec.filePath, 'environment target');
-    writeJsonFile(
+    if (spec.kind === 'mock') {
+      assertPathWithinCwd(spec.filePath, 'environment target');
+      writeJsonFile(spec.filePath, sanitizeMockEnvironmentArtifact(environmentPayloads[index]), true);
+      continue;
+    }
+    assertEnvironmentTargetAvailable({
+      filePath: spec.filePath,
+      currentUid: spec.currentUid
+    });
+    writeFileSync(
       spec.filePath,
-      spec.envName === 'manual-validation'
-        ? sanitizeMockEnvironmentArtifact(environmentPayloads[index])
-        : environmentPayloads[index],
-      true
+      serializeEnvironmentYaml(environmentPayloads[index], `${inputs.projectName} - ${spec.envName}`)
     );
+    if (spec.legacyFilePath) {
+      legacyEnvironmentCleanupPaths.push(spec.legacyFilePath);
+    }
   }
 
   assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
@@ -3120,12 +3274,23 @@ async function exportArtifacts(
     manifestCollections,
     envUids,
     inputs.artifactDir,
+    inputs.projectName,
     discoveredSpecs.map((spec) => spec.configRelativePath),
     mappedSpecCloudKey,
     inputs.specId || undefined,
     options.existingSpecs,
-    options.priorState
+    options.priorState,
+    false,
+    preservePriorWorkspaceResources
   ));
+  for (const legacyFilePath of legacyEnvironmentCleanupPaths) {
+    assertPathWithinCwd(legacyFilePath, 'legacy environment target');
+    try {
+      unlinkSync(legacyFilePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
 
   // Only reconcile when a mapped spec exists and at least one collection was
   // actually exported. Env-only / zero-collection runs must leave prior bytes alone.
@@ -3154,6 +3319,7 @@ function renderCiWorkflow(inputs: ResolvedInputs, privateMockAuth: boolean): str
   }
   if (inputs.provider === 'azure-devops') {
     return getCiWorkflowTemplate(inputs.provider, {
+      projectName: inputs.projectName,
       postmanCliInstallUrl: inputs.postmanCliInstallUrl,
       postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
       runnerOs: inputs.ciRunnerOs,
@@ -3162,6 +3328,7 @@ function renderCiWorkflow(inputs: ResolvedInputs, privateMockAuth: boolean): str
     });
   }
   return renderCiWorkflowTemplate({
+    projectName: inputs.projectName,
     postmanCliInstallUrl: inputs.postmanCliInstallUrl,
     postmanCliWindowsInstallUrl: inputs.postmanCliWindowsInstallUrl,
     runnerOs: inputs.ciRunnerOs,
