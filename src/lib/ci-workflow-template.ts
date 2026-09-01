@@ -1,4 +1,5 @@
 import { POSTMAN_ENDPOINT_PROFILES } from './postman/base-urls.js';
+import { environmentFileName } from './postman/environment-yaml.js';
 import type { GitProvider } from './repo/context.js';
 
 export const DEFAULT_POSTMAN_CLI_INSTALL_URL = POSTMAN_ENDPOINT_PROFILES.prod.cliInstallUrl;
@@ -8,6 +9,7 @@ export const DEFAULT_POSTMAN_CLI_WINDOWS_INSTALL_URL =
 export type CiRunnerOs = 'linux' | 'windows';
 
 type CiWorkflowTemplateOptions = {
+  projectName?: string;
   postmanCliInstallUrl?: string;
   postmanCliWindowsInstallUrl?: string;
   postmanRegion?: string;
@@ -50,6 +52,19 @@ function resolveCiRunnerOs(runnerOsOption: string | undefined): CiRunnerOs {
   throw new Error('ci-runner-os must be one of: linux, windows; got: ' + runnerOs);
 }
 
+function expectedEnvironmentFileName(projectName: string | undefined): string {
+  const name = String(projectName || '').trim();
+  return name ? environmentFileName(name, 'prod') : '';
+}
+
+function rubyStringLiteral(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function powershellStringLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 export function renderCiWorkflowTemplate(options: CiWorkflowTemplateOptions = {}): string {
   const runnerOs = resolveCiRunnerOs(options.runnerOs);
   if (runnerOs === 'windows') {
@@ -59,14 +74,21 @@ export function renderCiWorkflowTemplate(options: CiWorkflowTemplateOptions = {}
     String(options.postmanCliInstallUrl || '').trim() || DEFAULT_POSTMAN_CLI_INSTALL_URL;
   const installUrl = validateHttpsInstallUrl(rawUrl);
   const postmanRegion = resolvePostmanRegion(options.postmanRegion);
-  return buildCiWorkflowLines(installUrl, postmanRegion, options.privateMockAuth === true).join('\n');
+  return buildCiWorkflowLines(
+    installUrl,
+    postmanRegion,
+    options.privateMockAuth === true,
+    options.projectName
+  ).join('\n');
 }
 
 function buildCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  projectName?: string
 ): string[] {
+  const expectedEnvironment = expectedEnvironmentFileName(projectName);
   return [
   'name: CI/CD Pipeline',
   'on:',
@@ -103,11 +125,14 @@ function buildCiWorkflowLines(
   "          environments = cloud.fetch('environments', {})",
   "          smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
   "          contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
-  "          environment = environments.find { |path, _| path.end_with?('/prod.postman_environment.json') }&.last || environments.values.first",
+  `          expected_environment = ${rubyStringLiteral(expectedEnvironment)}`,
+  "          environment = environments.find { |path, _| File.basename(path) == expected_environment }&.last unless expected_environment.empty?",
+  "          environment ||= environments.find { |path, _| File.basename(path) == 'prod.postman_environment.json' }&.last",
+  ...(expectedEnvironment ? [] : ["          environment ||= environments.values.first if expected_environment.empty?"]),
   "          missing = []",
-  "          missing << 'smoke collection' unless smoke",
-  "          missing << 'contract collection' unless contract",
-  "          missing << 'environment' unless environment",
+  "          missing << '[Smoke] collection' unless smoke",
+  "          missing << '[Contract] collection' unless contract",
+  "          missing << (expected_environment.empty? ? 'environment' : expected_environment) unless environment",
   "          abort(\"Missing Postman resource IDs in .postman/resources.yaml: #{missing.join(', ')}\") unless missing.empty?",
   "          File.open(ENV.fetch('GITHUB_ENV'), 'a') do |file|",
   "            file.puts(\"POSTMAN_SMOKE_COLLECTION_UID=#{smoke}\")",
@@ -233,8 +258,10 @@ function buildAdoWindowsCollectionRunLines(
 function buildAdoWindowsCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  projectName?: string
 ): string[] {
+  const expectedEnvironment = expectedEnvironmentFileName(projectName);
   return [
     'trigger:',
     '  branches:',
@@ -279,22 +306,34 @@ function buildAdoWindowsCiWorkflowLines(
     "      $contract = ''",
     "      $environment = ''",
     "      $fallbackEnvironment = ''",
+    `      $expectedEnvironment = ${powershellStringLiteral(expectedEnvironment)}`,
     "      foreach ($line in Get-Content -LiteralPath '.postman/resources.yaml') {",
-    "        if ($line -match '^  (collections|environments):\\s*$') { $section = $Matches[1]; continue }",
+    "        if ($line -match '^  (collections|environments|specs):\\s*$') { $section = $Matches[1]; continue }",
     "        if ($line -notmatch '^    (.+?):\\s+(.+?)\\s*$') { continue }",
-    "        $key = $Matches[1].Trim().Trim(\"'\").Trim('\"')",
+    "        $rawKey = $Matches[1].Trim()",
+    "        if ($rawKey.StartsWith(\"'\") -and $rawKey.EndsWith(\"'\")) {",
+    "          $key = $rawKey.Substring(1, $rawKey.Length - 2) -replace \"''\", \"'\"",
+    "        } elseif ($rawKey.StartsWith('\"') -and $rawKey.EndsWith('\"')) {",
+    "          $key = $rawKey.Substring(1, $rawKey.Length - 2)",
+    "        } else {",
+    "          $key = $rawKey",
+    "        }",
     "        $value = $Matches[2].Trim().Trim(\"'\").Trim('\"')",
     "        if ($section -eq 'collections' -and $key -match '\\[Smoke\\]') { $smoke = $value }",
     "        if ($section -eq 'collections' -and $key -match '\\[Contract\\]') { $contract = $value }",
     "        if ($section -eq 'environments') {",
     "          if ([string]::IsNullOrWhiteSpace($fallbackEnvironment)) { $fallbackEnvironment = $value }",
-    "          if ($key -match 'prod\\.postman_environment\\.json$') { $environment = $value }",
+    "          $fileName = [IO.Path]::GetFileName($key)",
+    "          if ($fileName -eq $expectedEnvironment) { $environment = $value }",
+    "          if ([string]::IsNullOrWhiteSpace($environment) -and $fileName -eq 'prod.postman_environment.json') { $environment = $value }",
     '        }',
     '      }',
-    '      if ([string]::IsNullOrWhiteSpace($environment)) { $environment = $fallbackEnvironment }',
-    "      if ([string]::IsNullOrWhiteSpace($smoke)) { throw 'Missing smoke collection UID in .postman/resources.yaml' }",
-    "      if ([string]::IsNullOrWhiteSpace($contract)) { throw 'Missing contract collection UID in .postman/resources.yaml' }",
-    "      if ([string]::IsNullOrWhiteSpace($environment)) { throw 'Missing environment UID in .postman/resources.yaml' }",
+    '      if ([string]::IsNullOrWhiteSpace($environment) -and [string]::IsNullOrWhiteSpace($expectedEnvironment)) { $environment = $fallbackEnvironment }',
+    "      $missing = @()",
+    "      if ([string]::IsNullOrWhiteSpace($smoke)) { $missing += '[Smoke] collection' }",
+    "      if ([string]::IsNullOrWhiteSpace($contract)) { $missing += '[Contract] collection' }",
+    "      if ([string]::IsNullOrWhiteSpace($environment)) { $missing += $(if ($expectedEnvironment) { $expectedEnvironment } else { 'environment' }) }",
+    "      if ($missing.Count) { throw ('Missing Postman resource IDs in .postman/resources.yaml: ' + ($missing -join ', ')) }",
     '      Write-Host "##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]$smoke"',
     '      Write-Host "##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]$contract"',
     '      Write-Host "##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]$environment"',
@@ -328,8 +367,10 @@ function buildAdoWindowsCiWorkflowLines(
 function buildAdoCiWorkflowLines(
   installUrl: string,
   postmanRegion: string,
-  privateMockAuth: boolean
+  privateMockAuth: boolean,
+  projectName?: string
 ): string[] {
+  const expectedEnvironment = expectedEnvironmentFileName(projectName);
   return [
   'trigger:',
   '  branches:',
@@ -357,16 +398,27 @@ function buildAdoCiWorkflowLines(
   '    env:',
   '      POSTMAN_API_KEY: $(POSTMAN_API_KEY)',
   '  - script: |',
-  "      SMOKE=$(grep '\\[Smoke\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      CONTRACT=$(grep '\\[Contract\\]' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      ENV=$(grep 'prod\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')",
-  "      ENV=${ENV:-$(grep '\\.postman_environment\\.json' .postman/resources.yaml | grep -v '^ *-' | head -1 | awk -F': ' '{print $NF}')}",
-  '      [ -n "$SMOKE" ] || { echo "Missing smoke collection UID in .postman/resources.yaml"; exit 1; }',
-  '      [ -n "$CONTRACT" ] || { echo "Missing contract collection UID in .postman/resources.yaml"; exit 1; }',
-  '      [ -n "$ENV" ] || { echo "Missing environment UID in .postman/resources.yaml"; exit 1; }',
-  '      echo "##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]$SMOKE"',
-  '      echo "##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]$CONTRACT"',
-  '      echo "##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]$ENV"',
+  "      ruby <<'RUBY'",
+  "      require 'yaml'",
+  "      config = YAML.load_file('.postman/resources.yaml') || {}",
+  "      cloud = config.fetch('canonical', config.fetch('cloudResources', {}))",
+  "      collections = cloud.fetch('collections', {})",
+  "      environments = cloud.fetch('environments', {})",
+  "      smoke = collections.find { |path, _| path.include?('[Smoke]') }&.last",
+  "      contract = collections.find { |path, _| path.include?('[Contract]') }&.last",
+  `      expected_environment = ${rubyStringLiteral(expectedEnvironment)}`,
+  "      environment = environments.find { |path, _| File.basename(path) == expected_environment }&.last unless expected_environment.empty?",
+  "      environment ||= environments.find { |path, _| File.basename(path) == 'prod.postman_environment.json' }&.last",
+  ...(expectedEnvironment ? [] : ["      environment ||= environments.values.first if expected_environment.empty?"]),
+  "      missing = []",
+  "      missing << '[Smoke] collection' unless smoke",
+  "      missing << '[Contract] collection' unless contract",
+  "      missing << (expected_environment.empty? ? 'environment' : expected_environment) unless environment",
+  "      abort(\"Missing Postman resource IDs in .postman/resources.yaml: #{missing.join(', ')}\") unless missing.empty?",
+  "      puts \"##vso[task.setvariable variable=POSTMAN_SMOKE_COLLECTION_UID]#{smoke}\"",
+  "      puts \"##vso[task.setvariable variable=POSTMAN_CONTRACT_COLLECTION_UID]#{contract}\"",
+  "      puts \"##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]#{environment}\"",
+  '      RUBY',
   '    displayName: Resolve Postman Resource IDs',
   '  - script: |',
   '      mkdir -p "$(Agent.TempDirectory)/postman-ssl"',
@@ -532,8 +584,8 @@ export function getCiWorkflowTemplate(
     const installUrl = validateHttpsInstallUrl(rawUrl);
     const privateMockAuth = options.privateMockAuth === true;
     return (runnerOs === 'windows'
-      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
-      : buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth)
+      ? buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAuth, options.projectName)
+      : buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth, options.projectName)
     ).join('\n');
   }
   return renderCiWorkflowTemplate(options);

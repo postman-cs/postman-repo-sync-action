@@ -755,14 +755,16 @@ describe('repo sync action', () => {
           '../postman/collections/[Contract] core-payments': 'col-contract'
         },
         environments: {
-          '../postman/environments/prod.postman_environment.json': 'env-prod',
-          '../postman/environments/stage.postman_environment.json': 'env-stage'
+          '../postman/environments/core-payments - prod.environment.yaml': 'env-prod',
+          '../postman/environments/core-payments - stage.environment.yaml': 'env-stage'
         },
         specs: {
           '../packages/sdk/openapi.json': 'spec-123'
         }
       }
     });
+    expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(true);
+    expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
     expect(workflowsYaml).toEqual({
       workflows: {
         syncSpecToCollection: [
@@ -1166,10 +1168,35 @@ describe('repo sync action', () => {
       pending.get('env-prod')!.resolve({ values: [{ key: 'prod', value: 'one' }] });
       pending.get('env-mock')!.resolve({ values: [{ key: 'mock', value: 'three' }] });
       await sync;
-      expect(readFileSync('postman/environments/prod.postman_environment.json', 'utf8')).toContain('prod');
-      expect(readFileSync('postman/environments/stage.postman_environment.json', 'utf8')).toContain('stage');
+      expect(readFileSync('postman/environments/core-payments - prod.environment.yaml', 'utf8')).toContain('prod');
+      expect(readFileSync('postman/environments/core-payments - stage.environment.yaml', 'utf8')).toContain('stage');
+      expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
       expect(readFileSync('postman/mocks/manual-validation.postman_environment.json', 'utf8')).toContain('mock');
       expect(infos.some((line) => /environment-artifact-acquisition.*count=3.*width=2.*ms=.*status=success/.test(line))).toBe(true);
+    });
+
+    it.skipIf(process.platform === 'win32')('rejects an occupied canonical environment symlink before cloud mutation', async () => {
+      mkdirSync('postman/environments', { recursive: true });
+      const outside = mkdtempSync(join(tmpdir(), 'repo-sync-environment-preflight-'));
+      symlinkSync(join(outside, 'dangling.environment.yaml'), 'postman/environments/core-payments - prod.environment.yaml');
+      const commitAndPush = vi.fn();
+      const postman = createExportPostmanStub();
+
+      await expect(runRepoSync(createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false
+      }), {
+        ...deps(postman),
+        repoMutation: { commitAndPush } as unknown as NonNullable<RepoSyncDependencies['repoMutation']>
+      })).rejects.toThrow(/CONTRACT_STATE_UNREADABLE|environment target|owned|regular/i);
+
+      expect(postman.createEnvironment).not.toHaveBeenCalled();
+      expect(postman.updateEnvironment).not.toHaveBeenCalled();
+      expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+      expect(postman.getEnvironment).not.toHaveBeenCalled();
+      expect(existsSync('.postman/resources.yaml')).toBe(false);
+      expect(commitAndPush).not.toHaveBeenCalled();
+      rmSync(outside, { recursive: true, force: true });
     });
 
     it.skipIf(process.platform === 'win32')('rechecks environment targets after acquisition before a swapped symlink can receive a write', async () => {
@@ -1188,7 +1215,7 @@ describe('repo sync action', () => {
 
       await vi.waitFor(() => expect(postman.getEnvironment).toHaveBeenCalledTimes(2));
       mkdirSync('postman/environments', { recursive: true });
-      symlinkSync(outside, 'postman/environments/prod.postman_environment.json');
+      symlinkSync(outside, 'postman/environments/core-payments - prod.environment.yaml');
       prod.resolve({ values: [{ key: 'prod', value: 'one' }] });
       stage.resolve({ values: [{ key: 'stage', value: 'two' }] });
 
@@ -3227,6 +3254,221 @@ describe('repo sync action', () => {
     });
   });
 
+  it('removes only manifest-owned legacy environment JSON after writing canonical YAML', async () => {
+    mkdirSync('.postman', { recursive: true });
+    mkdirSync('postman/environments', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'workspace:',
+        '  id: ws-123',
+        'cloudResources:',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-prod',
+        ''
+      ].join('\n')
+    );
+    writeFileSync('postman/environments/prod.postman_environment.json', '{"name":"old prod"}');
+    writeFileSync('postman/environments/stage.postman_environment.json', '{"name":"user stage"}');
+    const postman = createExportPostmanStub();
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod', 'stage'],
+        environmentUids: { stage: 'env-stage' },
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.canonical?.environments).toEqual({
+      '../postman/environments/core-payments - prod.environment.yaml': 'env-prod',
+      '../postman/environments/core-payments - stage.environment.yaml': 'env-stage'
+    });
+    expect(existsSync('postman/environments/core-payments - prod.environment.yaml')).toBe(true);
+    expect(existsSync('postman/environments/core-payments - stage.environment.yaml')).toBe(true);
+    expect(existsSync('postman/environments/prod.postman_environment.json')).toBe(false);
+    expect(readFileSync('postman/environments/stage.postman_environment.json', 'utf8')).toContain('user stage');
+  });
+
+  it('keeps manifest ownership for omitted canonical environment YAML', async () => {
+    mkdirSync('.postman', { recursive: true });
+    mkdirSync('postman/environments', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'workspace:',
+        '  id: ws-123',
+        'cloudResources:',
+        '  environments:',
+        '    ../postman/environments/core-payments - prod.environment.yaml: env-prod',
+        '    ../postman/environments/core-payments - stage.environment.yaml: env-stage',
+        ''
+      ].join('\n')
+    );
+    writeFileSync(
+      'postman/environments/core-payments - prod.environment.yaml',
+      'name: core-payments - prod\nvalues: []\n'
+    );
+    writeFileSync(
+      'postman/environments/core-payments - stage.environment.yaml',
+      'name: core-payments - stage\nvalues: []\n'
+    );
+    const postman = createExportPostmanStub();
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+    expect(resources.canonical?.environments).toEqual({
+      '../postman/environments/core-payments - prod.environment.yaml': 'env-prod',
+      '../postman/environments/core-payments - stage.environment.yaml': 'env-stage'
+    });
+    expect(readFileSync('postman/environments/core-payments - stage.environment.yaml', 'utf8')).toBe(
+      'name: core-payments - stage\nvalues: []\n'
+    );
+    expect(postman.getEnvironment).toHaveBeenCalledWith('env-prod');
+    expect(postman.getEnvironment).not.toHaveBeenCalledWith('env-stage');
+  });
+
+  it('does not treat legacy manifest ownership as ownership of an occupied canonical YAML file', async () => {
+    mkdirSync('.postman', { recursive: true });
+    mkdirSync('postman/environments', { recursive: true });
+    writeFileSync(
+      '.postman/resources.yaml',
+      [
+        'workspace:',
+        '  id: ws-123',
+        'cloudResources:',
+        '  environments:',
+        '    ../postman/environments/prod.postman_environment.json: env-prod',
+        ''
+      ].join('\n')
+    );
+    writeFileSync(
+      'postman/environments/core-payments - prod.environment.yaml',
+      'name: core-payments - prod\nvalues: []\n'
+    );
+    const commitAndPush = vi.fn();
+    const postman = createExportPostmanStub();
+
+    await expect(
+      runRepoSync(createInputs({
+        environments: ['prod'],
+        generateCiWorkflow: false
+      }), {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        internalIntegration: {
+          associateSystemEnvironments: vi.fn().mockResolvedValue(undefined),
+          connectWorkspaceToRepository: vi.fn().mockResolvedValue(undefined),
+          findWorkspaceForRepo: vi.fn().mockResolvedValue({ state: 'free' })
+        },
+        repoMutation: { commitAndPush } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      })
+    ).rejects.toThrow(/CONTRACT_STATE_UNREADABLE|not owned/);
+
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.getEnvironment).not.toHaveBeenCalled();
+    expect(commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('writes a configured manual-validation environment as normal environment YAML', async () => {
+    const postman = {
+      ...createExportPostmanStub(),
+      createEnvironment: vi.fn().mockResolvedValue('env-manual'),
+      getEnvironment: vi.fn().mockResolvedValue({
+        values: [{ key: 'manual', value: 'configured' }]
+      })
+    };
+
+    await runRepoSync(
+      createInputs({
+        environments: ['manual-validation'],
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        mockEnvironmentEnabled: false
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        github: {
+          getRepositoryVariable: vi.fn().mockResolvedValue(''),
+          setRepositoryVariable: vi.fn().mockResolvedValue(undefined)
+        },
+        repoMutation: {
+          commitAndPush: vi.fn().mockResolvedValue({
+            commitSha: '',
+            pushed: false,
+            resolvedCurrentRef: 'feature/repo-sync'
+          })
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    const environment = loadYaml(
+      readFileSync('postman/environments/core-payments - manual-validation.environment.yaml', 'utf8')
+    ) as Record<string, unknown>;
+    const resources = loadYaml(readFileSync('.postman/resources.yaml', 'utf8')) as ResourcesYamlShape;
+
+    expect(environment).toEqual({
+      name: 'core-payments - manual-validation',
+      values: [{ key: 'manual', value: 'configured' }]
+    });
+    expect(resources.canonical?.environments).toEqual({
+      '../postman/environments/core-payments - manual-validation.environment.yaml': 'env-manual'
+    });
+  });
+
   it('skips writing a CI workflow when generation is disabled', async () => {
     const postman = {
       createEnvironment: vi.fn().mockResolvedValue('env-prod'),
@@ -4238,7 +4480,7 @@ describe('state ownership persistence', () => {
       '../postman/collections/[Contract] core-payments': 'col-contract'
     });
     expect(resources.canonical?.environments).toMatchObject({
-      '../postman/environments/prod.postman_environment.json': 'env-prod'
+      '../postman/environments/core-payments - prod.environment.yaml': 'env-prod'
     });
   });
 
