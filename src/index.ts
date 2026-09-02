@@ -102,7 +102,7 @@ import { activateWorkingDirectory } from './lib/working-directory.js';
 type EnvironmentValues = {
   key: string;
   value: string;
-  type: string;
+  type: 'default' | 'secret';
   enabled?: boolean;
 }[];
 
@@ -123,6 +123,8 @@ export interface ResolvedInputs {
   specSyncMode: 'update' | 'version';
   releaseLabel?: string;
   environments: string[];
+  /** Complete desired values for rich entries in environments-json, keyed by slug. */
+  environmentDefinitions?: Record<string, EnvironmentValues>;
   repoUrl: string;
   integrationBackend: string;
   workspaceLinkEnabled: boolean;
@@ -471,13 +473,130 @@ function parseJsonMap(raw: string): Record<string, string> {
   );
 }
 
-function parseJsonArray(raw: string): string[] {
-  if (!raw.trim()) return [];
-  const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error('Expected JSON array');
+function parseEnvironmentInputs(raw: string): {
+  environments: string[];
+  definitions: Record<string, EnvironmentValues>;
+} {
+  if (!raw.trim()) return { environments: [], definitions: Object.create(null) };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error('environments-json must contain valid JSON');
   }
-  return parsed.map((entry) => String(entry));
+  if (!Array.isArray(parsed)) {
+    throw new Error('environments-json must be a JSON array');
+  }
+
+  const environments: string[] = [];
+  const definitions: Record<string, EnvironmentValues> = Object.create(null);
+  const seen = new Map<string, boolean>();
+
+  parsed.forEach((entry, environmentIndex) => {
+    const label = `environments-json[${environmentIndex}]`;
+    let slug: string;
+    let rich = false;
+
+    if (typeof entry === 'string') {
+      slug = entry;
+    } else {
+      if (!isPlainObject(entry)) {
+        throw new Error(`${label} must be a slug string or an environment definition`);
+      }
+      const unknownFields = Object.keys(entry).filter((key) => key !== 'slug' && key !== 'values');
+      if (unknownFields.length > 0) {
+        throw new Error(`${label} contains unsupported field "${unknownFields[0]}"`);
+      }
+      if (typeof entry.slug !== 'string' || !Array.isArray(entry.values)) {
+        throw new Error(`${label} must contain a string slug and a values array`);
+      }
+
+      slug = entry.slug;
+      rich = true;
+      const keys = new Set<string>();
+      definitions[slug] = entry.values.map((value, valueIndex) => {
+        const valueLabel = `${label}.values[${valueIndex}]`;
+        if (!isPlainObject(value)) {
+          throw new Error(`${valueLabel} must be an object`);
+        }
+        const unknownValueFields = Object.keys(value).filter(
+          (key) => !['key', 'value', 'type', 'enabled'].includes(key)
+        );
+        if (unknownValueFields.length > 0) {
+          throw new Error(`${valueLabel} contains unsupported field "${unknownValueFields[0]}"`);
+        }
+        if (typeof value.key !== 'string' || !value.key.trim() || value.key !== value.key.trim()) {
+          throw new Error(`${valueLabel}.key must be a non-empty string without surrounding whitespace`);
+        }
+        if (value.key === 'x-pm-onboarding') {
+          throw new Error(`${valueLabel}.key is reserved by repo-sync`);
+        }
+        if (keys.has(value.key)) {
+          throw new Error(`${label} contains duplicate variable key "${value.key}"`);
+        }
+        keys.add(value.key);
+        if (value.value !== undefined && typeof value.value !== 'string') {
+          throw new Error(`${valueLabel}.value must be a string when provided`);
+        }
+        if (value.type !== undefined && value.type !== 'default' && value.type !== 'secret') {
+          throw new Error(`${valueLabel}.type must be "default" or "secret"`);
+        }
+        if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+          throw new Error(`${valueLabel}.enabled must be a boolean when provided`);
+        }
+        const type = value.type ?? 'default';
+        const normalizedValue = value.value ?? '';
+        if (type === 'secret' && normalizedValue) {
+          throw new Error(`${valueLabel} cannot contain a populated secret value; inject it at runtime`);
+        }
+        return { key: value.key, value: normalizedValue, type, enabled: value.enabled ?? true };
+      });
+    }
+
+    if (rich && !/^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/.test(slug)) {
+      throw new Error(`${label} rich slug must use only letters, numbers, dots, hyphens, or underscores`);
+    }
+    if (rich && Object.prototype.hasOwnProperty.call(Object.prototype, slug)) {
+      throw new Error(`${label} rich slug conflicts with a reserved object property`);
+    }
+    if (rich && /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(slug)) {
+      throw new Error(`${label} rich slug conflicts with a Windows device name`);
+    }
+    if (!rich && !slug.trim()) {
+      throw new Error(`${label} slug must be a non-empty string`);
+    }
+    const priorWasRich = seen.get(slug);
+    if (priorWasRich !== undefined && (rich || priorWasRich)) {
+      throw new Error(`environments-json contains duplicate slug "${slug}"`);
+    }
+    if (priorWasRich === undefined) seen.set(slug, rich);
+    environments.push(slug);
+  });
+
+  return { environments, definitions };
+}
+
+function normalizeProgrammaticEnvironmentDefinitions(inputs: ResolvedInputs): ResolvedInputs {
+  const definitions = inputs.environmentDefinitions;
+  if (!definitions) return inputs;
+  const prototype = Object.getPrototypeOf(definitions);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error('environmentDefinitions must be a plain object');
+  }
+
+  const entries = inputs.environments.map((slug) =>
+    Object.prototype.hasOwnProperty.call(definitions, slug)
+      ? { slug, values: definitions[slug] }
+      : slug
+  );
+  let raw: string;
+  try {
+    raw = JSON.stringify(entries);
+  } catch {
+    throw new Error('environmentDefinitions must contain JSON-serializable values');
+  }
+  const parsed = parseEnvironmentInputs(raw);
+  return { ...inputs, environments: parsed.environments, environmentDefinitions: parsed.definitions };
 }
 
 function readInput(
@@ -605,7 +724,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     env
   );
 
-  const environments = parseJsonArray(getInput('environments-json', env) || '["prod"]');
+  const parsedEnvironments = parseEnvironmentInputs(getInput('environments-json', env) || '["prod"]');
   const secretsResolverProvider = parseSecretsResolverProvider(getInput('secrets-resolver', env));
   const systemEnvMap = parseJsonMap(getInput('system-env-map-json', env) || '{}');
   const environmentUids = parseJsonMap(getInput('environment-uids-json', env) || '{}');
@@ -644,7 +763,8 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     secretsResolverProvider,
     specSyncMode: normalizeSpecSyncMode(getInput('spec-sync-mode', env) || 'update'),
     releaseLabel: normalizeReleaseLabel(getInput('release-label', env)) || undefined,
-    environments: environments.length > 0 ? environments : ['prod'],
+    environments: parsedEnvironments.environments.length > 0 ? parsedEnvironments.environments : ['prod'],
+    environmentDefinitions: parsedEnvironments.definitions,
     repoUrl: repoContext.repoUrl || '',
     integrationBackend: getInput('integration-backend', env) || 'bifrost',
     workspaceLinkEnabled: parseBooleanInput(getInput('workspace-link-enabled', env), true),
@@ -1557,10 +1677,13 @@ async function upsertEnvironments(
         // Marker reads are optimization/safety metadata. Continue with a
         // fresh marker when the environment cannot be read for refresh.
       }
-      const values = buildEnvironmentValues(envName, runtimeUrl, {
-        secretsResolverProvider: inputs.secretsResolverProvider,
-        preservedCredentialValues: priorValues
-      });
+      const definedValues = inputs.environmentDefinitions?.[envName];
+      const values = definedValues
+        ? definedValues.map((value) => ({ ...value }))
+        : buildEnvironmentValues(envName, runtimeUrl, {
+            secretsResolverProvider: inputs.secretsResolverProvider,
+            preservedCredentialValues: priorValues
+          });
       if (marker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(marker), type: 'default' });
       try {
         await dependencies.postman.updateEnvironment(existingUid, displayName, values);
@@ -1581,9 +1704,12 @@ async function upsertEnvironments(
       continue;
     }
 
-    const values = buildEnvironmentValues(envName, runtimeUrl, {
-        secretsResolverProvider: inputs.secretsResolverProvider
-      });
+    const definedValues = inputs.environmentDefinitions?.[envName];
+    const values = definedValues
+      ? definedValues.map((value) => ({ ...value }))
+      : buildEnvironmentValues(envName, runtimeUrl, {
+          secretsResolverProvider: inputs.secretsResolverProvider
+        });
     if (assetMarker) values.push({ key: 'x-pm-onboarding', value: JSON.stringify(assetMarker), type: 'default' });
     try {
       envUids[envName] = await dependencies.postman.createEnvironment(
@@ -3158,6 +3284,7 @@ export async function runRepoSync(
   dependencies: RepoSyncDependencies,
   executionContext?: RepoSyncExecutionContext
 ): Promise<RepoSyncOutputs> {
+  inputs = normalizeProgrammaticEnvironmentDefinitions(inputs);
   const telemetry = createTelemetryContext({ action: 'postman-repo-sync-action', actionVersion: resolveActionVersion(), logger: dependencies.core });
   telemetry.setTeamId(dependencies.teamId);
   const logger = resolveRepoSyncLogger(dependencies);
