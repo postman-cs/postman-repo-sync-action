@@ -116199,6 +116199,8 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "jobs:",
     "  test:",
     "    runs-on: ubuntu-latest",
+    "    env:",
+    "      HAS_SSL_CERT: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}",
     "    steps:",
     "      - uses: actions/checkout@v5",
     "      - name: Install Postman CLI",
@@ -116232,7 +116234,7 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth) {
     "          end",
     "          RUBY",
     "      - name: Decode SSL certificates",
-    "        if: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}",
+    "        if: ${{ env.HAS_SSL_CERT == 'true' }}",
     "        env:",
     "          POSTMAN_SSL_CLIENT_CERT_B64: ${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 }}",
     "          POSTMAN_SSL_CLIENT_KEY_B64: ${{ secrets.POSTMAN_SSL_CLIENT_KEY_B64 }}",
@@ -116557,8 +116559,11 @@ function renderGcWorkflowTemplate() {
   return [
     "name: Postman Preview GC",
     "on:",
+    // The delete event takes no branches/tags filter (GitHub only allows one on
+    // merge_group, push, pull_request, pull_request_target, and workflow_run).
+    // The previous ["**"] was a match-everything wildcard, so dropping it leaves
+    // the trigger behaviour unchanged.
     "  delete:",
-    '    branches: ["**"]',
     "  pull_request:",
     "    types: [closed]",
     "  schedule:",
