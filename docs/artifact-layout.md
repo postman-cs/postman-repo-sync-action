@@ -48,7 +48,7 @@ canonical:
   collections:
     ../postman/collections/core-payments: <collection UID>
   environments:
-    ../postman/environments/prod.postman_environment.json: <environment UID>
+    ../postman/environments/core-payments - prod.environment.yaml: <environment UID>
   specs:
     ../openapi.yaml: <spec UID>
 ```

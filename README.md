@@ -292,7 +292,7 @@ postman/collections/[Smoke] core-payments/
   <folder>.yaml
   <request>.yaml
 postman/environments/
-  prod.postman_environment.json
+  core-payments - prod.environment.yaml
 .postman/
   resources.yaml
 ```
