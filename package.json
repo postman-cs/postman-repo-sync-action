@@ -68,7 +68,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.0",
     "acorn": "8.18.0",
-    "esbuild": "0.28.1",
+    "esbuild": "0.28.2",
     "eslint": "^10.7.0",
     "fast-check": "^4.9.0",
     "postject": "1.0.0-alpha.6",
