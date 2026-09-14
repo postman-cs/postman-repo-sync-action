@@ -547,6 +547,62 @@ describe('repo sync action', () => {
     ]);
   });
 
+  it('parses mixed legacy slugs and complete environment definitions', () => {
+    const environmentsJson = JSON.stringify([
+      'prod',
+      {
+        slug: 'dev',
+        values: [
+          { key: 'baseUrl', value: 'https://dev.example.com' },
+          { key: 'jwtToken', type: 'secret', enabled: false }
+        ]
+      }
+    ]);
+    const { core } = createCoreStub({
+      'project-name': 'core-payments',
+      'environments-json': environmentsJson
+    });
+
+    const inputs = readActionInputs(core);
+
+    expect(inputs.environments).toEqual(['prod', 'dev']);
+    expect(inputs.environmentDefinitions).toEqual({
+      dev: [
+        { key: 'baseUrl', value: 'https://dev.example.com', type: 'default', enabled: true },
+        { key: 'jwtToken', value: '', type: 'secret', enabled: false }
+      ]
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '[{"slug":"dev","values":[{"key":"jwtToken","value":secret-canary}]}]', /must contain valid JSON/],
+    ['non-array input', '{}', /must be a JSON array/],
+    ['duplicate slugs', '["dev",{"slug":"dev","values":[]}]', /duplicate slug/],
+    ['unsafe rich slugs', '[{"slug":"../outside","values":[]}]', /rich slug must use only/],
+    ['object property slugs', '[{"slug":"constructor","values":[]}]', /reserved object property/],
+    ['Windows device slugs', '[{"slug":"CON.logs","values":[]}]', /Windows device name/],
+    ['unknown definition fields', '[{"slug":"dev","values":[],"uid":"env-1"}]', /unsupported field/],
+    ['invalid variable types', '[{"slug":"dev","values":[{"key":"port","value":443}]}]', /value must be a string/],
+    ['invalid enabled flags', '[{"slug":"dev","values":[{"key":"flag","enabled":"yes"}]}]', /enabled must be a boolean/],
+    ['duplicate variable keys', '[{"slug":"dev","values":[{"key":"baseUrl"},{"key":"baseUrl"}]}]', /duplicate variable key/],
+    ['reserved marker keys', '[{"slug":"dev","values":[{"key":"x-pm-onboarding"}]}]', /reserved by repo-sync/],
+    ['populated secrets', '[{"slug":"dev","values":[{"key":"jwtToken","value":"secret-canary","type":"secret"}]}]', /inject it at runtime/]
+  ])('rejects %s without accepting a partial definition', (_name, environmentsJson, expected) => {
+    const { core } = createCoreStub({
+      'project-name': 'core-payments',
+      'environments-json': environmentsJson
+    });
+
+    let thrown: unknown;
+    try {
+      readActionInputs(core);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String(thrown)).toMatch(expected);
+    expect(String(thrown)).not.toContain('secret-canary');
+  });
+
   it('resolves credential-preflight through readActionInputs with a warn default', () => {
     const base = {
       'project-name': 'core-payments',
@@ -3046,6 +3102,143 @@ describe('repo sync action', () => {
     expect(postman.createEnvironment).not.toHaveBeenCalled();
     expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
     expect(postman.updateEnvironment).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes legacy, rich-update, and rich-create entries through the existing upsert path', async () => {
+    const postman = createExportPostmanStub();
+    postman.createEnvironment.mockImplementation((_workspaceId, name) =>
+      Promise.resolve(name.endsWith(' - qa') ? 'env-qa' : 'env-prod')
+    );
+
+    await runRepoSync(
+      createInputs({
+        environments: ['prod', 'dev', 'qa'],
+        environmentDefinitions: {
+          dev: [
+            { key: 'baseUrl', value: 'https://dev.example.com', type: 'default', enabled: true },
+            { key: 'jwtToken', value: '', type: 'secret', enabled: true }
+          ],
+          qa: [{ key: 'featureFlag', value: 'enabled', type: 'default', enabled: false }]
+        },
+        environmentUids: { dev: 'env-dev' },
+        envRuntimeUrls: { prod: 'https://api.example.com', dev: 'https://ignored.example.com' },
+        secretsResolverProvider: 'aws',
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        repoWriteMode: 'none'
+      }),
+      {
+        core: createCoreStub().core,
+        postman,
+        repoMutation: {
+          commitAndPush: vi.fn()
+        } as unknown as Parameters<typeof runRepoSync>[1]['repoMutation']
+      }
+    );
+
+    expect(postman.createEnvironment).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments - prod',
+      expect.arrayContaining([
+        { key: 'baseUrl', value: 'https://api.example.com', type: 'default' },
+        { key: 'CI', value: 'false', type: 'default' }
+      ])
+    );
+    expect(postman.updateEnvironment).toHaveBeenCalledWith(
+      'env-dev',
+      'core-payments - dev',
+      [
+        { key: 'baseUrl', value: 'https://dev.example.com', type: 'default', enabled: true },
+        { key: 'jwtToken', value: '', type: 'secret', enabled: true }
+      ]
+    );
+    expect(postman.createEnvironment).toHaveBeenCalledWith(
+      'ws-123',
+      'core-payments - qa',
+      [{ key: 'featureFlag', value: 'enabled', type: 'default', enabled: false }]
+    );
+  });
+
+  it('appends only the existing ownership marker to a rich preview environment', async () => {
+    const postman = createExportPostmanStub();
+    await runRepoSync(
+      createInputs({
+        baselineCollectionId: '',
+        smokeCollectionId: '',
+        contractCollectionId: '',
+        environments: ['dev'],
+        environmentDefinitions: {
+          dev: [{ key: 'baseUrl', value: 'https://dev.example.com', type: 'default', enabled: true }]
+        },
+        generateCiWorkflow: false,
+        environmentSyncEnabled: false,
+        workspaceLinkEnabled: false,
+        repoWriteMode: 'none'
+      }),
+      { core: createCoreStub().core, postman },
+      {
+        branchDecision: {
+          tier: 'preview',
+          strategy: 'preview',
+          canonicalBranch: 'main',
+          reason: 'test',
+          identity: {
+            provider: 'github',
+            headBranch: 'feature/rich-env',
+            headSha: 'abc123',
+            refKind: 'branch',
+            isPrContext: false,
+            isForkPr: false
+          }
+        }
+      }
+    );
+
+    const values = postman.createEnvironment.mock.calls[0][2];
+    expect(values.slice(0, -1)).toEqual([
+      { key: 'baseUrl', value: 'https://dev.example.com', type: 'default', enabled: true }
+    ]);
+    expect(values.at(-1)).toMatchObject({ key: 'x-pm-onboarding', type: 'default' });
+    expect(JSON.parse(values.at(-1)?.value ?? '{}')).toMatchObject({
+      role: 'preview',
+      rawBranch: 'feature/rich-env'
+    });
+  });
+
+  it.each([
+    [
+      'a populated secret',
+      { dev: [{ key: 'jwtToken', value: 'secret-canary', type: 'secret', enabled: true }] },
+      /inject it at runtime/
+    ],
+    [
+      'the reserved branch marker',
+      { dev: [{ key: 'x-pm-onboarding', value: '', type: 'default', enabled: true }] },
+      /reserved by repo-sync/
+    ],
+    [
+      'an inherited definition',
+      Object.create({
+        dev: [{ key: 'jwtToken', value: 'secret-canary', type: 'secret', enabled: true }]
+      }) as NonNullable<ResolvedInputs['environmentDefinitions']>,
+      /must be a plain object/
+    ]
+  ] as Array<[
+    string,
+    NonNullable<ResolvedInputs['environmentDefinitions']>,
+    RegExp
+  ]>)('rejects programmatic definitions containing %s before Postman mutation', async (_name, definitions, expected) => {
+    const postman = createExportPostmanStub();
+
+    await expect(runRepoSync(
+      createInputs({ environments: ['dev'], environmentDefinitions: definitions }),
+      { core: createCoreStub().core, postman }
+    )).rejects.toThrow(expected);
+
+    expect(postman.findEnvironmentByName).not.toHaveBeenCalled();
+    expect(postman.createEnvironment).not.toHaveBeenCalled();
+    expect(postman.updateEnvironment).not.toHaveBeenCalled();
   });
 
   it('supports workspace and spec sync without generated assets or cloud monitors', async () => {

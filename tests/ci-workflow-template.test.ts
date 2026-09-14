@@ -939,3 +939,155 @@ describe('private mock runtime credential wiring', () => {
     }
   );
 });
+
+// GitHub restricts which contexts an expression may reference, and the
+// restriction varies by workflow key. `secrets` is available in `env:`, `with:`,
+// and `run:`, but NOT in `jobs.<id>.if` or `jobs.<id>.steps.<id>.if`: those
+// expressions are evaluated before the job reaches a runner, outside the
+// machinery that decrypts secrets. Referencing an unavailable context is not a
+// runtime no-op -- GitHub rejects the whole file with "Unrecognized named-value"
+// and the run startup-fails with zero jobs, so the generated pipeline never
+// reports anything. Asserting the step *exists* cannot catch that; only reading
+// the expressions can.
+// https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+const GITHUB_CONTEXT_NAMES = [
+  'github',
+  'env',
+  'vars',
+  'job',
+  'jobs',
+  'steps',
+  'runner',
+  'secrets',
+  'strategy',
+  'matrix',
+  'needs',
+  'inputs'
+] as const;
+
+const CONTEXTS_ALLOWED_IN_JOB_IF = ['github', 'needs', 'vars', 'inputs'];
+
+const CONTEXTS_ALLOWED_IN_STEP_IF = [
+  'env',
+  'github',
+  'inputs',
+  'job',
+  'matrix',
+  'needs',
+  'runner',
+  'steps',
+  'strategy',
+  'vars'
+];
+
+function contextsReferenced(expression: unknown): string[] {
+  const text = String(expression ?? '');
+  return GITHUB_CONTEXT_NAMES.filter((name) =>
+    new RegExp(`\\b${name}\\s*\\.`).test(text)
+  );
+}
+
+type ParsedJob = {
+  if?: unknown;
+  steps?: { name?: string; if?: unknown }[];
+};
+
+function illegalContextUses(workflowYaml: string): string[] {
+  const parsed = parse(workflowYaml) as { jobs?: Record<string, ParsedJob> };
+  const violations: string[] = [];
+
+  for (const [jobId, job] of Object.entries(parsed.jobs ?? {})) {
+    if (job.if !== undefined) {
+      for (const context of contextsReferenced(job.if)) {
+        if (!CONTEXTS_ALLOWED_IN_JOB_IF.includes(context)) {
+          violations.push(`jobs.${jobId}.if references "${context}": ${String(job.if)}`);
+        }
+      }
+    }
+
+    for (const [index, step] of (job.steps ?? []).entries()) {
+      if (step.if === undefined) continue;
+      for (const context of contextsReferenced(step.if)) {
+        if (!CONTEXTS_ALLOWED_IN_STEP_IF.includes(context)) {
+          const label = step.name ? `"${step.name}"` : `#${index}`;
+          violations.push(
+            `jobs.${jobId}.steps ${label} if references "${context}": ${String(step.if)}`
+          );
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
+describe('generated GitHub workflow expression contexts', () => {
+  // Every GitHub-provider variant the renderers can emit. Azure DevOps output is
+  // excluded on purpose: `condition: ne(variables['...'], '')` is legal there
+  // because ADO maps secrets into the variables namespace, which is where the
+  // GitHub template's original `if: ${{ secrets.* }}` gate came from.
+  const githubWorkflows = (): { label: string; yaml: string }[] => [
+    { label: 'ci (defaults)', yaml: renderCiWorkflowTemplate() },
+    { label: 'ci (eu region)', yaml: renderCiWorkflowTemplate({ postmanRegion: 'eu' }) },
+    {
+      label: 'ci (private mock auth)',
+      yaml: renderCiWorkflowTemplate({ privateMockAuth: true })
+    },
+    { label: 'preview gc', yaml: renderGcWorkflowTemplate() }
+  ];
+
+  it.each(githubWorkflows())(
+    'never references an unavailable context in an if: expression [$label]',
+    ({ yaml }) => {
+      expect(illegalContextUses(yaml)).toEqual([]);
+    }
+  );
+
+  it('gates the SSL decode step on a job-level env flag, not on secrets', () => {
+    const parsed = parse(renderCiWorkflowTemplate());
+
+    // Job-level env MAY read secrets; the step if: reads the resulting flag.
+    // `secrets.X != ''` becomes the string "true"/"false" once it passes
+    // through env, hence the string comparison.
+    expect(parsed.jobs.test.env).toMatchObject({
+      HAS_SSL_CERT: "${{ secrets.POSTMAN_SSL_CLIENT_CERT_B64 != '' }}"
+    });
+
+    const sslStep = parsed.jobs.test.steps.find(
+      (step: { name?: string }) => step.name === 'Decode SSL certificates'
+    );
+    expect(sslStep.if).toBe("${{ env.HAS_SSL_CERT == 'true' }}");
+  });
+
+  // Belt-and-braces over the specific contract above: actionlint knows the full
+  // context-availability matrix and every other rule GitHub enforces at parse
+  // time. CI installs it and exports ACTIONLINT_BIN (.github/workflows/ci.yml),
+  // so this runs on every PR; it skips on a dev machine without the binary
+  // rather than forcing a new hard dependency.
+  const actionlintBin = process.env.ACTIONLINT_BIN?.trim();
+
+  it.skipIf(!actionlintBin)('passes actionlint as a real workflow file', () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), 'generated-workflow-lint-'));
+    try {
+      const workflowDir = path.join(workspace, '.github', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      // Explicit paths, not actionlint's directory auto-discovery: that walks
+      // parent directories looking for a git root and errors out in a bare
+      // temp dir.
+      const workflowPaths = githubWorkflows().map(({ label, yaml }) => {
+        const slug = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+        const workflowPath = path.join(workflowDir, `${slug}.yml`);
+        writeFileSync(workflowPath, yaml);
+        return workflowPath;
+      });
+
+      execFileSync(actionlintBin as string, ['-no-color', ...workflowPaths], {
+        cwd: workspace,
+        encoding: 'utf8',
+        stdio: 'pipe'
+      });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
