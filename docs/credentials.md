@@ -23,8 +23,8 @@ Use a [service-account](https://learning.postman.com/docs/administration/service
 
 | Credential | Used for | Primary source | Notes |
 | --- | --- | --- | --- |
-| `postman-api-key` | Postman API operations for collections, environments, mocks, monitors, and exports. | `POSTMAN_API_KEY` repository secret backed by a service-account PMAK. | Required unless `postman-access-token` can generate a replacement PMAK at runtime. |
-| `postman-access-token` | Workspace repository linking, system environment association, and generated PMAK creation. | `postman-resolve-service-token-action` output `token`. | The preflight warns when this is a non-service-account access token. |
+| `postman-api-key` | Minting and re-minting the access token, `GET /me` validity checks, and the Postman CLI `login --with-api-key` step in the generated CI workflow. | `POSTMAN_API_KEY` repository secret backed by a service-account PMAK. | Optional when a valid `postman-access-token` is supplied; required as the mint source when it is omitted. |
+| `postman-access-token` | Collection reads, environments, mocks, monitors, workspace repository linking, system environment association, and generated PMAK creation through the access-token gateway. | `postman-resolve-service-token-action` output `token`. | When omitted, repo-sync mints it from a service-account PMAK. |
 | `team-id` | Team context for org-mode integration calls. | `postman-resolve-service-token-action` output `team-id`. | Omit it only when `POSTMAN_TEAM_ID` is set or auto-detection is enough for the team. |
 | `github-token` | Commits, pushes, and generated workflow updates. | `${{ secrets.GITHUB_TOKEN }}` with workflow `permissions`. | Needs `contents: write` for commits and pushes. Needs `actions: write` when writing `.github/workflows/*`. |
 | `gh-fallback-token` | Repository APIs that the default `GITHUB_TOKEN` cannot perform. | Fine-grained PAT or GitHub App token. | Use for Actions secret persistence, protected workflow-file updates, or repositories where `GITHUB_TOKEN` is intentionally restricted. |
@@ -48,7 +48,7 @@ cat ~/.postman/postmanrc | jq -r '.login._profiles[].accessToken'
 
 Do not use that CLI-derived token as the normal CI credential. It expires with the user session, and repo sync logs a warning when preflight resolves a non-service-account access token.
 
-`postman-access-token` is required. Every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace linking and system environment association runs through the access-token gateway, so without the token the action fails fast. The `postman-api-key` mints/re-mints that token, logs in the Postman CLI for the generated workflow's `postman collection run`, and mints the CI `POSTMAN_API_KEY` secret — it is never an asset-routing fallback.
+`postman-access-token` is effectively required at runtime. Every asset operation (environment create/get/update, collection read, mock, monitor) plus workspace linking and system environment association runs through the access-token gateway. The caller may supply the token directly or let repo-sync mint it from a service-account `postman-api-key` (`mintAccessTokenIfNeeded`, `src/lib/postman/token-provider.ts`); the action fails only when neither yields a token. The `postman-api-key` mints/re-mints that token and logs in the Postman CLI for the generated workflow's `postman collection run` — it is never an asset-routing fallback.
 
 ## Credential preflight
 

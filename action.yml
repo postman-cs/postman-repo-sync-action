@@ -131,7 +131,7 @@ inputs:
     required: false
     default: support@postman.com
   postman-api-key:
-    description: Postman API key (PMAK). Used only to mint/re-mint the access token (via postman-resolve-service-token-action) and for the Postman CLI spec-lint login. Asset operations (environments, collections, mocks, monitors) run on the access-token gateway and do not use the PMAK. Optional when a valid postman-access-token is supplied; required only for the CLI lint path.
+    description: Postman API key (PMAK). Used only to mint/re-mint the access token (via postman-resolve-service-token-action) and for the Postman CLI login --with-api-key step in the generated CI workflow (collection run). Asset operations (environments, collections, mocks, monitors) run on the access-token gateway and do not use the PMAK. Optional when a valid postman-access-token is supplied (a failing key is replaced by one minted from the token); required as the mint source when postman-access-token is omitted.
     required: false
   postman-access-token:
     description: Postman access token minted by postman-resolve-service-token-action. Required for all asset operations (environment create/get/update, collection read, mock, monitor) which run through the access-token gateway. Also used for workspace linking, system environment association, and generated API-key creation. When omitted, the action mints one from postman-api-key (service-account PMAK); if that mint also fails the action fails fast — PMAK is never an asset-routing fallback.

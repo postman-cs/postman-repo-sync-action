@@ -260,8 +260,16 @@ function populatedSyncSnapshot(
 ): Record<string, unknown> {
   const v2Info = record(source.info);
   if (v2Info && Array.isArray(source.item)) {
+    const cloned = structuredClone(source);
+    // A populated Sync projection carries root scripts as v2 events. Seeds
+    // that already went through the EC root-hook PATCH keep v3 `scripts`,
+    // so project them when the seed carries no v2 events of its own.
+    if ((!Array.isArray(cloned.event) || cloned.event.length === 0)) {
+      const projected = scriptsToV2Events(cloned.scripts);
+      if (projected.length > 0) cloned.event = projected;
+    }
     return {
-      ...structuredClone(source),
+      ...cloned,
       info: {
         ...v2Info,
         name: String(v2Info.name ?? source.name ?? 'baseline'),
