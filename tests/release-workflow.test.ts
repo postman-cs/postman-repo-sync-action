@@ -492,6 +492,11 @@ describe('release workflow notify-composite dispatch execution', () => {
       encoding: 'utf-8',
       env: {
         ...process.env,
+        // --noprofile/--norc do not suppress BASH_ENV/ENV startup files, and
+        // those can redefine gh as a shell function that shadows the tmpDir
+        // stub below. Unset them so the PATH-injected mock is the gh resolved.
+        BASH_ENV: undefined,
+        ENV: undefined,
         GH_TOKEN: ghToken,
         GITHUB_REPOSITORY: 'postman-cs/postman-repo-sync-action',
         GH_CALL_LOG: logFile,

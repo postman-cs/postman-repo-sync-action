@@ -50,7 +50,7 @@ npm run verify:dist         # build, diff, inspect
 - **Env management**: Creates envs per slug in `environments-json`, injects runtime URLs from `env-runtime-urls-json`, associates w/ system envs via Bifrost.
 - **Mock/Monitor**: Creates mock from baseline, smoke monitor from smoke collection. Reuse via `mock-url`, `monitor-id`. Scheduling via `monitor-cron`.
 - **CI workflow**: Writes Postman CLI-based smoke/contract test workflow. `generate-ci-workflow` flag + `ci-workflow-path` control.
-- **Repo mutation**: Commits artifacts under `postman/` + `.postman/` (resources.yaml, releases.yaml). Modes: `none`, `commit-only`, `commit-and-push`. Identity: `Postman CSE <help@postman.com>`.
+- **Repo mutation**: Commits artifacts under `postman/` + `.postman/` (resources.yaml, releases.yaml). Modes: `none`, `commit-only`, `commit-and-push`. Identity: `Postman <support@postman.com>` (overridable via `committer-name`/`committer-email`).
 - **mTLS**: Passes SSL cert/key to generated CI workflow.
 - **Git provider**: Auto-detects GitHub/GitLab/Bitbucket/Azure from env. Explicit `repo-url` supported.
 
