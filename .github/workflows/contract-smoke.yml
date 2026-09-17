@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Verify GET /me
         env:
           PMAK: ${{ secrets.SMOKE_ORG_API_KEY }}
