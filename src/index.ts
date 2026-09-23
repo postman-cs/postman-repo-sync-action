@@ -1697,14 +1697,6 @@ async function upsertEnvironments(
     environmentNames
   );
   const trackedUids = getEnvironmentUidsFromOwnership(trackedOwnership);
-  for (const [environmentName, explicitUid] of Object.entries(inputs.environmentUids)) {
-    const trackedUid = trackedUids[environmentName];
-    if (trackedUid && trackedUid !== explicitUid) {
-      throw new StateUnreadableError(
-        `.postman/resources.yaml and environment-uids-json map environment "${environmentName}" to different UIDs. Reconcile the inputs before rerunning.`
-      );
-    }
-  }
   for (const environmentName of environmentNames) {
     assertEnvironmentTargetAvailable({
       filePath: path.join(

@@ -118257,7 +118257,11 @@ function buildCiWorkflowLines(installUrl, postmanRegion, privateMockAuth, projec
     `          expected_environment = ${rubyStringLiteral(expectedEnvironment)}`,
     "          environment = environments.find { |path, _| File.basename(path) == expected_environment }&.last unless expected_environment.empty?",
     "          environment ||= environments.find { |path, _| File.basename(path) == 'prod.postman_environment.json' }&.last",
-    ...expectedEnvironment ? [] : ["          environment ||= environments.values.first if expected_environment.empty?"],
+    // A repo whose environments are named only `stage` or `dev` has no prod file to
+    // match, and aborting there would break generated CI that worked before the YAML
+    // migration. One environment is unambiguous, so use it; two or more without a
+    // prod match is a real ambiguity and still aborts.
+    "          environment ||= environments.values.first if environments.size == 1",
     "          missing = []",
     "          missing << '[Smoke] collection' unless smoke",
     "          missing << '[Contract] collection' unless contract",
@@ -118417,6 +118421,7 @@ function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAu
     "      $contract = ''",
     "      $environment = ''",
     "      $fallbackEnvironment = ''",
+    "      $environmentCount = 0",
     `      $expectedEnvironment = ${powershellStringLiteral(expectedEnvironment)}`,
     "      foreach ($line in Get-Content -LiteralPath '.postman/resources.yaml') {",
     "        if ($line -match '^  (collections|environments|specs):\\s*$') { $section = $Matches[1]; continue }",
@@ -118433,13 +118438,16 @@ function buildAdoWindowsCiWorkflowLines(installUrl, postmanRegion, privateMockAu
     "        if ($section -eq 'collections' -and $key -match '\\[Smoke\\]') { $smoke = $value }",
     "        if ($section -eq 'collections' -and $key -match '\\[Contract\\]') { $contract = $value }",
     "        if ($section -eq 'environments') {",
+    "          $environmentCount += 1",
     "          if ([string]::IsNullOrWhiteSpace($fallbackEnvironment)) { $fallbackEnvironment = $value }",
     "          $fileName = [IO.Path]::GetFileName($key)",
     "          if ($fileName -eq $expectedEnvironment) { $environment = $value }",
     "          if ([string]::IsNullOrWhiteSpace($environment) -and $fileName -eq 'prod.postman_environment.json') { $environment = $value }",
     "        }",
     "      }",
-    "      if ([string]::IsNullOrWhiteSpace($environment) -and [string]::IsNullOrWhiteSpace($expectedEnvironment)) { $environment = $fallbackEnvironment }",
+    // Matches the Ruby resolvers: a single environment is unambiguous, so use it
+    // rather than aborting a pipeline that worked before the YAML migration.
+    "      if ([string]::IsNullOrWhiteSpace($environment) -and $environmentCount -eq 1) { $environment = $fallbackEnvironment }",
     "      $missing = @()",
     "      if ([string]::IsNullOrWhiteSpace($smoke)) { $missing += '[Smoke] collection' }",
     "      if ([string]::IsNullOrWhiteSpace($contract)) { $missing += '[Contract] collection' }",
@@ -118513,7 +118521,9 @@ function buildAdoCiWorkflowLines(installUrl, postmanRegion, privateMockAuth, pro
     `      expected_environment = ${rubyStringLiteral(expectedEnvironment)}`,
     "      environment = environments.find { |path, _| File.basename(path) == expected_environment }&.last unless expected_environment.empty?",
     "      environment ||= environments.find { |path, _| File.basename(path) == 'prod.postman_environment.json' }&.last",
-    ...expectedEnvironment ? [] : ["      environment ||= environments.values.first if expected_environment.empty?"],
+    // See the GitHub resolver: one environment is unambiguous, two or more without a
+    // prod match still aborts.
+    "      environment ||= environments.values.first if environments.size == 1",
     "      missing = []",
     "      missing << '[Smoke] collection' unless smoke",
     "      missing << '[Contract] collection' unless contract",
@@ -130692,14 +130702,6 @@ async function upsertEnvironments(inputs, dependencies, resourcesState, assetMar
     environmentNames
   );
   const trackedUids = getEnvironmentUidsFromOwnership(trackedOwnership);
-  for (const [environmentName, explicitUid] of Object.entries(inputs.environmentUids)) {
-    const trackedUid = trackedUids[environmentName];
-    if (trackedUid && trackedUid !== explicitUid) {
-      throw new StateUnreadableError(
-        `.postman/resources.yaml and environment-uids-json map environment "${environmentName}" to different UIDs. Reconcile the inputs before rerunning.`
-      );
-    }
-  }
   for (const environmentName of environmentNames) {
     assertEnvironmentTargetAvailable({
       filePath: path9.join(
