@@ -1679,12 +1679,22 @@ export async function persistSslSecrets(
   }
 }
 
+/**
+ * Manifest ownership is derived here and handed to the export path rather than
+ * recomputed there: both read the same `resourcesState`, and every key in
+ * `envUids` is drawn from the same `environmentNames` the ownership map covers.
+ */
+type EnvironmentSyncResult = {
+  envUids: Record<string, string>;
+  ownership: Record<string, EnvironmentManifestOwnership>;
+};
+
 async function upsertEnvironments(
   inputs: ResolvedInputs,
   dependencies: RepoSyncDependencies,
   resourcesState: PostmanResourcesState | null,
   assetMarker?: AssetMarker
-): Promise<Record<string, string>> {
+): Promise<EnvironmentSyncResult> {
   const environmentNames = new Set([
     ...inputs.environments,
     ...Object.keys(inputs.environmentUids)
@@ -1712,7 +1722,7 @@ async function upsertEnvironments(
     ...inputs.environmentUids
   };
   if (!inputs.workspaceId) {
-    return envUids;
+    return { envUids, ownership: trackedOwnership };
   }
 
   const mask = resolveRepoSyncMasker(dependencies);
@@ -1837,7 +1847,7 @@ async function upsertEnvironments(
     }
   }
 
-  return envUids;
+  return { envUids, ownership: trackedOwnership };
 }
 
 async function upsertMockEnvironment(
@@ -2053,20 +2063,38 @@ function resolveDurableWorkspaceId(options: {
   return prior === candidate ? prior : undefined;
 }
 
-function buildResourcesManifest(
-  workspaceId: string | undefined,
-  collectionMap: Record<string, string>,
-  envMap: Record<string, string>,
-  artifactDir: string,
-  projectName: string,
-  localSpecRefs: string[],
-  mappedSpecRef?: string,
-  specId?: string,
-  existingSpecs?: CloudResourceMap,
-  priorState?: PostmanResourcesState | null,
-  preserveGeneratedAssets = false,
-  preservePriorEnvironmentAssets = preserveGeneratedAssets
-): string {
+type ResourcesManifestOptions = {
+  workspaceId: string | undefined;
+  collectionMap: Record<string, string>;
+  envMap: Record<string, string>;
+  artifactDir: string;
+  projectName: string;
+  localSpecRefs: string[];
+  mappedSpecRef?: string;
+  specId?: string;
+  existingSpecs?: CloudResourceMap;
+  priorState?: PostmanResourcesState | null;
+  /** Merge prior collections instead of replacing them. */
+  preserveGeneratedAssets?: boolean;
+  /** Merge prior environments. Defaults to `preserveGeneratedAssets`. */
+  preservePriorEnvironmentAssets?: boolean;
+};
+
+function buildResourcesManifest(options: ResourcesManifestOptions): string {
+  const {
+    workspaceId,
+    collectionMap,
+    envMap,
+    artifactDir,
+    projectName,
+    localSpecRefs,
+    mappedSpecRef,
+    specId,
+    existingSpecs,
+    priorState,
+    preserveGeneratedAssets = false,
+    preservePriorEnvironmentAssets = preserveGeneratedAssets
+  } = options;
   // Merge-preserving writer (state v2): round-trip every unknown field from
   // the prior tracked state instead of rebuilding the document from scratch,
   // so fields written by other actions (or newer versions) survive a sync.
@@ -3053,6 +3081,8 @@ async function exportArtifacts(
     mockEnvironmentUid?: string;
     releaseLabel?: string;
     priorState?: PostmanResourcesState | null;
+    /** Manifest ownership from the environment sync, keyed by environment name. */
+    environmentOwnership: Record<string, EnvironmentManifestOwnership>;
     preparedPrebuiltCollections: Map<PrebuiltCollectionRole, PreparedPrebuiltCollectionEntry>;
     privateMockAuth?: boolean;
   }
@@ -3114,19 +3144,19 @@ async function exportArtifacts(
     }
     ensureDir('.postman');
     assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
-    writeFileSync('.postman/resources.yaml', buildResourcesManifest(
-      durableWorkspaceId,
-      {},
-      {},
-      inputs.artifactDir,
-      inputs.projectName,
-      discoveredSpecs.map((spec) => spec.configRelativePath),
-      mappedSpecCloudKey,
-      inputs.specId || undefined,
-      preservePriorWorkspaceResources ? options.existingSpecs : undefined,
-      options.priorState,
-      preservePriorWorkspaceResources
-    ));
+    writeFileSync('.postman/resources.yaml', buildResourcesManifest({
+      workspaceId: durableWorkspaceId,
+      collectionMap: {},
+      envMap: {},
+      artifactDir: inputs.artifactDir,
+      projectName: inputs.projectName,
+      localSpecRefs: discoveredSpecs.map((spec) => spec.configRelativePath),
+      mappedSpecRef: mappedSpecCloudKey,
+      specId: inputs.specId || undefined,
+      existingSpecs: preservePriorWorkspaceResources ? options.existingSpecs : undefined,
+      priorState: options.priorState,
+      preserveGeneratedAssets: preservePriorWorkspaceResources
+    }));
     dependencies.core.info(
       'onboarding-scope=spec-only; updated only workspace/spec state in .postman/resources.yaml.'
     );
@@ -3195,12 +3225,14 @@ async function exportArtifacts(
 
   const environmentSpecs = [
     ...Object.entries(envUids).map(([envName, envUid]) => {
-      const ownership = getEnvironmentOwnershipFromResources(
-        options.priorState ?? null,
-        inputs.artifactDir,
-        inputs.projectName,
-        [envName]
-      )[envName];
+      const ownership = options.environmentOwnership[envName];
+      if (!ownership) {
+        // Treating a gap as unowned would trip the unowned-target preflight and
+        // abort a healthy run, so fail with the real cause instead.
+        throw new Error(
+          `environment "${envName}" has a UID but no manifest ownership entry; environment sync and artifact export disagree`
+        );
+      }
       return {
         kind: 'environment' as const,
         envName,
@@ -3261,20 +3293,22 @@ async function exportArtifacts(
   }
 
   assertPathWithinCwd('.postman/resources.yaml', 'resources state target');
-  writeFileSync('.postman/resources.yaml', buildResourcesManifest(
-    durableWorkspaceId,
-    manifestCollections,
-    envUids,
-    inputs.artifactDir,
-    inputs.projectName,
-    discoveredSpecs.map((spec) => spec.configRelativePath),
-    mappedSpecCloudKey,
-    inputs.specId || undefined,
-    options.existingSpecs,
-    options.priorState,
-    false,
-    preservePriorWorkspaceResources
-  ));
+  writeFileSync('.postman/resources.yaml', buildResourcesManifest({
+    workspaceId: durableWorkspaceId,
+    collectionMap: manifestCollections,
+    envMap: envUids,
+    artifactDir: inputs.artifactDir,
+    projectName: inputs.projectName,
+    localSpecRefs: discoveredSpecs.map((spec) => spec.configRelativePath),
+    mappedSpecRef: mappedSpecCloudKey,
+    specId: inputs.specId || undefined,
+    existingSpecs: options.existingSpecs,
+    priorState: options.priorState,
+    // The export path always rewrites collections from this run, but keeps prior
+    // environments so an environment tracked by an earlier run is not dropped.
+    preserveGeneratedAssets: false,
+    preservePriorEnvironmentAssets: preservePriorWorkspaceResources
+  }));
   for (const legacyFilePath of legacyEnvironmentCleanupPaths) {
     assertPathWithinCwd(legacyFilePath, 'legacy environment target');
     try {
@@ -3652,11 +3686,11 @@ async function runRepoSyncInner(
   }
 
   const branchAssetMarker = buildBranchAssetMarker(branchDecision, inputs);
-  const envUids = onboardingScope === 'full'
+  const { envUids, ownership: environmentOwnership } = onboardingScope === 'full'
     ? await logger.phase('sync-environments', async () =>
         upsertEnvironments(inputs, dependencies, resourcesState, branchAssetMarker)
       )
-    : {};
+    : { envUids: {} as Record<string, string>, ownership: {} };
   outputs['environment-uids-json'] = JSON.stringify(envUids);
   dependencies.core.setOutput('environment-uids-json', outputs['environment-uids-json']);
 
@@ -4122,6 +4156,7 @@ async function runRepoSyncInner(
       mockEnvironmentUid: outputs['mock-environment-uid'] || undefined,
       releaseLabel,
       priorState: resourcesState,
+      environmentOwnership,
       preparedPrebuiltCollections,
       privateMockAuth: outputs['mock-auth-required'] === 'true'
     })

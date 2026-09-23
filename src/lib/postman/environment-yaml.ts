@@ -41,6 +41,11 @@ function safeEnvironmentName(value: string): string {
 export function environmentFileName(projectName: string, environmentName: string): string {
   assertWellFormed(projectName, 'project name');
   const suffix = safeEnvironmentName(environmentName);
+  // The suffix is budgeted first and the project name absorbs the truncation, because
+  // the suffix is the only part that distinguishes one environment from another. A
+  // naive truncation of the whole basename would collapse `<long project> - prod` and
+  // `<long project> - stage` into the same filename. Losing project-name characters
+  // is recoverable; losing the environment identity is not.
   const projectBudget = Math.max(
     0,
     MAX_BASENAME_BYTES - Buffer.byteLength(SEPARATOR) - Buffer.byteLength(suffix)
