@@ -63,7 +63,7 @@ postman/
     [Smoke] name/collection.yaml
     [Contract] name/collection.yaml
   environments/
-    prod.postman_environment.json
+    <project> - prod.environment.yaml
   mocks/
 .postman/
   resources.yaml  # PostmanResourcesConfig
