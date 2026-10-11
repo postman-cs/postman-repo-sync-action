@@ -1954,7 +1954,8 @@ function getCollectionDirectoryName(kind: 'Baseline' | 'Smoke' | 'Contract', pro
 const VOLATILE_KEYS = new Set([
   'createdAt',
   'updatedAt',
-  'lastUpdatedBy'
+  'lastUpdatedBy',
+  'lastRevision'
 ]);
 
 /**
