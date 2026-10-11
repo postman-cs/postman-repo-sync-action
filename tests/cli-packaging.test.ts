@@ -339,10 +339,11 @@ describe('CLI packaging contract', () => {
         maxBuffer: 20 * 1024 * 1024
       }
     );
-    const [packed] = JSON.parse(packResult.stdout) as Array<{
+    // npm <=11 prints an array; npm 12 prints an object keyed by package name.
+    const [packed] = Object.values(JSON.parse(packResult.stdout) as Record<string, {
       filename: string;
       name: string;
-    }>;
+    }>);
     expect(packed.name).toBe('@postman-cs/onboarding-repo-sync');
 
     const tarballPath = path.join(packDir, packed.filename);

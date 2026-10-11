@@ -5584,6 +5584,7 @@ describe('mock resolution paths', () => {
       ),
       getEnvironment: vi.fn().mockImplementation((uid: string) => Promise.resolve({
         id: uid,
+        lastRevision: 1791701232000,
         values: uid === 'env-mock'
           ? [
               { key: 'baseUrl', value: 'https://mock-new.pstmn.io', type: 'default' },
@@ -5622,6 +5623,7 @@ describe('mock resolution paths', () => {
     expect(exported.values.find((value) => value.key === 'AWS_REGION')?.value).toBe('us-east-2');
     expect(exported.values.find((value) => value.key === 'AWS_SECRET_ACCESS_KEY')?.value).toBe('');
     expect(JSON.stringify(exported)).not.toContain('preserved-secret');
+    expect(exported).not.toHaveProperty('lastRevision');
   });
 
   it('omits the private-mock secret slot for a public mock', async () => {

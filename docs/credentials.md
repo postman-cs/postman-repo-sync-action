@@ -9,7 +9,7 @@ Use a [service-account](https://learning.postman.com/docs/administration/service
     postman-region: us
     postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
 
-- uses: postman-cs/postman-repo-sync-action@v2
+- uses: postman-cs/postman-repo-sync-action@v3
   with:
     project-name: core-payments
     postman-region: us

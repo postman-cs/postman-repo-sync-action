@@ -220,6 +220,14 @@ describe('pre-push tag guard', () => {
     expect(prePushHook).toMatch(/refs\/tags\/v\[0-9\]\*\.\[0-9\]\*/);
   });
 
+  it('runs the gate without the GIT_DIR git exports to hooks', () => {
+    // From a linked worktree git sets GIT_DIR for the hook; fixture `git init`
+    // and `git commit` calls in npm test would then rewrite the real repository.
+    const unset = prePushHook.indexOf('unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE');
+    expect(unset).toBeGreaterThan(-1);
+    expect(unset).toBeLessThan(prePushHook.indexOf('npm run typecheck'));
+  });
+
   it('preserves the existing dist staleness check', () => {
     expect(prePushHook).toContain('npm run verify:dist');
     expect(prePushHook).toContain('dist is stale');

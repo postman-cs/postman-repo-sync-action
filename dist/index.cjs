@@ -130902,7 +130902,8 @@ function getCollectionDirectoryName(kind, projectName) {
 var VOLATILE_KEYS = /* @__PURE__ */ new Set([
   "createdAt",
   "updatedAt",
-  "lastUpdatedBy"
+  "lastUpdatedBy",
+  "lastRevision"
 ]);
 function stripVolatileFields(obj) {
   if (Array.isArray(obj)) {
