@@ -7,4 +7,4 @@ canonical:
     ../postman/collections/[Smoke] core-payments: col-smoke
     ../postman/collections/[Contract] core-payments: col-contract
   environments:
-    ../postman/environments/prod.postman_environment.json: env-prod
+    ../postman/environments/core-payments - prod.environment.yaml: env-prod

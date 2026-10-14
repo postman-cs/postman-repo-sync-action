@@ -26,6 +26,9 @@ done
 
 # Local mirror of the CI gate. A red tree must never reach the remote; CI on
 # the pull request remains the merge authority (required status checks).
+# Git exports GIT_DIR to hooks run from a linked worktree. Tests that create
+# fixture repositories would inherit it and rewrite this repository instead.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 npm run typecheck && npm run lint && npm test || {
   echo "local gate failed (typecheck/lint/test); fix before pushing." >&2
   exit 1

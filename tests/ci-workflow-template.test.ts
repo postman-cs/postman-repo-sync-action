@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -11,6 +11,7 @@ import {
   renderCiWorkflowTemplate,
   renderGcWorkflowTemplate
 } from '../src/lib/ci-workflow-template.js';
+import { environmentFileName } from '../src/lib/postman/environment-yaml.js';
 
 type ExecPwshOptions = {
   cwd?: string;
@@ -533,6 +534,143 @@ describe('renderCiWorkflowTemplate', () => {
     expect(azureScriptBodies).not.toContain('$(POSTMAN_ENVIRONMENT_UID)');
   });
 
+  it('resolves the project-named environment before the exact legacy migration filename', () => {
+    const projectName = `Core API ${'a'.repeat(100)} #{raise 'boom'} $(bad)`;
+    const expectedFileName = environmentFileName(projectName, 'prod');
+    const rawFileName = `${projectName} - prod.environment.yaml`;
+    const options = { projectName };
+    const workflows = [
+      renderCiWorkflowTemplate(options),
+      getCiWorkflowTemplate('azure-devops', options),
+      getCiWorkflowTemplate('azure-devops', { ...options, runnerOs: 'windows' })
+    ];
+
+    for (const workflow of workflows) {
+      expect(workflow).toContain(expectedFileName);
+      expect(workflow).not.toContain(rawFileName);
+      expect(workflow).toContain('prod.postman_environment.json');
+      expect(workflow).not.toContain('environments.values.first if expected_environment.empty?');
+    }
+    expect(workflows[0]).toContain("expected_environment = 'Core API");
+    expect(workflows[1]).toContain("expected_environment = 'Core API");
+    expect(workflows[2]).toContain("$expectedEnvironment = 'Core API");
+  });
+
+  // The generated resolver is the only consumer of the environment manifest, and
+  // a repo whose environments are named only `stage` or `dev` has no prod file to
+  // match. Before these cases the resolver aborted there, which turned working
+  // generated CI into a hard failure purely because the artifact was renamed.
+  describe('generated environment resolution', () => {
+    const manifest = (environments: string[]): string =>
+      [
+        'canonical:',
+        '  collections:',
+        "    '../postman/collections/[Smoke] Core': smoke-uid",
+        "    '../postman/collections/[Contract] Core': contract-uid",
+        '  environments:',
+        ...environments,
+        ''
+      ].join('\n');
+
+    function rubyResolver(workflow: string): string {
+      const lines = workflow.split('\n');
+      const start = lines.findIndex((line) => line.trim() === "ruby <<'RUBY'");
+      const end = lines.findIndex((line, index) => index > start && line.trim() === 'RUBY');
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const body = lines.slice(start + 1, end);
+      const indent = body.reduce(
+        (least, line) =>
+          line.trim() ? Math.min(least, line.length - line.trimStart().length) : least,
+        Number.POSITIVE_INFINITY
+      );
+      return `${body.map((line) => line.slice(indent)).join('\n')}\n`;
+    }
+
+    function resolve(
+      workflow: string,
+      environments: string[]
+    ): { status: number | null; output: string; exported: string } {
+      const sandbox = mkdtempSync(path.join(tmpdir(), 'ci-environment-resolve-'));
+      try {
+        mkdirSync(path.join(sandbox, '.postman'), { recursive: true });
+        writeFileSync(path.join(sandbox, '.postman', 'resources.yaml'), manifest(environments));
+        writeFileSync(path.join(sandbox, 'resolve.rb'), rubyResolver(workflow));
+        const exportedPath = path.join(sandbox, 'github-env');
+        writeFileSync(exportedPath, '');
+        const result = spawnSync('ruby', ['resolve.rb'], {
+          cwd: sandbox,
+          encoding: 'utf8',
+          env: { ...process.env, GITHUB_ENV: exportedPath }
+        });
+        return {
+          status: result.status,
+          output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
+          exported: readFileSync(exportedPath, 'utf8')
+        };
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true });
+      }
+    }
+
+    const builders: [string, string][] = [
+      ['github', renderCiWorkflowTemplate({ projectName: 'Core' })],
+      ['azure-devops', getCiWorkflowTemplate('azure-devops', { projectName: 'Core' })]
+    ];
+
+    for (const [label, workflow] of builders) {
+      it(`${label}: resolves the sole environment when no prod file exists`, () => {
+        const result = resolve(workflow, [
+          "    '../postman/environments/Core - stage.environment.yaml': stage-uid"
+        ]);
+
+        expect(result.status).toBe(0);
+        expect(`${result.exported}${result.output}`).toContain('stage-uid');
+      });
+
+      it(`${label}: prefers the prod environment over a sole-environment fallback`, () => {
+        const result = resolve(workflow, [
+          "    '../postman/environments/Core - stage.environment.yaml': stage-uid",
+          "    '../postman/environments/Core - prod.environment.yaml': prod-uid"
+        ]);
+
+        expect(result.status).toBe(0);
+        const resolved = `${result.exported}${result.output}`;
+        expect(resolved).toContain('prod-uid');
+        expect(resolved).not.toContain('stage-uid');
+      });
+
+      it(`${label}: aborts when two environments exist and neither is prod`, () => {
+        const result = resolve(workflow, [
+          "    '../postman/environments/Core - stage.environment.yaml': stage-uid",
+          "    '../postman/environments/Core - dev.environment.yaml': dev-uid"
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.output).toContain('Core - prod.environment.yaml');
+      });
+    }
+  });
+
+  it('keeps Windows resource parsing scoped to environment entries with YAML apostrophe keys', () => {
+    const workflow = getCiWorkflowTemplate('azure-devops', {
+      projectName: "O'Brien #1",
+      runnerOs: 'windows'
+    });
+    const literalApostropheWorkflow = getCiWorkflowTemplate('azure-devops', {
+      projectName: "O''Brien",
+      runnerOs: 'windows'
+    });
+
+    expect(workflow).toContain("$expectedEnvironment = 'O''Brien #1 - prod.environment.yaml'");
+    expect(literalApostropheWorkflow).toContain(
+      "$expectedEnvironment = 'O''''Brien - prod.environment.yaml'"
+    );
+    expect(workflow).toContain("(collections|environments|specs):\\s*$");
+    expect(workflow).toContain('$rawKey.StartsWith("\'")');
+    expect(workflow).toContain('$rawKey.Substring(1, $rawKey.Length - 2) -replace "\'\'", "\'"');
+  });
+
   it('renders a native PowerShell Azure DevOps workflow for Windows runners', () => {
     const ciWorkflow = getCiWorkflowTemplate('azure-devops', {
       postmanCliWindowsInstallUrl: 'https://dl-cli.pstmn.io/install/win64.ps1',
@@ -665,7 +803,8 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
     it('executes the generated PowerShell resource resolver against the canonical manifest', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
       const parsed = parse(
         getCiWorkflowTemplate('azure-devops', {
-          runnerOs: 'windows'
+          runnerOs: 'windows',
+          projectName: 'Core'
         })
       );
       const resolveStep = parsed.steps.find(
@@ -683,7 +822,7 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
             '    ../postman/collections/[Smoke] Core: smoke-uid',
             '    ../postman/collections/[Contract] Core: contract-uid',
             '  environments:',
-            '    ../postman/environments/prod.postman_environment.json: env-uid',
+            '    ../postman/environments/Core - prod.environment.yaml: env-uid',
             ''
           ].join('\n'),
           'utf8'
@@ -702,6 +841,66 @@ normalize_azure_optional_var POSTMAN_SSL_CLIENT_PASSPHRASE
       } finally {
         rmSync(sandbox, { recursive: true, force: true });
       }
+    });
+
+    // The Windows resolver tracked only the first environment value, so it could not
+    // tell one environment from several. Same fallback rule as the Ruby resolvers:
+    // a sole environment is unambiguous, two or more without a prod match is not.
+    function resolveWindowsEnvironment(environments: string[]): string {
+      const parsed = parse(
+        getCiWorkflowTemplate('azure-devops', { runnerOs: 'windows', projectName: 'Core' })
+      );
+      const resolveStep = parsed.steps.find(
+        (step: { displayName?: string }) => step.displayName === 'Resolve Postman Resource IDs'
+      );
+      const sandbox = mkdtempSync(path.join(tmpdir(), 'repo-sync-windows-environment-'));
+      try {
+        mkdirSync(path.join(sandbox, '.postman'), { recursive: true });
+        writeFileSync(
+          path.join(sandbox, '.postman', 'resources.yaml'),
+          [
+            'version: 2',
+            'canonical:',
+            '  collections:',
+            '    ../postman/collections/[Smoke] Core: smoke-uid',
+            '    ../postman/collections/[Contract] Core: contract-uid',
+            '  environments:',
+            ...environments,
+            ''
+          ].join('\n'),
+          'utf8'
+        );
+        return execPwsh(resolveStep.pwsh, { cwd: sandbox });
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true });
+      }
+    }
+
+    it('resolves the sole environment when no prod file exists', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
+      const output = resolveWindowsEnvironment([
+        '    ../postman/environments/Core - stage.environment.yaml: stage-uid'
+      ]);
+
+      expect(output).toContain(
+        '##vso[task.setvariable variable=POSTMAN_ENVIRONMENT_UID]stage-uid'
+      );
+    });
+
+    it('aborts when two environments exist and neither is prod', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {
+      let failure: (Error & { stderr?: string | Buffer }) | undefined;
+      try {
+        resolveWindowsEnvironment([
+          '    ../postman/environments/Core - stage.environment.yaml: stage-uid',
+          '    ../postman/environments/Core - dev.environment.yaml: dev-uid'
+        ]);
+      } catch (error) {
+        failure = error as Error & { stderr?: string | Buffer };
+      }
+
+      expect(failure).toBeDefined();
+      expect(`${failure?.stderr ?? ''}${failure?.message ?? ''}`).toContain(
+        'Core - prod.environment.yaml'
+      );
     });
 
     it('forwards RESPONSE_TIME_THRESHOLD through the full generated Smoke pwsh body', { timeout: PWSH_TEST_TIMEOUT_MS }, () => {

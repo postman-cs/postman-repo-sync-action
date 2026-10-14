@@ -30,7 +30,7 @@ jobs:
           postman-region: us
           postman-api-key: ${{ secrets.POSTMAN_API_KEY }}
 
-      - uses: postman-cs/postman-repo-sync-action@v2
+      - uses: postman-cs/postman-repo-sync-action@v3
         with:
           project-name: core-payments
           postman-region: us
@@ -51,7 +51,7 @@ The example permissions let `GITHUB_TOKEN` commit generated artifacts and update
 ### Full sync with workspace assets
 
 ```yaml
-- uses: postman-cs/postman-repo-sync-action@v2
+- uses: postman-cs/postman-repo-sync-action@v3
   with:
     project-name: core-payments
     workspace-id: ws-123
@@ -292,7 +292,7 @@ postman/collections/[Smoke] core-payments/
   <folder>.yaml
   <request>.yaml
 postman/environments/
-  prod.postman_environment.json
+  core-payments - prod.environment.yaml
 .postman/
   resources.yaml
 ```
