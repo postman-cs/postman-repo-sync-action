@@ -76,6 +76,7 @@ jobs:
           run test       npm test
           run typecheck  npm run typecheck
           run dist-shape npm run verify:dist:shape
+          run packaged-policy npm run test:packaged-credential-policy
           run actionlint "$ACTIONLINT_BIN"
           run docs-pins  npm run docs:pins
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -217,6 +218,7 @@ jobs:
         if: steps.windows-node-modules.outputs.cache-hit != 'true'
         run: npm ci --prefer-offline --no-audit --no-fund
       - run: node --run test
+      - run: npm run test:packaged-credential-policy
 
   ready:
     needs: [gate, dist-parity, windows]

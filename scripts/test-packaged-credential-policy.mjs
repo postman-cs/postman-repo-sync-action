@@ -29,6 +29,15 @@ try {
     INPUT_MOCK_VISIBILITY: 'public', INPUT_ENVIRONMENTS_JSON: '["prod"]',
   });
   assert.equal(parsed.apiKeyCreation, 'allow');
+  const unsafeAlias = 'synthetic-sensitive-alias\n::error::forged';
+  assert.throws(() => action.resolveInputs({
+    INPUT_PROJECT_NAME: 'synthetic-project', INPUT_WORKSPACE_ID: 'synthetic-workspace',
+    INPUT_MOCK_VISIBILITY: 'public', INPUT_ENVIRONMENTS_JSON: '["prod"]',
+    INPUT_API_KEY_CREATION: 'deny', 'INPUT_API-KEY-CREATION': unsafeAlias,
+  }), error => /Conflicting api-key-creation input aliases/.test(error.message)
+    && !error.message.includes(unsafeAlias) && !error.message.includes('synthetic-sensitive-alias')
+    && !error.message.includes('forged'));
+
   for (const postmanApiKey of ['', 'synthetic-invalid-key']) {
     await assert.rejects(action.resolvePostmanApiKeyAndTeamId(
       { ...base, postmanApiKey }, core, exec, x => x,

@@ -129772,6 +129772,9 @@ function getInput2(name, env = process.env) {
   const runnerValue = normalizeInputValue(runnerRaw);
   if (hasNormalized && hasRunner) {
     if (normalizedValue && runnerValue && normalizedValue !== runnerValue) {
+      if (name === "api-key-creation") {
+        throw new Error("Conflicting api-key-creation input aliases; supply one consistent policy value.");
+      }
       throw new Error(
         `Conflicting values for ${name}: ${normalizedName}=${JSON.stringify(normalizedValue)} vs ${runnerName}=${JSON.stringify(runnerValue)}`
       );
