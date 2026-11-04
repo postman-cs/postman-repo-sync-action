@@ -1,3 +1,4 @@
+import { parseApiKeyCreation, assertApiKeyCreationAllowed } from './lib/api-key-creation.js';
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import { createHash } from 'node:crypto';
@@ -149,6 +150,7 @@ export interface ResolvedInputs {
   committerEmail: string;
   postmanApiKey: string;
   postmanAccessToken: string;
+  apiKeyCreation?: 'deny' | 'allow';
   credentialPreflight: PreflightMode;
   branchStrategy: BranchStrategy;
   canonicalBranch?: string;
@@ -801,6 +803,7 @@ export function resolveInputs(env: NodeJS.ProcessEnv = process.env): ResolvedInp
     postmanApiKey: getInput('postman-api-key', env) || normalizeInputValue(env.POSTMAN_API_KEY),
     postmanAccessToken:
       getInput('postman-access-token', env) || normalizeInputValue(env.POSTMAN_ACCESS_TOKEN),
+    apiKeyCreation: parseApiKeyCreation(getInput('api-key-creation', env)),
     credentialPreflight: parseCredentialPreflight(getInput('credential-preflight', env)),
     branchStrategy: parseBranchStrategy(getInput('branch-strategy', env)),
     canonicalBranch: getInput('canonical-branch', env) || undefined,
@@ -1473,6 +1476,7 @@ export function readActionInputs(actionCore: Pick<CoreLike, 'getInput' | 'setSec
     INPUT_COMMITTER_EMAIL: readInput(actionCore, 'committer-email') || 'support@postman.com',
     INPUT_POSTMAN_API_KEY: postmanApiKey,
     INPUT_POSTMAN_ACCESS_TOKEN: postmanAccessToken,
+    INPUT_API_KEY_CREATION: readInput(actionCore, 'api-key-creation') || 'allow',
     INPUT_CREDENTIAL_PREFLIGHT: readInput(actionCore, 'credential-preflight') || 'warn',
     INPUT_BRANCH_STRATEGY: readInput(actionCore, 'branch-strategy'),
     INPUT_CANONICAL_BRANCH: readInput(actionCore, 'canonical-branch'),
@@ -4280,6 +4284,7 @@ export async function resolvePostmanApiKeyAndTeamId(
     env: NodeJS.ProcessEnv;
   }
 ): Promise<{ apiKey: string; teamId: string }> {
+  const apiKeyCreation = parseApiKeyCreation(inputs.apiKeyCreation);
   let apiKey = inputs.postmanApiKey;
   let teamId = inputs.teamId;
   let keyValid = false;
@@ -4317,7 +4322,7 @@ export async function resolvePostmanApiKeyAndTeamId(
             operation: 'PMAK GET /me validation',
             entity: `status ${status}`,
             cause: error,
-            remediation: 'replace postman-api-key or provide a valid postman-access-token then rerun',
+            remediation: 'replace postman-api-key with a valid existing key then rerun',
             mask: masker
           })
         );
@@ -4327,10 +4332,11 @@ export async function resolvePostmanApiKeyAndTeamId(
     }
   }
 
-  if (!keyValid && options.allowApiKeyCreation === false) {
+  if (!keyValid && (inputs.onboardingScope === 'spec-only' || options.allowApiKeyCreation === false)) {
     apiKey = '';
     actionCore.info('Skipping Postman API key creation because onboarding-scope=spec-only.');
   } else if (!keyValid) {
+    assertApiKeyCreationAllowed(apiKeyCreation);
     if (!inputs.postmanAccessToken) {
       throw new Error('postman-api-key is missing or invalid, and no postman-access-token provided to generate a new one.');
     }

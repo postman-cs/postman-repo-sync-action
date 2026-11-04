@@ -109086,6 +109086,18 @@ var import_promises = require("node:fs/promises");
 var import_node_path4 = __toESM(require("node:path"), 1);
 var import_node_util2 = require("node:util");
 
+// src/lib/api-key-creation.ts
+function parseApiKeyCreation(value) {
+  const normalized = (value ?? "").trim() || "allow";
+  if (normalized === "deny" || normalized === "allow") return normalized;
+  throw new Error("Unsupported api-key-creation policy; expected deny or allow.");
+}
+function assertApiKeyCreationAllowed(value) {
+  if (parseApiKeyCreation(value) !== "allow") {
+    throw new Error("API_KEY_CREATION_DENIED: supply a valid postman-api-key; automatic key creation is disabled.");
+  }
+}
+
 // node_modules/@actions/http-client/lib/index.js
 var tunnel = __toESM(require_tunnel2(), 1);
 var import_undici = __toESM(require_undici(), 1);
@@ -119707,6 +119719,12 @@ var postmanRepoSyncActionContract = {
       default: "none",
       allowedValues: ["none", "aws", "azure", "gcp"]
     },
+    "api-key-creation": {
+      description: "API key creation policy. deny (opt-in) fails when the supplied Postman API key is missing or invalid; allow (default) preserves legacy replacement creation and persistence. spec-only never creates a key.",
+      required: false,
+      default: "allow",
+      allowedValues: ["allow", "deny"]
+    },
     "credential-preflight": {
       description: "Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.",
       required: false,
@@ -128066,6 +128084,7 @@ function resolveInputs(env = process.env) {
     committerEmail: getInput("committer-email", env) || "support@postman.com",
     postmanApiKey: getInput("postman-api-key", env) || normalizeInputValue(env.POSTMAN_API_KEY),
     postmanAccessToken: getInput("postman-access-token", env) || normalizeInputValue(env.POSTMAN_ACCESS_TOKEN),
+    apiKeyCreation: parseApiKeyCreation(getInput("api-key-creation", env)),
     credentialPreflight: parseCredentialPreflight(getInput("credential-preflight", env)),
     branchStrategy: parseBranchStrategy(getInput("branch-strategy", env)),
     canonicalBranch: getInput("canonical-branch", env) || void 0,
@@ -130594,6 +130613,7 @@ async function runRepoSyncInner(inputs, dependencies, executionContext) {
   return outputs;
 }
 async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, _actionExec, masker, options) {
+  const apiKeyCreation = parseApiKeyCreation(inputs.apiKeyCreation);
   let apiKey = inputs.postmanApiKey;
   let teamId = inputs.teamId;
   let keyValid = false;
@@ -130616,7 +130636,7 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, _actionExec, ma
             operation: "PMAK GET /me validation",
             entity: `status ${status}`,
             cause: error,
-            remediation: "replace postman-api-key or provide a valid postman-access-token then rerun",
+            remediation: "replace postman-api-key with a valid existing key then rerun",
             mask: masker
           })
         );
@@ -130625,10 +130645,11 @@ async function resolvePostmanApiKeyAndTeamId(inputs, actionCore, _actionExec, ma
       }
     }
   }
-  if (!keyValid && options.allowApiKeyCreation === false) {
+  if (!keyValid && (inputs.onboardingScope === "spec-only" || options.allowApiKeyCreation === false)) {
     apiKey = "";
     actionCore.info("Skipping Postman API key creation because onboarding-scope=spec-only.");
   } else if (!keyValid) {
+    assertApiKeyCreationAllowed(apiKeyCreation);
     if (!inputs.postmanAccessToken) {
       throw new Error("postman-api-key is missing or invalid, and no postman-access-token provided to generate a new one.");
     }
@@ -131427,6 +131448,7 @@ var CLI_INPUT_NAMES = [
   "committer-email",
   "postman-api-key",
   "postman-access-token",
+  "api-key-creation",
   "credential-preflight",
   "github-token",
   "gh-fallback-token",

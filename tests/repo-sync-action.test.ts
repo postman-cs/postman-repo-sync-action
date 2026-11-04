@@ -136,6 +136,8 @@ function createInputs(overrides: Partial<ResolvedInputs> = {}): ResolvedInputs {
     committerEmail: 'support@postman.com',
     postmanApiKey: 'pmak-test',
     postmanAccessToken: 'postman-access-token',
+    // Legacy creation scenarios opt in; separate offline tests cover default deny.
+    apiKeyCreation: 'allow',
     credentialPreflight: 'warn',
     branchStrategy: 'legacy',
   previewTtlDays: 30,
@@ -6185,7 +6187,7 @@ describe('org-mode auto-detection', () => {
       .find((line) => line.includes('PMAK GET /me validation failed'));
     expect(meWarning).toBeDefined();
     expect(meWarning).toContain('status 401');
-    expect(meWarning).toContain('replace postman-api-key or provide a valid postman-access-token then rerun');
+    expect(meWarning).toContain('replace postman-api-key with a valid existing key then rerun');
     expect(meWarning).toContain(REDACTED);
     expect(meWarning).not.toContain(leak);
   });
