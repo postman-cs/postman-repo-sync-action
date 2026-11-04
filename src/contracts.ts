@@ -279,6 +279,12 @@ export const postmanRepoSyncActionContract: {
       default: 'none',
       allowedValues: ['none', 'aws', 'azure', 'gcp']
     },
+    'api-key-creation': {
+      description: 'API key creation policy. deny (opt-in) fails when the supplied Postman API key is missing or invalid; allow (default) preserves legacy replacement creation and persistence. spec-only never creates a key.',
+      required: false,
+      default: 'allow',
+      allowedValues: ['allow', 'deny']
+    },
     'credential-preflight': {
       description:
         'Credential identity preflight policy. warn (default) logs a note and continues when postman-api-key and postman-access-token resolve to different parent orgs; enforce fails the run on that condition before any workspace is created. Both modes warn when postman-access-token is not a service-account token.',

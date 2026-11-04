@@ -105,6 +105,7 @@ describe('CI and SEA PR workflow contracts', () => {
       'test',
       'typecheck',
       'dist-shape',
+      'packaged-policy',
       'actionlint',
       'docs-pins',
       'commitlint',

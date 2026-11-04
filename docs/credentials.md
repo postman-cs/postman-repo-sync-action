@@ -1,3 +1,9 @@
+## Automatic key creation policy
+
+`api-key-creation` defaults to `allow` for compatibility in this opt-in revision; AutoMango must explicitly select `deny`. With explicit `deny`, a missing or rejected PMAK fails full onboarding with `API_KEY_CREATION_DENIED` before the integration adapter is constructed, before key creation, and before persistence. A successful preflight does not grant permission to create a replacement later. Action and CLI share this guard. `spec-only` continues to skip creation regardless of this setting.
+
+`allow` preserves legacy creation and persistence behavior; it is not appropriate for AutoMango's no-new-credentials run. Invalid policy values fail closed without echoing their contents. Existing callers retain legacy behavior. Default-deny remains a separate breaking-major proposal. Build and verify all shipped `dist` entry points before release; source changes alone do not alter a pinned Action.
+
 # Credentials
 
 Use a [service-account](https://learning.postman.com/docs/administration/service-accounts/) Postman API key as the durable secret, then mint short-lived credentials in CI with `postman-cs/postman-resolve-service-token-action@v2`.
@@ -33,7 +39,7 @@ Use a [service-account](https://learning.postman.com/docs/administration/service
 
 Create a service-account [Postman API key](https://learning.postman.com/docs/reference/postman-api/authentication/) in Postman and store it as the `POSTMAN_API_KEY` repository secret. The same key can be passed to `postman-resolve-service-token-action` and to repo sync. For rotation and revocation, see the [managing API keys](https://learning.postman.com/docs/administration/managing-your-team/managing-api-keys/) guide.
 
-If the PMAK is missing or expired and `postman-access-token` is available, repo sync can generate a replacement PMAK. To persist that generated key back to the repository, provide a `github-token` or `gh-fallback-token` that can manage Actions secrets.
+With `api-key-creation: allow` (the default), if the PMAK is missing or expired and `postman-access-token` is available, repo sync can generate a replacement PMAK. To persist that generated key back to the repository, provide a `github-token` or `gh-fallback-token` that can manage Actions secrets.
 
 ## `postman-access-token`
 

@@ -5,7 +5,7 @@
  * /ws/proxy envelope + x-entity-team-id org-mode header are exercised
  * end-to-end. Asserts that org-mode detection flips the gateway header,
  * that env/mock/monitor asset ops go through the gateway (never PMAK), and
- * that the token-only credential shape (no PMAK) still completes via
+ * that the token-only credential shape (no PMAK) with explicit allow completes via
  * identity createApiKey.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -143,10 +143,10 @@ describe('contract: repo-sync org x credential matrix', () => {
     expect(outputs['environment-uids-json']).toBeDefined();
   });
 
-  it('{token-only, org} generates an API key via identity createApiKey and auto-detects org-mode', async () => {
+  it('{token-only, explicit allow, org} generates an API key via identity createApiKey and auto-detects org-mode', async () => {
     const platform = createPlatform({ org: true });
     vi.stubGlobal('fetch', platform.fetch);
-    const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '' }));
+    const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '', 'api-key-creation': 'allow' }));
 
     await runWithFakeTimers(() => runAction(core, createExecStub()));
 
@@ -160,10 +160,10 @@ describe('contract: repo-sync org x credential matrix', () => {
     expect(outputs['environment-uids-json']).toBeDefined();
   });
 
-  it('{token-only, non-org} generates an API key and proceeds with org-mode false', async () => {
+  it('{token-only, explicit allow, non-org} generates an API key and proceeds with org-mode false', async () => {
     const platform = createPlatform({ org: false });
     vi.stubGlobal('fetch', platform.fetch);
-    const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '' }));
+    const { core, outputs } = createCore(baseInputs({ 'postman-api-key': '', 'api-key-creation': 'allow' }));
 
     await runWithFakeTimers(() => runAction(core, createExecStub()));
 
@@ -174,15 +174,26 @@ describe('contract: repo-sync org x credential matrix', () => {
     expect(outputs['environment-uids-json']).toBeDefined();
   });
 
+  it.each([true, false])('explicit deny prevents identity key creation and asset writes (org=%s)', async (org) => {
+    const platform = createPlatform({ org });
+    vi.stubGlobal('fetch', platform.fetch);
+    const { core } = createCore(baseInputs({ 'postman-api-key': '', 'api-key-creation': 'deny' }));
+    await expect(runWithFakeTimers(() => runAction(core, createExecStub()))).rejects.toThrow(/API_KEY_CREATION_DENIED/);
+    expect(platform.events.some((entry) => entry.includes('/api/keys'))).toBe(false);
+    expect(platform.events.some((entry) => entry.startsWith('proxy:sync POST'))).toBe(false);
+    expect(platform.state.mockCreated).toBe(false);
+    expect(platform.state.monitorCreated).toBe(false);
+  });
+
   it('rejects with a clear error when neither postman-api-key nor postman-access-token is provided', async () => {
     const platform = createPlatform({ org: false });
     vi.stubGlobal('fetch', platform.fetch);
     const { core } = createCore(
-      baseInputs({ 'postman-api-key': '', 'postman-access-token': '' })
+      baseInputs({ 'postman-api-key': '', 'postman-access-token': '', 'api-key-creation': 'deny' })
     );
 
     await expect(runAction(core, createExecStub())).rejects.toThrow(
-      /postman-api-key is missing or invalid.*no postman-access-token provided/
+      /API_KEY_CREATION_DENIED/
     );
   });
 

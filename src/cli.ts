@@ -71,6 +71,7 @@ const CLI_INPUT_NAMES = [
   'committer-email',
   'postman-api-key',
   'postman-access-token',
+  'api-key-creation',
   'credential-preflight',
   'github-token',
   'gh-fallback-token',
